@@ -74,25 +74,25 @@ Respond as JSON only:
             return {"agreement": True, "tension_description": "", "followup_question": "", "confidence": 0.6}
 
     async def synthesize(self, goal: str, rounds_data: list[dict]) -> str:
-        last = rounds_data[-1]["responses"]
-        responses = [v.strip() for v in last.values() if v.strip()]
-        if not responses:
+        # Collect thoughts from all rounds — these are the brain's internal monologue
+        all_thoughts = []
+        for rd in rounds_data:
+            for v in rd["responses"].values():
+                if v.strip():
+                    all_thoughts.append(v.strip())
+
+        if not all_thoughts:
             return ""
 
-        # When only 1 round: minds likely agreed — pick the most complete response
-        # (longest is a reliable proxy for completeness at 0.8B)
-        if len(rounds_data) == 1:
-            return max(responses, key=len)
+        # Brain reads its own thoughts silently, then speaks as itself
+        # Keep the two most distinct thoughts to avoid overloading 0.8B
+        thoughts_context = " | ".join(all_thoughts[:2])
 
-        # Multiple rounds means real tension was detected — do a focused synthesis
-        # Feed only the final-round responses, keep prompt minimal
-        joined = "\n".join(f"- {r}" for r in responses)
         messages = [
+            {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": (
-                f"Question: {goal}\n\n"
-                f"Here are several perspectives:\n{joined}\n\n"
-                f"Write one complete, accurate answer to the question. "
-                f"Combine the best points. Do not mention 'perspectives' or 'voices'."
+                f"[Internal thoughts: {thoughts_context}]\n\n"
+                f"Answer this: {goal}"
             )}
         ]
         return await self._call(messages, max_tokens=512)
