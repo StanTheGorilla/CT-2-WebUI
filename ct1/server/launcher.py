@@ -2,7 +2,6 @@ import subprocess
 import asyncio
 import yaml
 import os
-from pathlib import Path
 from ct1.server.health import wait_for_server
 
 def load_config(config_path: str = "ct1/server/model_config.yaml") -> dict:
