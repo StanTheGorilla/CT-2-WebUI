@@ -1,0 +1,54 @@
+llama_server:
+  executable: "F:/AI_Workstation/ct/llama-b8292-bin-win-vulkan-x64/llama-server.exe"
+  model: "F:/AI_Workstation/models/Qwen3.5-0.8B-Q4_K_M.gguf"
+  port: 8080
+  n_gpu_layers: 99
+  parallel_slots: 4
+  context_size: 8192
+  cont_batching: true
+
+models:
+  brain:
+    slot: 0
+    temperature: 0.4
+    top_p: 0.9
+    top_k: 20
+    presence_penalty: 1.5
+    max_tokens: 1024
+
+  mind_alpha:
+    slot: 1
+    temperature: 0.9
+    top_p: 1.0
+    top_k: 40
+    presence_penalty: 2.0
+    max_tokens: 512
+
+  mind_beta:
+    slot: 2
+    temperature: 0.3
+    top_p: 0.9
+    top_k: 10
+    presence_penalty: 1.0
+    max_tokens: 512
+
+  mind_gamma:
+    slot: 3
+    temperature: 1.1
+    top_p: 1.0
+    top_k: 50
+    presence_penalty: 2.5
+    max_tokens: 512
+
+deliberation:
+  max_rounds: 3
+  confidence_threshold: 0.8
+  token_budget_per_session: 16000
+
+journal:
+  path: "ct1/data/journals"
+  lessons_on_startup: 10
+
+adapters:
+  path: "ct1/data/adapters"
+  min_entries_for_training: 100

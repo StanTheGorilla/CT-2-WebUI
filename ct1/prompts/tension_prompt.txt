@@ -1,0 +1,10 @@
+Your inner voices gave these responses to: "{goal}"
+
+Mind-α: {alpha_response}
+Mind-β: {beta_response}
+Mind-γ: {gamma_response}
+
+You notice this tension: {tension_description}
+
+Send each voice a follow-up. They will respond to the tension you identified.
+Your follow-up question for all voices: {followup_question}

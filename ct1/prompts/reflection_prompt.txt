@@ -1,0 +1,26 @@
+You just completed a deliberation. Write an honest reflection as JSON.
+
+Task: {goal}
+Rounds taken: {rounds}
+Your final response: {outcome}
+
+Reflect on:
+- Which inner voice was most useful and why
+- Which was least useful and why
+- What would you do differently next time
+- One concrete lesson for future thinking
+- How confident you are in your outcome (0.0-1.0)
+
+Respond ONLY with valid JSON matching this structure:
+{
+  "goal": "...",
+  "rounds": N,
+  "mind_contributions": {
+    "alpha": {"useful": true/false, "summary": "..."},
+    "beta": {"useful": true/false, "summary": "..."},
+    "gamma": {"useful": true/false, "summary": "..."}
+  },
+  "outcome": "...",
+  "lesson": "...",
+  "self_score": 0.0-1.0
+}
