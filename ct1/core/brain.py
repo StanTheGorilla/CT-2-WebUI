@@ -74,16 +74,28 @@ Respond as JSON only:
             return {"agreement": True, "tension_description": "", "followup_question": "", "confidence": 0.6}
 
     async def synthesize(self, goal: str, rounds_data: list[dict]) -> str:
-        context = f'Deliberation on: "{goal}"\n\n'
-        for r in rounds_data:
-            context += f"Round {r['round']}:\n"
-            for name, resp in r["responses"].items():
-                context += f"  {name}: {resp}\n"
+        last = rounds_data[-1]["responses"]
+        responses = [v.strip() for v in last.values() if v.strip()]
+        if not responses:
+            return ""
+
+        # When only 1 round: minds likely agreed — pick the most complete response
+        # (longest is a reliable proxy for completeness at 0.8B)
+        if len(rounds_data) == 1:
+            return max(responses, key=len)
+
+        # Multiple rounds means real tension was detected — do a focused synthesis
+        # Feed only the final-round responses, keep prompt minimal
+        joined = "\n".join(f"- {r}" for r in responses)
         messages = [
-            {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": context + "\nAnswer the original question directly and completely. Speak as an intelligent assistant. Do not mention your inner voices or the deliberation process."}
+            {"role": "user", "content": (
+                f"Question: {goal}\n\n"
+                f"Here are several perspectives:\n{joined}\n\n"
+                f"Write one complete, accurate answer to the question. "
+                f"Combine the best points. Do not mention 'perspectives' or 'voices'."
+            )}
         ]
-        return await self._call(messages)
+        return await self._call(messages, max_tokens=512)
 
     async def reflect(self, goal: str, rounds: int, outcome: str) -> dict:
         reflection_template = (_PROMPTS_DIR / "reflection_prompt.txt").read_text(encoding="utf-8")
