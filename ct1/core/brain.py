@@ -81,7 +81,7 @@ Respond as JSON only:
                 context += f"  {name}: {resp}\n"
         messages = [
             {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": context + "\nGive your single definitive response in first person."}
+            {"role": "user", "content": context + "\nAnswer the original question directly and completely. Speak as an intelligent assistant. Do not mention your inner voices or the deliberation process."}
         ]
         return await self._call(messages)
 

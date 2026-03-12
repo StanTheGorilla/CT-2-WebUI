@@ -1,23 +1,21 @@
-You just completed a deliberation. Write an honest reflection as JSON.
+You just completed a deliberation. Write your reflection as JSON.
 
 Task: {goal}
 Rounds taken: {rounds}
 Your final response: {outcome}
 
-Reflect on which inner voice was most useful, which was least useful, what you would do differently, one concrete lesson, and your confidence in the outcome.
+Write real observations from THIS deliberation only. Which inner voice contributed most? Which contributed least? What concrete lesson did you learn?
 
-Respond ONLY with valid JSON. Example of the exact structure to follow:
+Output ONLY a JSON object with this exact structure (no extra text):
 {
-  "goal": "explain quantum entanglement",
-  "rounds": 2,
+  "goal": "<copy the task>",
+  "rounds": <number>,
   "mind_contributions": {
-    "alpha": {"useful": true, "summary": "proposed the analogy that made it click"},
-    "beta": {"useful": false, "summary": "too cautious, added nothing new"},
-    "gamma": {"useful": true, "summary": "challenged the analogy, improved it"}
+    "alpha": {"useful": <true or false>, "summary": "<what alpha actually contributed>"},
+    "beta": {"useful": <true or false>, "summary": "<what beta actually contributed>"},
+    "gamma": {"useful": <true or false>, "summary": "<what gamma actually contributed>"}
   },
-  "outcome": "quantum entanglement is...",
-  "lesson": "alpha and gamma together outperform any one voice alone",
-  "self_score": 0.85
+  "outcome": "<one sentence summary of your answer>",
+  "lesson": "<one specific thing you learned from this deliberation>",
+  "self_score": <0.0 to 1.0>
 }
-
-Fill in real values from this deliberation. Do not copy the example values.
