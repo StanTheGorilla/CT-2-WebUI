@@ -1,7 +1,8 @@
 import httpx
 from pathlib import Path
 
-MIND_SYSTEM = Path("ct1/prompts/mind_system.txt").read_text(encoding="utf-8")
+_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+MIND_SYSTEM = (_PROMPTS_DIR / "mind_system.txt").read_text(encoding="utf-8")
 
 class Mind:
     def __init__(self, name: str, base_url: str, temperature: float,

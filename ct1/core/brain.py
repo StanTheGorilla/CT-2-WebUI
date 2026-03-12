@@ -2,7 +2,8 @@ import httpx
 import json
 from pathlib import Path
 
-BRAIN_SYSTEM_TEMPLATE = Path("ct1/prompts/brain_system.txt").read_text(encoding="utf-8")
+_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+BRAIN_SYSTEM_TEMPLATE = (_PROMPTS_DIR / "brain_system.txt").read_text(encoding="utf-8")
 
 class Brain:
     def __init__(self, base_url: str, temperature: float = 0.4,
@@ -84,7 +85,7 @@ Respond as JSON only:
         return await self._call(messages)
 
     async def reflect(self, goal: str, rounds: int, outcome: str) -> dict:
-        reflection_template = Path("ct1/prompts/reflection_prompt.txt").read_text(encoding="utf-8")
+        reflection_template = (_PROMPTS_DIR / "reflection_prompt.txt").read_text(encoding="utf-8")
         prompt = reflection_template.format(goal=goal, rounds=rounds, outcome=outcome)
         messages = [
             {"role": "system", "content": self._system_prompt()},
