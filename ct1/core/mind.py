@@ -30,6 +30,7 @@ class Mind:
             "presence_penalty": self.presence_penalty,
             "max_tokens": self.max_tokens,
             "stream": False,
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         r = await self.client.post(f"{self.base_url}/v1/chat/completions", json=payload)
         r.raise_for_status()
