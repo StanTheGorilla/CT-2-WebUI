@@ -74,26 +74,12 @@ Respond as JSON only:
             return {"agreement": True, "tension_description": "", "followup_question": "", "confidence": 0.6}
 
     async def synthesize(self, goal: str, rounds_data: list[dict]) -> str:
-        # Collect thoughts from all rounds — these are the brain's internal monologue
-        all_thoughts = []
-        for rd in rounds_data:
-            for v in rd["responses"].values():
-                if v.strip():
-                    all_thoughts.append(v.strip())
-
-        if not all_thoughts:
-            return ""
-
-        # Brain reads its own thoughts silently, then speaks as itself
-        # Keep the two most distinct thoughts to avoid overloading 0.8B
-        thoughts_context = " | ".join(all_thoughts[:2])
-
+        # The brain answers the question as itself — clean, direct, no mind context injected.
+        # The minds already informed the deliberation (framing + tension detection).
+        # Now the brain speaks.
         messages = [
             {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": (
-                f"[Internal thoughts: {thoughts_context}]\n\n"
-                f"Answer this: {goal}"
-            )}
+            {"role": "user", "content": goal},
         ]
         return await self._call(messages, max_tokens=512)
 
