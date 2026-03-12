@@ -86,7 +86,10 @@ Respond as JSON only:
 
     async def reflect(self, goal: str, rounds: int, outcome: str) -> dict:
         reflection_template = (_PROMPTS_DIR / "reflection_prompt.txt").read_text(encoding="utf-8")
-        prompt = reflection_template.format(goal=goal, rounds=rounds, outcome=outcome)
+        prompt = (reflection_template
+                  .replace("{goal}", str(goal))
+                  .replace("{rounds}", str(rounds))
+                  .replace("{outcome}", str(outcome)))
         messages = [
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": prompt}
