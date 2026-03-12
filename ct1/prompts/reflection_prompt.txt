@@ -4,23 +4,20 @@ Task: {goal}
 Rounds taken: {rounds}
 Your final response: {outcome}
 
-Reflect on:
-- Which inner voice was most useful and why
-- Which was least useful and why
-- What would you do differently next time
-- One concrete lesson for future thinking
-- How confident you are in your outcome (0.0-1.0)
+Reflect on which inner voice was most useful, which was least useful, what you would do differently, one concrete lesson, and your confidence in the outcome.
 
-Respond ONLY with valid JSON matching this structure:
+Respond ONLY with valid JSON. Example of the exact structure to follow:
 {
-  "goal": "...",
-  "rounds": N,
+  "goal": "explain quantum entanglement",
+  "rounds": 2,
   "mind_contributions": {
-    "alpha": {"useful": true/false, "summary": "..."},
-    "beta": {"useful": true/false, "summary": "..."},
-    "gamma": {"useful": true/false, "summary": "..."}
+    "alpha": {"useful": true, "summary": "proposed the analogy that made it click"},
+    "beta": {"useful": false, "summary": "too cautious, added nothing new"},
+    "gamma": {"useful": true, "summary": "challenged the analogy, improved it"}
   },
-  "outcome": "...",
-  "lesson": "...",
-  "self_score": 0.0-1.0
+  "outcome": "quantum entanglement is...",
+  "lesson": "alpha and gamma together outperform any one voice alone",
+  "self_score": 0.85
 }
+
+Fill in real values from this deliberation. Do not copy the example values.

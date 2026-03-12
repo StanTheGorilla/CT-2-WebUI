@@ -1,0 +1,8 @@
+# Install only when running LoRA training (Task 12+)
+# pip install -r requirements-training.txt
+torch>=2.2.0
+transformers>=4.40.0,<5.0
+peft>=0.10.0,<2.0
+trl>=0.8.0,<2.0
+accelerate>=0.29.0,<2.0
+datasets>=2.18.0,<3.0

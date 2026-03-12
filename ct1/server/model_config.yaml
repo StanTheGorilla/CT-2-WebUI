@@ -21,7 +21,7 @@ models:
     temperature: 0.9
     top_p: 1.0
     top_k: 40
-    presence_penalty: 2.0
+    presence_penalty: 1.5
     max_tokens: 512
 
   mind_beta:
@@ -34,10 +34,10 @@ models:
 
   mind_gamma:
     slot: 3
-    temperature: 1.1
+    temperature: 0.95
     top_p: 1.0
     top_k: 50
-    presence_penalty: 2.5
+    presence_penalty: 1.8
     max_tokens: 512
 
 deliberation:
