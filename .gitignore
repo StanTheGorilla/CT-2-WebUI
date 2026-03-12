@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.env
+.venv
+venv/
+
+# CT-1 runtime data (exclude from repo — grows large)
+ct1/data/journals/
+ct1/data/logs/
+ct1/data/adapters/
+ct1/data/dpo_dataset.jsonl
+ct1/data/benchmarks/
+
+# llama.cpp server logs
+*.log
