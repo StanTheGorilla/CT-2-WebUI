@@ -24,25 +24,38 @@ class Brain:
             lessons_text = "From your journal:\n" + "\n".join(f"- {l}" for l in self.lessons[-10:])
         return BRAIN_SYSTEM_TEMPLATE.replace("{lessons}", lessons_text)
 
-    async def _call(self, messages: list[dict], max_tokens: int = None) -> str:
+    async def _call(self, messages: list[dict], max_tokens: int = None,
+                    presence_penalty: float = None,
+                    conversation: list[dict] = None) -> str:
+        if conversation:
+            system = messages[:1]
+            rest = messages[1:]
+            messages = system + conversation + rest
         payload = {
             "model": "qwen",
             "messages": messages,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,
-            "presence_penalty": self.presence_penalty,
+            "presence_penalty": presence_penalty if presence_penalty is not None else self.presence_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": False,
             "chat_template_kwargs": {"enable_thinking": False},
         }
         r = await self.client.post(f"{self.base_url}/v1/chat/completions", json=payload)
-        r.raise_for_status()
+        if not r.is_success:
+            raise httpx.HTTPStatusError(
+                f"{r.status_code} from {r.url}: {r.text[:500]}",
+                request=r.request, response=r,
+            )
         return r.json()["choices"][0]["message"]["content"].strip()
 
     async def frame_problem(self, goal: str) -> dict:
         """Frame the problem and assess complexity. Returns {question, complexity}."""
-        prompt = f"""Frame this problem for your inner minds and assess its complexity.
+        # Use a minimal system prompt here — no lessons, to prevent journal context
+        # from contaminating goal interpretation in the small model.
+        system = "You are a precise problem framer. Restate the user's question clearly and assess its complexity. Output only JSON."
+        prompt = f"""Restate this question clearly for analysis and classify its complexity.
 
 Question: {goal}
 
@@ -52,7 +65,7 @@ Respond as JSON only:
   "complexity": "brief|moderate|deep"
 }}"""
         messages = [
-            {"role": "system", "content": self._system_prompt()},
+            {"role": "system", "content": system},
             {"role": "user", "content": prompt}
         ]
         raw = await self._call(messages, max_tokens=256)
@@ -62,9 +75,14 @@ Respond as JSON only:
             parsed = json.loads(raw[start:end])
             if parsed.get("complexity") not in ("brief", "moderate", "deep"):
                 parsed["complexity"] = "moderate"
+            # Reject the reframing if it's a label/placeholder rather than
+            # a real question (model echoed the JSON field name, etc.)
+            q = parsed.get("question", "")
+            if len(q) < 20 or q.lower().startswith("reframed") or "{" in q:
+                parsed["question"] = goal
             return parsed
         except Exception:
-            return {"question": raw, "complexity": "moderate"}
+            return {"question": goal, "complexity": "moderate"}
 
     async def detect_tension(self, goal: str, alpha: str, beta: str, gamma: str) -> dict:
         """Analyze 3 mind conclusions. Return tension + strongest voice."""
@@ -106,11 +124,21 @@ Respond as JSON only:
                 conclusion = resp.get("conclusion", "")
             else:
                 conclusion = str(resp)
+            # Truncate per-mind evidence; full code is extracted separately below
+            if len(conclusion) > 800:
+                conclusion = conclusion[:800] + "…"
             evidence_lines.append(f"Mind-{name}: {conclusion}")
 
         evidence = "\n".join(evidence_lines)
 
-        prompt = f"""You deliberated on: "{goal}"
+        # If any mind produced a code block, surface the best one directly
+        # rather than asking the brain to re-generate it from scratch.
+        code_block = self._extract_best_code(
+            [responses.get(n, {}) for n in ("alpha", "beta", "gamma")]
+        )
+
+        if code_block:
+            prompt = f"""You deliberated on: "{goal}"
 
 Your inner voices concluded:
 
@@ -118,23 +146,56 @@ Your inner voices concluded:
 
 {tension_summary}
 
-Now give your single, definitive response. Integrate the strongest reasoning.
-Speak as yourself in first person. Do not reference your inner voices."""
+One of your voices produced working code. Present it as the final answer.
+Add a single sentence of context at the top, then output the code in full, unchanged:
+
+{code_block}"""
+        else:
+            prompt = f"""You deliberated on: "{goal}"
+
+Your inner voices concluded:
+
+{evidence}
+
+{tension_summary}
+
+Now give your single, definitive response. Rules:
+- If the task asks for code, HTML, a file, or any produced artifact: output it in full, complete, and ready to use. Do not describe it — produce it.
+- If the task asks a question: answer it directly and completely.
+- Speak as yourself. Do not reference your inner voices or deliberation process."""
 
         messages = [
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": prompt}
         ]
-        return await self._call(messages, max_tokens=self.max_tokens)
+        # presence_penalty=0 for synthesis: code/HTML requires reusing tokens freely
+        return await self._call(messages, max_tokens=4096, presence_penalty=0.0)
+
+    @staticmethod
+    def _extract_best_code(mind_responses: list) -> str:
+        """Return the longest fenced code block found across mind conclusions."""
+        import re
+        best = ""
+        for resp in mind_responses:
+            if not isinstance(resp, dict):
+                continue
+            text = resp.get("conclusion", "") or resp.get("reasoning", "")
+            blocks = re.findall(r"```[\w]*\n(.*?)```", text, re.DOTALL)
+            for block in blocks:
+                if len(block) > len(best):
+                    best = block
+        return best
 
     async def reflect(self, goal: str, complexity: str, rounds: int, outcome: str) -> dict:
         """Write structured journal reflection."""
         reflection_template = (_PROMPTS_DIR / "reflection_prompt.txt").read_text(encoding="utf-8")
+        # Truncate outcome to avoid context overflow when embedding in prompt
+        outcome_truncated = outcome[:2000] + "…" if len(outcome) > 2000 else outcome
         prompt = (reflection_template
                   .replace("{goal}", str(goal))
                   .replace("{complexity}", str(complexity))
                   .replace("{rounds}", str(rounds))
-                  .replace("{outcome}", str(outcome)))
+                  .replace("{outcome}", outcome_truncated))
         messages = [
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": prompt}
