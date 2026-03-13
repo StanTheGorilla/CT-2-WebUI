@@ -28,25 +28,20 @@ class Orchestrator:
             presence_penalty=mc["brain"]["presence_penalty"],
             max_tokens=mc["brain"]["max_tokens"],
         )
+
+        def _make_mind(name, key):
+            return Mind(name, base_url,
+                        mc[key]["temperature"],
+                        mc[key]["top_p"],
+                        mc[key]["top_k"],
+                        mc[key]["presence_penalty"],
+                        mc[key]["max_tokens"],
+                        enable_thinking=mc[key].get("enable_thinking", True))
+
         self.minds = {
-            "alpha": Mind("alpha", base_url,
-                          mc["mind_alpha"]["temperature"],
-                          mc["mind_alpha"]["top_p"],
-                          mc["mind_alpha"]["top_k"],
-                          mc["mind_alpha"]["presence_penalty"],
-                          mc["mind_alpha"]["max_tokens"]),
-            "beta": Mind("beta", base_url,
-                         mc["mind_beta"]["temperature"],
-                         mc["mind_beta"]["top_p"],
-                         mc["mind_beta"]["top_k"],
-                         mc["mind_beta"]["presence_penalty"],
-                         mc["mind_beta"]["max_tokens"]),
-            "gamma": Mind("gamma", base_url,
-                          mc["mind_gamma"]["temperature"],
-                          mc["mind_gamma"]["top_p"],
-                          mc["mind_gamma"]["top_k"],
-                          mc["mind_gamma"]["presence_penalty"],
-                          mc["mind_gamma"]["max_tokens"]),
+            "alpha": _make_mind("alpha", "mind_alpha"),
+            "beta":  _make_mind("beta",  "mind_beta"),
+            "gamma": _make_mind("gamma", "mind_gamma"),
         }
         self.bus = MessageBus()
         self.tension_detector = TensionDetector()
@@ -54,36 +49,53 @@ class Orchestrator:
         self.journal_reader = JournalReader(cfg["journal"]["path"])
         self.max_rounds = dc["max_rounds"]
         self.confidence_threshold = dc["confidence_threshold"]
+        self.verbose = False
 
-        # Load past lessons into brain memory
         lessons = self.journal_reader.get_recent_lessons(cfg["journal"]["lessons_on_startup"])
         self.brain.lessons = lessons
 
-    async def _deliberate(self, goal: str) -> dict:
+    async def _deliberate(self, goal: str, on_event=None) -> dict:
+        def emit(event: str, **data):
+            if on_event:
+                on_event(event, **data)
+
         self.bus.clear()
         rounds_data = []
 
-        framed = await self.brain.frame_problem(goal)
-        current_question = framed
+        # Brain frames with complexity
+        emit("framing")
+        frame = await self.brain.frame_problem(goal)
+        question = frame["question"]
+        complexity = frame["complexity"]
+        emit("framed", text=question, complexity=complexity)
+
+        current_question = question
         rounds_used = 0
         tension_ever_detected = False
+        tension_summary = ""
 
         for round_num in range(1, self.max_rounds + 1):
             rounds_used = round_num
+            emit("round_start", round_num=round_num)
 
-            # Parallel broadcast to all 3 minds
+            # Parallel broadcast to all 3 minds with complexity
             alpha_r, beta_r, gamma_r = await asyncio.gather(
-                self.minds["alpha"].think(current_question),
-                self.minds["beta"].think(current_question),
-                self.minds["gamma"].think(current_question),
+                self.minds["alpha"].think(current_question, complexity=complexity),
+                self.minds["beta"].think(current_question, complexity=complexity),
+                self.minds["gamma"].think(current_question, complexity=complexity),
             )
 
-            self.bus.post("mind-alpha", "brain", MessageType.RESPONSE, alpha_r,
-                          confidence=0.0, round_num=round_num)
-            self.bus.post("mind-beta", "brain", MessageType.RESPONSE, beta_r,
-                          confidence=0.0, round_num=round_num)
-            self.bus.post("mind-gamma", "brain", MessageType.RESPONSE, gamma_r,
-                          confidence=0.0, round_num=round_num)
+            emit("mind_response", name="alpha", response=alpha_r)
+            emit("mind_response", name="beta",  response=beta_r)
+            emit("mind_response", name="gamma", response=gamma_r)
+
+            # Post conclusions to bus
+            self.bus.post("mind-alpha", "brain", MessageType.RESPONSE,
+                          alpha_r["conclusion"], confidence=0.0, round_num=round_num)
+            self.bus.post("mind-beta", "brain", MessageType.RESPONSE,
+                          beta_r["conclusion"], confidence=0.0, round_num=round_num)
+            self.bus.post("mind-gamma", "brain", MessageType.RESPONSE,
+                          gamma_r["conclusion"], confidence=0.0, round_num=round_num)
 
             rounds_data.append({
                 "round": round_num,
@@ -91,38 +103,60 @@ class Orchestrator:
                 "responses": {"alpha": alpha_r, "beta": beta_r, "gamma": gamma_r}
             })
 
+            # Brain analyzes tension using conclusions
             tension = await self.brain.detect_tension(
-                current_question, alpha_r, beta_r, gamma_r
+                current_question,
+                alpha_r["conclusion"],
+                beta_r["conclusion"],
+                gamma_r["conclusion"],
             )
 
             confident = tension.get("confidence", 0) >= self.confidence_threshold
             agreed = tension.get("agreement", False)
 
             if confident or agreed or round_num == self.max_rounds:
+                strongest = tension.get("strongest_voice", "")
+                conf = tension.get("confidence", 0.0)
+                if tension_ever_detected:
+                    tension_summary = f"After {rounds_used} rounds of deliberation, tension resolved. Strongest reasoning from {strongest}. Confidence: {conf:.2f}."
+                else:
+                    tension_summary = f"All three perspectives converge. Strongest reasoning from {strongest}. Confidence: {conf:.2f}."
+                emit("converging", confidence=conf, strongest=strongest)
                 break
             else:
                 tension_ever_detected = True
+                desc = tension.get("tension_description", "")
                 followup = tension.get("followup_question") or current_question
-                self.bus.post("brain", "all", MessageType.TENSION,
-                              tension.get("tension_description", ""), round_num=round_num)
+                emit("tension", description=desc, followup=followup)
+                self.bus.post("brain", "all", MessageType.TENSION, desc, round_num=round_num)
                 current_question = followup
 
-        final_response = await self.brain.synthesize(goal, rounds_data)
+        # Evidence-based synthesis
+        emit("synthesizing")
+        final_response = await self.brain.synthesize(goal, rounds_data, tension_summary)
 
-        reflection = await self.brain.reflect(goal, rounds_used, final_response)
+        # Reflection with complexity
+        reflection = await self.brain.reflect(goal, complexity, rounds_used, final_response)
         reflection["rounds"] = rounds_used
+        # Store full reasoning traces in journal entry
+        reflection["_reasoning_traces"] = {
+            name: [rd["responses"][name]["reasoning"] for rd in rounds_data]
+            for name in ("alpha", "beta", "gamma")
+        }
         self.journal.write(reflection)
 
         return {
             "response": final_response,
             "rounds": rounds_used,
+            "complexity": complexity,
             "tension_detected": tension_ever_detected,
             "reflection": reflection,
+            "rounds_data": rounds_data,
             "bus_history": self.bus.to_dict_list(),
         }
 
-    async def think(self, goal: str) -> dict:
-        return await self._deliberate(goal)
+    async def think(self, goal: str, on_event=None) -> dict:
+        return await self._deliberate(goal, on_event=on_event)
 
     async def close(self):
         await self.brain.close()
