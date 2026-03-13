@@ -8,12 +8,12 @@ async def test_frame_problem_returns_structured():
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = {
-        "choices": [{"message": {"content": '{"question": "What is X?", "complexity": "deep"}'}}]
+        "choices": [{"message": {"content": '{"question": "What is the boiling point of water?", "complexity": "deep"}'}}]
     }
     with patch.object(brain.client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_response
         result = await brain.frame_problem("Explain consciousness")
-    assert result["question"] == "What is X?"
+    assert result["question"] == "What is the boiling point of water?"
     assert result["complexity"] == "deep"
     await brain.close()
 
@@ -28,7 +28,7 @@ async def test_frame_problem_fallback_on_bad_json():
     with patch.object(brain.client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_response
         result = await brain.frame_problem("simple question")
-    assert result["question"] == "Just a plain text reframe"
+    assert result["question"] == "simple question"
     assert result["complexity"] == "moderate"
     await brain.close()
 
