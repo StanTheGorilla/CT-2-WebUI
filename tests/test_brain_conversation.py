@@ -53,3 +53,25 @@ async def test_call_no_conversation_unchanged():
     ]
     await brain._call(messages)
     assert captured["messages"] == messages
+
+@pytest.mark.asyncio
+async def test_summarize_session_returns_string():
+    brain = make_brain()
+    conversation = [
+        {"role": "user", "content": "Who was Einstein?"},
+        {"role": "assistant", "content": "Albert Einstein was a physicist."},
+    ]
+
+    async def fake_post(url, json=None, **kwargs):
+        return fake_response("We discussed Albert Einstein and his contributions to physics.")
+
+    brain.client.post = fake_post
+    result = await brain.summarize_session(conversation)
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+@pytest.mark.asyncio
+async def test_summarize_session_empty_returns_none():
+    brain = make_brain()
+    result = await brain.summarize_session([])
+    assert result is None

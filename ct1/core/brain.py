@@ -221,5 +221,32 @@ Now give your single, definitive response. Rules:
                 "complexity_correct": True, "self_score": 0.5
             }
 
+    async def summarize_session(self, conversation: list[dict]) -> str | None:
+        """Produce a 2-3 sentence summary of the session for cross-session memory."""
+        if not conversation:
+            return None
+        lines = []
+        for msg in conversation:
+            if msg["role"] == "user":
+                text = msg["content"][:200]
+                lines.append(f"- {text}")
+            if len(lines) >= 20:
+                break
+        transcript = "\n".join(lines)
+        prompt = f"""Summarize this conversation session in 2-3 sentences. Focus on the topics discussed and any conclusions reached. Be specific.
+
+User messages:
+{transcript}
+
+Summary:"""
+        messages = [
+            {"role": "system", "content": "You are a concise summarizer. Output only the summary, no preamble."},
+            {"role": "user", "content": prompt},
+        ]
+        try:
+            return await self._call(messages, max_tokens=128)
+        except Exception:
+            return None
+
     async def close(self):
         await self.client.aclose()
