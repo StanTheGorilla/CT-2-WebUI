@@ -61,6 +61,8 @@ class Orchestrator:
 
     async def _deliberate(self, goal: str, on_event=None,
                            conversation: list[dict] = None) -> dict:
+        if conversation is None:
+            conversation = []
         def emit(event: str, **data):
             if on_event:
                 on_event(event, **data)
