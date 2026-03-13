@@ -50,7 +50,7 @@ class Brain:
             )
         return r.json()["choices"][0]["message"]["content"].strip()
 
-    async def frame_problem(self, goal: str) -> dict:
+    async def frame_problem(self, goal: str, conversation: list[dict] = None) -> dict:
         """Frame the problem and assess complexity. Returns {question, complexity}."""
         # Use a minimal system prompt here — no lessons, to prevent journal context
         # from contaminating goal interpretation in the small model.
@@ -68,7 +68,7 @@ Respond as JSON only:
             {"role": "system", "content": system},
             {"role": "user", "content": prompt}
         ]
-        raw = await self._call(messages, max_tokens=256)
+        raw = await self._call(messages, max_tokens=256, conversation=conversation)
         try:
             start = raw.find("{")
             end = raw.rfind("}") + 1
@@ -84,7 +84,8 @@ Respond as JSON only:
         except Exception:
             return {"question": goal, "complexity": "moderate"}
 
-    async def detect_tension(self, goal: str, alpha: str, beta: str, gamma: str) -> dict:
+    async def detect_tension(self, goal: str, alpha: str, beta: str, gamma: str,
+                              conversation: list[dict] = None) -> dict:
         """Analyze 3 mind conclusions. Return tension + strongest voice."""
         prompt = f"""Three inner voices responded to: "{goal}"
 
@@ -104,7 +105,7 @@ Respond as JSON only:
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": prompt}
         ]
-        raw = await self._call(messages, max_tokens=256)
+        raw = await self._call(messages, max_tokens=256, conversation=conversation)
         try:
             start = raw.find("{")
             end = raw.rfind("}") + 1
@@ -112,7 +113,8 @@ Respond as JSON only:
         except Exception:
             return {"agreement": True, "tension_description": "", "followup_question": "", "confidence": 0.6, "strongest_voice": "alpha"}
 
-    async def synthesize(self, goal: str, rounds_data: list[dict], tension_summary: str = "") -> str:
+    async def synthesize(self, goal: str, rounds_data: list[dict],
+                         tension_summary: str = "", conversation: list[dict] = None) -> str:
         """Produce final response using mind conclusions as evidence."""
         last_round = rounds_data[-1] if rounds_data else {}
         responses = last_round.get("responses", {})
@@ -169,7 +171,8 @@ Now give your single, definitive response. Rules:
             {"role": "user", "content": prompt}
         ]
         # presence_penalty=0 for synthesis: code/HTML requires reusing tokens freely
-        return await self._call(messages, max_tokens=4096, presence_penalty=0.0)
+        return await self._call(messages, max_tokens=4096, presence_penalty=0.0,
+                                conversation=conversation)
 
     @staticmethod
     def _extract_best_code(mind_responses: list) -> str:
@@ -186,7 +189,8 @@ Now give your single, definitive response. Rules:
                     best = block
         return best
 
-    async def reflect(self, goal: str, complexity: str, rounds: int, outcome: str) -> dict:
+    async def reflect(self, goal: str, complexity: str, rounds: int, outcome: str,
+                      conversation: list[dict] = None) -> dict:
         """Write structured journal reflection."""
         reflection_template = (_PROMPTS_DIR / "reflection_prompt.txt").read_text(encoding="utf-8")
         # Truncate outcome to avoid context overflow when embedding in prompt
@@ -200,7 +204,7 @@ Now give your single, definitive response. Rules:
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": prompt}
         ]
-        raw = await self._call(messages, max_tokens=512)
+        raw = await self._call(messages, max_tokens=512, conversation=conversation)
         try:
             start = raw.find("{")
             end = raw.rfind("}") + 1
