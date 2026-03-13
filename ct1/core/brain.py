@@ -17,12 +17,18 @@ class Brain:
         self.max_tokens = max_tokens
         self.client = httpx.AsyncClient(timeout=120.0)
         self.lessons: list[str] = []
+        self.last_session: str = ""
 
     def _system_prompt(self) -> str:
         lessons_text = ""
         if self.lessons:
             lessons_text = "From your journal:\n" + "\n".join(f"- {l}" for l in self.lessons[-10:])
-        return BRAIN_SYSTEM_TEMPLATE.replace("{lessons}", lessons_text)
+        session_text = ""
+        if getattr(self, "last_session", ""):
+            session_text = f"Last session: {self.last_session}"
+        return (BRAIN_SYSTEM_TEMPLATE
+                .replace("{lessons}", lessons_text)
+                .replace("{session_summary}", session_text))
 
     async def _call(self, messages: list[dict], max_tokens: int = None,
                     presence_penalty: float = None,

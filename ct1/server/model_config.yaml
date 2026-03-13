@@ -56,3 +56,6 @@ journal:
 adapters:
   path: "ct1/data/adapters"
   min_entries_for_training: 100
+
+sessions:
+  path: "ct1/data/sessions"

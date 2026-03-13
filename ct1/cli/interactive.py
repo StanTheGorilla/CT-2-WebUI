@@ -22,6 +22,8 @@ async def run_interactive(config_path: str = "ct1/server/model_config.yaml"):
     console.print("[green]Ready.[/] Commands: /journal [stats], /status, /train, /verbose, /auto <goal>, /quit")
     console.print("[dim]Tip: paste multi-line text freely — blank line submits.[/]\n")
 
+    conversation: list[dict] = []
+
     try:
         while True:
             try:
@@ -52,9 +54,16 @@ async def run_interactive(config_path: str = "ct1/server/model_config.yaml"):
                 else:
                     print_error("Usage: /auto <goal>")
             else:
-                await _run_deliberation(orch, raw)
+                conversation.append({"role": "user", "content": raw})
+                response = await _run_deliberation(orch, raw, conversation)
+                if response:
+                    conversation.append({"role": "assistant", "content": response})
 
     finally:
+        if conversation:
+            summary = await orch.brain.summarize_session(conversation)
+            if summary:
+                orch.session_store.write(summary)
         await orch.close()
         console.print("[dim]Goodbye.[/]")
 
@@ -77,8 +86,9 @@ def _read_multiline() -> str:
     return "\n".join(lines).strip()
 
 
-async def _run_deliberation(orch: Orchestrator, goal: str):
-    """Run deliberation with live display."""
+async def _run_deliberation(orch: Orchestrator, goal: str,
+                             conversation: list[dict] = None) -> str | None:
+    """Run deliberation with live display. Returns the response string."""
     console.print()
 
     def on_event(event: str, **data):
@@ -98,7 +108,9 @@ async def _run_deliberation(orch: Orchestrator, goal: str):
         elif event == "synthesizing":
             console.print(f"\n[dim yellow][brain][/] [dim]synthesizing...[/]")
 
-    result = await orch.think(goal, on_event=on_event)
+    # Pass history excluding the current turn (caller already appended it)
+    prior = conversation[:-1] if conversation else []
+    result = await orch.think(goal, on_event=on_event, conversation=prior)
     console.print()
     print_final_response(result["response"])
     reflection = result.get("reflection", {})
@@ -107,3 +119,4 @@ async def _run_deliberation(orch: Orchestrator, goal: str):
     if lesson and lesson != "reflection parse failed":
         print_journal_note(score, lesson)
     console.print()
+    return result["response"]

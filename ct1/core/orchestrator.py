@@ -54,6 +54,11 @@ class Orchestrator:
         lessons = self.journal_reader.get_recent_lessons(cfg["journal"]["lessons_on_startup"])
         self.brain.lessons = lessons
 
+        from ct1.memory.session_store import SessionStore
+        self.session_store = SessionStore(cfg.get("sessions", {}).get("path", "ct1/data/sessions"))
+        last_session = self.session_store.read_latest()
+        self.brain.last_session = last_session or ""
+
     async def _deliberate(self, goal: str, on_event=None,
                            conversation: list[dict] = None) -> dict:
         def emit(event: str, **data):
