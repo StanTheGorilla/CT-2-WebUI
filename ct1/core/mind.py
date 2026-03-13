@@ -34,14 +34,19 @@ class Mind:
         instruction = COMPLEXITY_INSTRUCTIONS.get(complexity, COMPLEXITY_INSTRUCTIONS["moderate"])
         return MIND_SYSTEM_TEMPLATE.replace("{complexity_instruction}", instruction)
 
-    async def think(self, question: str, complexity: str = "moderate") -> dict:
+    async def think(self, question: str, complexity: str = "moderate",
+                    conversation: list[dict] = None) -> dict:
         """Send question to LLM, return parsed {reasoning, conclusion}."""
+        messages = [
+            {"role": "system", "content": self._build_system_prompt(complexity)},
+        ]
+        if conversation:
+            messages.extend(conversation)
+        messages.append({"role": "user", "content": question})
+
         payload = {
             "model": "qwen",
-            "messages": [
-                {"role": "system", "content": self._build_system_prompt(complexity)},
-                {"role": "user", "content": question}
-            ],
+            "messages": messages,
             "temperature": self.temperature,
             "top_p": self.top_p,
             "top_k": self.top_k,
