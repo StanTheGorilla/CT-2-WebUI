@@ -24,7 +24,7 @@ class Brain:
         if self.lessons:
             lessons_text = "From your journal:\n" + "\n".join(f"- {l}" for l in self.lessons[-10:])
         session_text = ""
-        if getattr(self, "last_session", ""):
+        if self.last_session:
             session_text = f"Last session: {self.last_session}"
         return (BRAIN_SYSTEM_TEMPLATE
                 .replace("{lessons}", lessons_text)

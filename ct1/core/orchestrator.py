@@ -7,6 +7,7 @@ from ct1.core.message_bus import MessageBus, MessageType
 from ct1.core.tension_detector import TensionDetector
 from ct1.memory.journal import Journal
 from ct1.memory.journal_reader import JournalReader
+from ct1.memory.session_store import SessionStore
 
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "ct1" / "server" / "model_config.yaml"
 
@@ -54,7 +55,6 @@ class Orchestrator:
         lessons = self.journal_reader.get_recent_lessons(cfg["journal"]["lessons_on_startup"])
         self.brain.lessons = lessons
 
-        from ct1.memory.session_store import SessionStore
         self.session_store = SessionStore(cfg.get("sessions", {}).get("path", "ct1/data/sessions"))
         last_session = self.session_store.read_latest()
         self.brain.last_session = last_session or ""
