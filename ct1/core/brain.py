@@ -8,7 +8,7 @@ BRAIN_SYSTEM_TEMPLATE = (_PROMPTS_DIR / "brain_system.txt").read_text(encoding="
 class Brain:
     def __init__(self, base_url: str, temperature: float = 0.4,
                  top_p: float = 0.9, top_k: int = 20,
-                 presence_penalty: float = 1.5, max_tokens: int = 1024):
+                 presence_penalty: float = 1.5, max_tokens: int = 10000):
         self.base_url = base_url
         self.temperature = temperature
         self.top_p = top_p
@@ -40,26 +40,47 @@ class Brain:
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"].strip()
 
-    async def frame_problem(self, goal: str) -> str:
+    async def frame_problem(self, goal: str) -> dict:
+        """Frame the problem and assess complexity. Returns {question, complexity}."""
+        prompt = f"""Frame this problem for your inner minds and assess its complexity.
+
+Question: {goal}
+
+Respond as JSON only:
+{{
+  "question": "reframed question in 1-2 sentences",
+  "complexity": "brief|moderate|deep"
+}}"""
         messages = [
             {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": f"Frame this for your inner minds in 1-2 sentences: {goal}"}
+            {"role": "user", "content": prompt}
         ]
-        return await self._call(messages, max_tokens=256)
+        raw = await self._call(messages, max_tokens=256)
+        try:
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            parsed = json.loads(raw[start:end])
+            if parsed.get("complexity") not in ("brief", "moderate", "deep"):
+                parsed["complexity"] = "moderate"
+            return parsed
+        except Exception:
+            return {"question": raw, "complexity": "moderate"}
 
     async def detect_tension(self, goal: str, alpha: str, beta: str, gamma: str) -> dict:
+        """Analyze 3 mind conclusions. Return tension + strongest voice."""
         prompt = f"""Three inner voices responded to: "{goal}"
 
-α: {alpha}
-β: {beta}
-γ: {gamma}
+alpha concluded: {alpha}
+beta concluded: {beta}
+gamma concluded: {gamma}
 
 Respond as JSON only:
 {{
   "agreement": true,
   "tension_description": "brief description or empty string",
-  "followup_question": "followup or empty string",
-  "confidence": 0.85
+  "followup_question": "followup question or empty string",
+  "confidence": 0.85,
+  "strongest_voice": "alpha|beta|gamma"
 }}"""
         messages = [
             {"role": "system", "content": self._system_prompt()},
@@ -71,22 +92,47 @@ Respond as JSON only:
             end = raw.rfind("}") + 1
             return json.loads(raw[start:end])
         except Exception:
-            return {"agreement": True, "tension_description": "", "followup_question": "", "confidence": 0.6}
+            return {"agreement": True, "tension_description": "", "followup_question": "", "confidence": 0.6, "strongest_voice": "alpha"}
 
-    async def synthesize(self, goal: str, rounds_data: list[dict]) -> str:
-        # The brain answers the question as itself — clean, direct, no mind context injected.
-        # The minds already informed the deliberation (framing + tension detection).
-        # Now the brain speaks.
+    async def synthesize(self, goal: str, rounds_data: list[dict], tension_summary: str = "") -> str:
+        """Produce final response using mind conclusions as evidence."""
+        last_round = rounds_data[-1] if rounds_data else {}
+        responses = last_round.get("responses", {})
+
+        evidence_lines = []
+        for name in ("alpha", "beta", "gamma"):
+            resp = responses.get(name, {})
+            if isinstance(resp, dict):
+                conclusion = resp.get("conclusion", "")
+            else:
+                conclusion = str(resp)
+            evidence_lines.append(f"Mind-{name}: {conclusion}")
+
+        evidence = "\n".join(evidence_lines)
+
+        prompt = f"""You deliberated on: "{goal}"
+
+Your inner voices concluded:
+
+{evidence}
+
+{tension_summary}
+
+Now give your single, definitive response. Integrate the strongest reasoning.
+Speak as yourself in first person. Do not reference your inner voices."""
+
         messages = [
             {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": goal},
+            {"role": "user", "content": prompt}
         ]
-        return await self._call(messages, max_tokens=512)
+        return await self._call(messages, max_tokens=self.max_tokens)
 
-    async def reflect(self, goal: str, rounds: int, outcome: str) -> dict:
+    async def reflect(self, goal: str, complexity: str, rounds: int, outcome: str) -> dict:
+        """Write structured journal reflection."""
         reflection_template = (_PROMPTS_DIR / "reflection_prompt.txt").read_text(encoding="utf-8")
         prompt = (reflection_template
                   .replace("{goal}", str(goal))
+                  .replace("{complexity}", str(complexity))
                   .replace("{rounds}", str(rounds))
                   .replace("{outcome}", str(outcome)))
         messages = [
@@ -100,10 +146,14 @@ Respond as JSON only:
             return json.loads(raw[start:end])
         except Exception:
             return {
-                "goal": goal, "rounds": rounds,
-                "mind_contributions": {"alpha": {"useful": True, "summary": ""}, "beta": {"useful": True, "summary": ""}, "gamma": {"useful": True, "summary": ""}},
+                "goal": goal, "complexity": complexity, "rounds": rounds,
+                "mind_contributions": {
+                    "alpha": {"useful": True, "reasoning_quality": "moderate", "summary": ""},
+                    "beta": {"useful": True, "reasoning_quality": "moderate", "summary": ""},
+                    "gamma": {"useful": True, "reasoning_quality": "moderate", "summary": ""}
+                },
                 "outcome": outcome, "lesson": "reflection parse failed",
-                "self_score": 0.5
+                "complexity_correct": True, "self_score": 0.5
             }
 
     async def close(self):
