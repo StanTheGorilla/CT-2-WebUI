@@ -89,3 +89,95 @@ async def test_reflect_includes_complexity():
     assert result["complexity"] == "deep"
     assert result["complexity_correct"] == True
     await brain.close()
+
+# --- Conversation injection tests ---
+
+CONV = [
+    {"role": "user", "content": "prior turn"},
+    {"role": "assistant", "content": "prior reply"},
+]
+
+@pytest.mark.asyncio
+async def test_frame_problem_conversation_injection():
+    brain = Brain(base_url="http://localhost:8080")
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": '{"question": "reframed?", "complexity": "moderate"}'}}]
+    }
+    with patch.object(brain.client, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+        await brain.frame_problem("some goal", conversation=CONV)
+    messages = mock_post.call_args[1]["json"]["messages"]
+    assert messages[0]["role"] == "system"
+    assert messages[1] == {"role": "user", "content": "prior turn"}
+    assert messages[2] == {"role": "assistant", "content": "prior reply"}
+    assert messages[-1]["role"] == "user"
+    assert messages[-1] != messages[1]
+    await brain.close()
+
+@pytest.mark.asyncio
+async def test_detect_tension_conversation_injection():
+    brain = Brain(base_url="http://localhost:8080")
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": '{"agreement": true, "tension_description": "", "followup_question": "", "confidence": 0.9, "strongest_voice": "alpha"}'}}]
+    }
+    with patch.object(brain.client, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+        await brain.detect_tension("goal", "a", "b", "c", conversation=CONV)
+    messages = mock_post.call_args[1]["json"]["messages"]
+    assert messages[0]["role"] == "system"
+    assert messages[1] == {"role": "user", "content": "prior turn"}
+    assert messages[2] == {"role": "assistant", "content": "prior reply"}
+    assert messages[-1]["role"] == "user"
+    assert messages[-1] != messages[1]
+    await brain.close()
+
+@pytest.mark.asyncio
+async def test_synthesize_conversation_injection():
+    brain = Brain(base_url="http://localhost:8080")
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": "Final synthesized answer."}}]
+    }
+    rounds_data = [{
+        "round": 1,
+        "question": "framed Q",
+        "responses": {
+            "alpha": {"reasoning": "r", "conclusion": "ans A"},
+            "beta":  {"reasoning": "r", "conclusion": "ans B"},
+            "gamma": {"reasoning": "r", "conclusion": "ans C"},
+        }
+    }]
+    with patch.object(brain.client, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+        await brain.synthesize("original goal", rounds_data, conversation=CONV)
+    messages = mock_post.call_args[1]["json"]["messages"]
+    assert messages[0]["role"] == "system"
+    assert messages[1] == {"role": "user", "content": "prior turn"}
+    assert messages[2] == {"role": "assistant", "content": "prior reply"}
+    assert messages[-1]["role"] == "user"
+    assert messages[-1] != messages[1]
+    await brain.close()
+
+@pytest.mark.asyncio
+async def test_reflect_conversation_injection():
+    brain = Brain(base_url="http://localhost:8080")
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": '{"goal": "g", "complexity": "brief", "rounds": 1, "mind_contributions": {}, "outcome": "o", "lesson": "l", "complexity_correct": true, "self_score": 0.7}'}}]
+    }
+    with patch.object(brain.client, "post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_response
+        await brain.reflect("g", "brief", 1, "outcome", conversation=CONV)
+    messages = mock_post.call_args[1]["json"]["messages"]
+    assert messages[0]["role"] == "system"
+    assert messages[1] == {"role": "user", "content": "prior turn"}
+    assert messages[2] == {"role": "assistant", "content": "prior reply"}
+    assert messages[-1]["role"] == "user"
+    assert messages[-1] != messages[1]
+    await brain.close()
