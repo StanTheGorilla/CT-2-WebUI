@@ -9,7 +9,10 @@ class SessionStore:
     def write(self, summary: str) -> None:
         date = datetime.now().strftime("%Y-%m-%d")
         existing = sorted(self.dir.glob(f"{date}_*.txt"))
-        idx = len(existing) + 1
+        idx = 1
+        if existing:
+            last = existing[-1].stem  # e.g. "2026-03-13_002"
+            idx = int(last.split("_")[-1]) + 1
         path = self.dir / f"{date}_{idx:03d}.txt"
         path.write_text(summary, encoding="utf-8")
 
