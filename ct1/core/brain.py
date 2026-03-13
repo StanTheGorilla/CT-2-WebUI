@@ -228,10 +228,9 @@ Now give your single, definitive response. Rules:
         lines = []
         for msg in conversation:
             if msg["role"] == "user":
-                text = msg["content"][:200]
-                lines.append(f"- {text}")
-            if len(lines) >= 20:
-                break
+                lines.append(f"- {msg['content'][:200]}")
+                if len(lines) >= 20:
+                    break
         transcript = "\n".join(lines)
         prompt = f"""Summarize this conversation session in 2-3 sentences. Focus on the topics discussed and any conclusions reached. Be specific.
 
