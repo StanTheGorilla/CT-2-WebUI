@@ -54,7 +54,8 @@ class Orchestrator:
         lessons = self.journal_reader.get_recent_lessons(cfg["journal"]["lessons_on_startup"])
         self.brain.lessons = lessons
 
-    async def _deliberate(self, goal: str, on_event=None) -> dict:
+    async def _deliberate(self, goal: str, on_event=None,
+                           conversation: list[dict] = None) -> dict:
         def emit(event: str, **data):
             if on_event:
                 on_event(event, **data)
@@ -64,7 +65,7 @@ class Orchestrator:
 
         # Brain frames with complexity
         emit("framing")
-        frame = await self.brain.frame_problem(goal)
+        frame = await self.brain.frame_problem(goal, conversation=conversation)
         question = frame["question"]
         complexity = frame["complexity"]
         emit("framed", text=question, complexity=complexity)
@@ -80,9 +81,9 @@ class Orchestrator:
 
             # Parallel broadcast to all 3 minds with complexity
             alpha_r, beta_r, gamma_r = await asyncio.gather(
-                self.minds["alpha"].think(current_question, complexity=complexity),
-                self.minds["beta"].think(current_question, complexity=complexity),
-                self.minds["gamma"].think(current_question, complexity=complexity),
+                self.minds["alpha"].think(current_question, complexity=complexity, conversation=conversation),
+                self.minds["beta"].think(current_question, complexity=complexity, conversation=conversation),
+                self.minds["gamma"].think(current_question, complexity=complexity, conversation=conversation),
             )
 
             emit("mind_response", name="alpha", response=alpha_r)
@@ -109,6 +110,7 @@ class Orchestrator:
                 alpha_r["conclusion"],
                 beta_r["conclusion"],
                 gamma_r["conclusion"],
+                conversation=conversation,
             )
 
             confident = tension.get("confidence", 0) >= self.confidence_threshold
@@ -133,10 +135,12 @@ class Orchestrator:
 
         # Evidence-based synthesis
         emit("synthesizing")
-        final_response = await self.brain.synthesize(goal, rounds_data, tension_summary)
+        final_response = await self.brain.synthesize(goal, rounds_data, tension_summary,
+                                                      conversation=conversation)
 
         # Reflection with complexity
-        reflection = await self.brain.reflect(goal, complexity, rounds_used, final_response)
+        reflection = await self.brain.reflect(goal, complexity, rounds_used, final_response,
+                                               conversation=conversation)
         reflection["rounds"] = rounds_used
         # Store full reasoning traces in journal entry
         reflection["_reasoning_traces"] = {
@@ -155,8 +159,10 @@ class Orchestrator:
             "bus_history": self.bus.to_dict_list(),
         }
 
-    async def think(self, goal: str, on_event=None) -> dict:
-        return await self._deliberate(goal, on_event=on_event)
+    async def think(self, goal: str, on_event=None,
+                    conversation: list[dict] = None) -> dict:
+        return await self._deliberate(goal, on_event=on_event,
+                                      conversation=conversation or [])
 
     async def close(self):
         await self.brain.close()
