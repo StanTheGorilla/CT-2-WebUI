@@ -92,7 +92,7 @@ class Orchestrator:
 
             for mind_name in ("alpha", "beta", "gamma"):
                 text = await self.minds[mind_name].converse(
-                    brief, dialogue, conversation=conversation
+                    brief, dialogue, conversation=conversation, complexity=complexity
                 )
                 dialogue.append({"mind": mind_name, "round": rounds_used, "text": text})
                 emit("mind_turn", name=mind_name, text=text)
@@ -103,7 +103,7 @@ class Orchestrator:
             convergence = await self.brain.check_convergence(
                 brief, dialogue, conversation=conversation
             )
-            if convergence.get("ready_to_execute", False):
+            if convergence.get("ready_to_execute", False) or rounds_used >= self.max_rounds:
                 intent["agreed_approach"] = convergence.get("agreed_approach", "")
                 emit("converging",
                      confidence=1.0,

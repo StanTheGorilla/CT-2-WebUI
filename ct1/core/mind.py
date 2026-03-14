@@ -71,7 +71,8 @@ class Mind:
         return parse_thinking_response(raw)
 
     async def converse(self, brief: str, dialogue: list[dict],
-                       conversation: list[dict] = None) -> str:
+                       conversation: list[dict] = None,
+                       complexity: str = "moderate") -> str:
         """Contribute one turn to the free-form deliberation dialogue.
 
         brief: what the minds are deliberating about (from brain.write_deliberation_brief)
@@ -95,7 +96,7 @@ class Mind:
                 f"You are {self.name}. You go first. Think freely."
             )
 
-        messages = [{"role": "system", "content": self._build_system_prompt("moderate")}]
+        messages = [{"role": "system", "content": self._build_system_prompt(complexity)}]
         if conversation:
             messages.extend(conversation)
         messages.append({"role": "user", "content": user_content})

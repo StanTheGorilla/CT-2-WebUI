@@ -56,40 +56,6 @@ class Brain:
             )
         return r.json()["choices"][0]["message"]["content"].strip()
 
-    async def frame_problem(self, goal: str, conversation: list[dict] = None) -> dict:
-        """Frame the problem and assess complexity. Returns {question, complexity}."""
-        # Use a minimal system prompt here — no lessons, to prevent journal context
-        # from contaminating goal interpretation in the small model.
-        system = "You are a precise problem framer. Restate the user's question clearly and assess its complexity. Output only JSON."
-        prompt = f"""Restate this question clearly for analysis and classify its complexity.
-
-Question: {goal}
-
-Respond as JSON only:
-{{
-  "question": "reframed question in 1-2 sentences",
-  "complexity": "brief|moderate|deep"
-}}"""
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt}
-        ]
-        raw = await self._call(messages, max_tokens=256, conversation=conversation)
-        try:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            parsed = json.loads(raw[start:end])
-            if parsed.get("complexity") not in ("brief", "moderate", "deep"):
-                parsed["complexity"] = "moderate"
-            # Reject the reframing if it's a label/placeholder rather than
-            # a real question (model echoed the JSON field name, etc.)
-            q = parsed.get("question", "")
-            if len(q) < 20 or q.lower().startswith("reframed") or "{" in q:
-                parsed["question"] = goal
-            return parsed
-        except Exception:
-            return {"question": goal, "complexity": "moderate"}
-
     async def extract_intent(self, goal: str, conversation: list[dict] = None) -> dict:
         """Classify what the task requires and what must be produced.
         Returns {task_type, what_to_produce, requirements, complexity}.
@@ -196,35 +162,6 @@ Respond as JSON only:
             return result
         except Exception:
             return {"ready_to_execute": False, "reason": "parse error", "agreed_approach": ""}
-
-    async def detect_tension(self, goal: str, alpha: str, beta: str, gamma: str,
-                              conversation: list[dict] = None) -> dict:
-        """Analyze 3 mind conclusions. Return tension + strongest voice."""
-        prompt = f"""Three inner voices responded to: "{goal}"
-
-alpha concluded: {alpha}
-beta concluded: {beta}
-gamma concluded: {gamma}
-
-Respond as JSON only:
-{{
-  "agreement": true,
-  "tension_description": "brief description or empty string",
-  "followup_question": "followup question or empty string",
-  "confidence": 0.85,
-  "strongest_voice": "alpha|beta|gamma"
-}}"""
-        messages = [
-            {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": prompt}
-        ]
-        raw = await self._call(messages, max_tokens=256, conversation=conversation)
-        try:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            return json.loads(raw[start:end])
-        except Exception:
-            return {"agreement": True, "tension_description": "", "followup_question": "", "confidence": 0.6, "strongest_voice": "alpha"}
 
     async def synthesize(self, goal: str, intent: dict, dialogue: list[dict],
                          conversation: list[dict] = None) -> str:
