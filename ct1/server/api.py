@@ -74,3 +74,48 @@ async def get_config():
         "models": _cfg.get("models", {}),
         "deliberation": _cfg.get("deliberation", {}),
     }
+
+
+@app.websocket("/ws/think")
+async def ws_think(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            if msg.get("type") == "think":
+                goal = msg.get("goal", "")
+                conversation = msg.get("conversation", [])
+                queue: asyncio.Queue = asyncio.Queue()
+
+                def on_event(event: str, **data):
+                    queue.put_nowait({"event": event, **data})
+
+                async def stream_events():
+                    while True:
+                        item = await queue.get()
+                        await websocket.send_json(item)
+                        if item.get("event") == "done":
+                            break
+
+                async def run_think():
+                    result = await _orch.think(
+                        goal, on_event=on_event, conversation=conversation
+                    )
+                    queue.put_nowait({
+                        "event": "done",
+                        "response": result["response"],
+                        "rounds": result["rounds"],
+                        "complexity": result["complexity"],
+                        "reflection": result.get("reflection", {}),
+                        "dialogue": result.get("dialogue", []),
+                    })
+
+                await asyncio.gather(run_think(), stream_events())
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"event": "error", "message": str(e)})
+        except Exception:
+            pass
