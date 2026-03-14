@@ -48,3 +48,60 @@ async def test_extract_intent_fallback_on_bad_json():
     assert "task_type" in result
     assert "what_to_produce" in result
     assert result["complexity"] in ("brief", "moderate", "deep")
+
+def test_write_deliberation_brief_contains_what_to_produce():
+    brain = make_brain()
+    intent = {
+        "task_type": "code",
+        "what_to_produce": "a complete dark-themed HTML restaurant website",
+        "requirements": ["dark background", "show menu items"],
+        "complexity": "moderate",
+    }
+    brief = brain.write_deliberation_brief(intent)
+    assert "dark-themed HTML restaurant website" in brief
+    assert "dark background" in brief
+    assert "menu items" in brief
+
+@pytest.mark.asyncio
+async def test_check_convergence_ready():
+    brain = make_brain()
+    dialogue = [
+        {"mind": "alpha", "round": 1, "text": "We should use flexbox for layout"},
+        {"mind": "beta",  "round": 1, "text": "Agreed on flexbox, dark bg #1a1a1a"},
+        {"mind": "gamma", "round": 1, "text": "Yes, flexbox and #1a1a1a. Use system fonts."},
+    ]
+
+    async def fake_post(url, json=None, **kwargs):
+        return fake_response('{"ready_to_execute": true, "reason": "all agree on approach", "agreed_approach": "flexbox layout, dark #1a1a1a background, system fonts"}')
+
+    brain.client.post = fake_post
+    result = await brain.check_convergence("build a dark site", dialogue)
+    assert result["ready_to_execute"] is True
+    assert "agreed_approach" in result
+
+@pytest.mark.asyncio
+async def test_check_convergence_not_ready():
+    brain = make_brain()
+    dialogue = [
+        {"mind": "alpha", "round": 1, "text": "Use a carousel"},
+        {"mind": "beta",  "round": 1, "text": "No carousel, just a grid"},
+    ]
+
+    async def fake_post(url, json=None, **kwargs):
+        return fake_response('{"ready_to_execute": false, "reason": "alpha and beta disagree on layout", "agreed_approach": ""}')
+
+    brain.client.post = fake_post
+    result = await brain.check_convergence("build a site", dialogue)
+    assert result["ready_to_execute"] is False
+
+@pytest.mark.asyncio
+async def test_check_convergence_fallback_on_bad_json():
+    brain = make_brain()
+
+    async def fake_post(url, json=None, **kwargs):
+        return fake_response("not json")
+
+    brain.client.post = fake_post
+    # Should not raise — return a safe default
+    result = await brain.check_convergence("task", [])
+    assert "ready_to_execute" in result

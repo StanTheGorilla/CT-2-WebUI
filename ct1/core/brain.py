@@ -135,6 +135,70 @@ Use "analysis" for evaluation, comparison, review tasks."""
                 "complexity": "moderate",
             }
 
+    def write_deliberation_brief(self, intent: dict) -> str:
+        """Produce the brief handed to all minds at the start of deliberation."""
+        what = intent.get("what_to_produce", "")
+        reqs = intent.get("requirements", [])
+        task_type = intent.get("task_type", "question")
+
+        reqs_text = ""
+        if reqs:
+            reqs_text = "\nRequirements:\n" + "\n".join(f"- {r}" for r in reqs)
+
+        execution_note = ""
+        if task_type in ("code", "artifact"):
+            execution_note = (
+                "\n\nIMPORTANT: After deliberation, the brain will produce the final output. "
+                "Your job is to decide HOW it should be built — approach, structure, key details. "
+                "Not to build it yourselves."
+            )
+
+        return (
+            f"We need to produce: {what}"
+            f"{reqs_text}"
+            f"\n\nDebate the best approach. Explore alternatives. "
+            f"Identify risks and edge cases. Argue freely — agree, disagree, "
+            f"change your mind, ask each other questions."
+            f"{execution_note}"
+        )
+
+    async def check_convergence(self, brief: str, dialogue: list[dict],
+                                 conversation: list[dict] = None) -> dict:
+        """Ask brain if the dialogue has produced a solid enough plan to execute."""
+        formatted = "\n\n".join(
+            f"{t['mind']} (round {t['round']}): {t['text']}"
+            for t in dialogue
+        )
+        prompt = f"""You are reviewing a deliberation between your inner voices.
+
+Brief given to them:
+{brief}
+
+Their dialogue:
+{formatted}
+
+Is the plan solid enough to execute now?
+Respond as JSON only:
+{{
+  "ready_to_execute": true,
+  "reason": "brief reason",
+  "agreed_approach": "1-2 sentence summary of what was decided"
+}}"""
+        messages = [
+            {"role": "system", "content": self._system_prompt()},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._call(messages, max_tokens=256, conversation=conversation)
+        try:
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            result = json.loads(raw[start:end])
+            if "ready_to_execute" not in result:
+                result["ready_to_execute"] = False
+            return result
+        except Exception:
+            return {"ready_to_execute": False, "reason": "parse error", "agreed_approach": ""}
+
     async def detect_tension(self, goal: str, alpha: str, beta: str, gamma: str,
                               conversation: list[dict] = None) -> dict:
         """Analyze 3 mind conclusions. Return tension + strongest voice."""
