@@ -100,11 +100,15 @@ async def _run_deliberation(orch: Orchestrator, goal: str,
             print_round_header(data["round_num"])
         elif event == "mind_response":
             print_mind_response(data["name"], data["response"], verbose=orch.verbose)
+        elif event == "mind_turn":
+            print_mind_response(data["name"], data["text"], verbose=orch.verbose)
         elif event == "tension":
             print_tension(data["description"])
             console.print(f"  [dim]followup → {data['followup']}[/]")
         elif event == "converging":
-            print_convergence(data["confidence"], data.get("strongest", ""))
+            conf = data.get("confidence", 1.0)
+            strongest = data.get("strongest", "")
+            print_convergence(conf, strongest)
         elif event == "synthesizing":
             console.print(f"\n[dim yellow][brain][/] [dim]synthesizing...[/]")
 
