@@ -82,6 +82,10 @@ class Orchestrator:
         dialogue: list[dict] = []
         rounds_used = 0
 
+        # Unbounded deliberation loop — intentional by design. The brain decides when
+        # to stop via check_convergence returning ready_to_execute=True. Only terminates
+        # on convergence; check_convergence fallback always returns ready_to_execute=False
+        # on errors, so a persistent LLM failure will loop indefinitely.
         while True:
             rounds_used += 1
             emit("round_start", round_num=rounds_used)
