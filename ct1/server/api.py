@@ -119,3 +119,9 @@ async def ws_think(websocket: WebSocket):
             await websocket.send_json({"event": "error", "message": str(e)})
         except Exception:
             pass
+
+
+# Serve SvelteKit build in production
+_WEB_BUILD = Path(__file__).parent.parent / "web" / "build"
+if _WEB_BUILD.exists():
+    app.mount("/", StaticFiles(directory=str(_WEB_BUILD), html=True), name="static")

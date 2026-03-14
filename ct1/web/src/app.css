@@ -1,0 +1,84 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    --bg: #000000;
+    --surface: #1C1C1E;
+    --surface-hover: #2C2C2E;
+    --border: #38383A;
+    --text: #F5F5F7;
+    --text-secondary: #86868B;
+    --text-muted: #48484A;
+
+    --mind-alpha: #06B6D4;
+    --mind-beta: #34D399;
+    --mind-gamma: #C084FC;
+    --brain: #FBBF24;
+
+    --accent: #0A84FF;
+    --success: #30D158;
+    --warning: #FF9F0A;
+    --error: #FF453A;
+
+    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+    --radius: 12px;
+    --transition: 200ms ease;
+}
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+}
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+    transition: opacity var(--transition);
+}
+a:hover {
+    opacity: 0.8;
+}
+
+h1, h2, h3, h4 {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+}
+
+code, pre {
+    font-family: var(--font-mono);
+    font-size: 13px;
+}
+
+pre {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 16px;
+    overflow-x: auto;
+}
+
+::selection {
+    background: var(--accent);
+    color: var(--text);
+}
+
+::-webkit-scrollbar {
+    width: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
