@@ -8,8 +8,7 @@ def load_config(config_path: str = "ct1/server/model_config.yaml") -> dict:
     with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-def build_server_command(cfg: dict) -> list:
-    s = cfg["llama_server"]
+def build_server_command(s: dict) -> list:
     cmd = [
         s["executable"],
         "-m", s["model"],
@@ -22,33 +21,36 @@ def build_server_command(cfg: dict) -> list:
         cmd.append("--cont-batching")
     return cmd
 
-async def start_server(config_path: str = "ct1/server/model_config.yaml") -> subprocess.Popen:
-    cfg = load_config(config_path)
-    cmd = build_server_command(cfg)
-    port = cfg["llama_server"]["port"]
-
+async def _launch_one(s: dict) -> subprocess.Popen:
+    cmd = build_server_command(s)
+    port = s["port"]
     print(f"[launcher] Starting llama-server on port {port}...")
     print(f"[launcher] Command: {' '.join(cmd)}")
-
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
     )
-
     base_url = f"http://localhost:{port}"
     alive = await wait_for_server(base_url, timeout=90)
-
     if not alive:
         proc.terminate()
-        raise RuntimeError("llama-server failed to start within 90 seconds")
-
+        raise RuntimeError(f"llama-server on port {port} failed to start within 90 seconds")
     print(f"[launcher] Server ready at {base_url}")
     return proc
 
-def stop_server(proc: subprocess.Popen):
-    if proc and proc.poll() is None:
-        proc.terminate()
-        proc.wait(timeout=10)
-        print("[launcher] Server stopped.")
+async def start_server(config_path: str = "ct1/server/model_config.yaml") -> list:
+    cfg = load_config(config_path)
+    brain_proc = await _launch_one(cfg["llama_server"])
+    minds_proc = await _launch_one(cfg["llama_server_minds"])
+    return [brain_proc, minds_proc]
+
+def stop_server(procs):
+    if isinstance(procs, subprocess.Popen):
+        procs = [procs]
+    for proc in procs:
+        if proc and proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=10)
+    print("[launcher] Servers stopped.")

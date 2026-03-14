@@ -30,13 +30,13 @@ def main():
 
 async def _start_server(config_path: str):
     from ct1.server.launcher import start_server, stop_server
-    proc = await start_server(config_path)
-    print("Server running. Press Ctrl+C to stop.")
+    procs = await start_server(config_path)
+    print("Servers running. Press Ctrl+C to stop.")
     try:
         while True:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
-        stop_server(proc)
+        stop_server(procs)
 
 async def _run_interactive(config_path: str):
     from ct1.cli.interactive import run_interactive

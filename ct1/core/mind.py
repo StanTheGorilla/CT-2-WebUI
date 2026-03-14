@@ -28,11 +28,13 @@ class Mind:
         self.presence_penalty = presence_penalty
         self.max_tokens = max_tokens
         self.enable_thinking = enable_thinking
-        self.client = httpx.AsyncClient(timeout=120.0)
+        self.client = httpx.AsyncClient(timeout=600.0)
 
     def _build_system_prompt(self, complexity: str = "moderate") -> str:
         instruction = COMPLEXITY_INSTRUCTIONS.get(complexity, COMPLEXITY_INSTRUCTIONS["moderate"])
-        return MIND_SYSTEM_TEMPLATE.replace("{complexity_instruction}", instruction)
+        return (MIND_SYSTEM_TEMPLATE
+                .replace("{name}", self.name)
+                .replace("{complexity_instruction}", instruction))
 
     async def think(self, question: str, complexity: str = "moderate",
                     conversation: list[dict] = None,
@@ -72,11 +74,13 @@ class Mind:
 
     async def converse(self, brief: str, dialogue: list[dict],
                        conversation: list[dict] = None,
-                       complexity: str = "moderate") -> str:
+                       complexity: str = "moderate",
+                       max_tokens: int = None) -> str:
         """Contribute one turn to the free-form deliberation dialogue.
 
         brief: what the minds are deliberating about (from brain.write_deliberation_brief)
         dialogue: all prior turns [{mind, round, text}, ...]
+        max_tokens: override for turn length (deliberation turns should be short)
         Returns a plain string — the mind's contribution.
         """
         if dialogue:
@@ -86,14 +90,13 @@ class Mind:
             )
             user_content = (
                 f"{brief}\n\n"
-                f"Conversation so far:\n{turns_text}\n\n"
-                f"You are {self.name}. Continue the conversation. "
-                f"Be direct and specific. Engage with what was said."
+                f"--- conversation ---\n{turns_text}\n---\n\n"
+                f"{self.name}, what do you think? Say something NEW — don't repeat what others said."
             )
         else:
             user_content = (
                 f"{brief}\n\n"
-                f"You are {self.name}. You go first. Think freely."
+                f"{self.name}, you go first. What's your approach?"
             )
 
         messages = [{"role": "system", "content": self._build_system_prompt(complexity)}]
@@ -108,7 +111,7 @@ class Mind:
             "top_p": self.top_p,
             "top_k": self.top_k,
             "presence_penalty": self.presence_penalty,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens or self.max_tokens,
             "stream": False,
             "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
         }

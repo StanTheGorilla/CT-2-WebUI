@@ -15,7 +15,7 @@ class Brain:
         self.top_k = top_k
         self.presence_penalty = presence_penalty
         self.max_tokens = max_tokens
-        self.client = httpx.AsyncClient(timeout=120.0)
+        self.client = httpx.AsyncClient(timeout=600.0)
         self.lessons: list[str] = []
         self.last_session: str = ""
 
@@ -144,12 +144,20 @@ Brief given to them:
 Their dialogue:
 {formatted}
 
-Is the plan solid enough to execute now?
+Judge whether the deliberation has produced a SPECIFIC, ACTIONABLE plan.
+Say ready_to_execute=true ONLY if ALL of these are met:
+- The voices have debated multiple aspects (not just one quick agreement)
+- There is a clear, concrete approach — not vague handwaving
+- Key trade-offs have been considered
+- For code/artifact tasks: the structure, components, and approach are decided
+
+If the conversation is still shallow, still disagreeing on fundamentals, or hasn't explored enough — say false.
+
 Respond as JSON only:
 {{
   "ready_to_execute": true,
   "reason": "brief reason",
-  "agreed_approach": "1-2 sentence summary of what was decided"
+  "agreed_approach": "specific summary of the decided plan"
 }}"""
             messages = [
                 {"role": "system", "content": self._system_prompt()},

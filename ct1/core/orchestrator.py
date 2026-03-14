@@ -17,12 +17,13 @@ class Orchestrator:
             config_path = str(_CONFIG_PATH)
 
         cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
-        base_url = f"http://localhost:{cfg['llama_server']['port']}"
+        brain_url = f"http://localhost:{cfg['llama_server']['port']}"
+        minds_url = f"http://localhost:{cfg['llama_server_minds']['port']}"
         mc = cfg["models"]
         dc = cfg["deliberation"]
 
         self.brain = Brain(
-            base_url=base_url,
+            base_url=brain_url,
             temperature=mc["brain"]["temperature"],
             top_p=mc["brain"]["top_p"],
             top_k=mc["brain"]["top_k"],
@@ -31,7 +32,7 @@ class Orchestrator:
         )
 
         def _make_mind(name, key):
-            return Mind(name, base_url,
+            return Mind(name, minds_url,
                         mc[key]["temperature"],
                         mc[key]["top_p"],
                         mc[key]["top_k"],
@@ -50,6 +51,8 @@ class Orchestrator:
         self.journal_reader = JournalReader(cfg["journal"]["path"])
         self.max_rounds = dc["max_rounds"]
         self.confidence_threshold = dc["confidence_threshold"]
+        self.min_turns = dc.get("min_turns", 9)
+        self.turn_max_tokens = dc.get("turn_max_tokens", 256)
         self.verbose = False
 
         lessons = self.journal_reader.get_recent_lessons(cfg["journal"]["lessons_on_startup"])
@@ -82,37 +85,47 @@ class Orchestrator:
         dialogue: list[dict] = []
         rounds_used = 0
 
-        # Unbounded deliberation loop — intentional by design. The brain decides when
-        # to stop via check_convergence returning ready_to_execute=True. Only terminates
-        # on convergence; check_convergence fallback always returns ready_to_execute=False
-        # on errors, so a persistent LLM failure will loop indefinitely.
+        # Continuous deliberation — minds converse freely, brain checks convergence
+        # only after enough substance has built up (min_turns). Like human thinking:
+        # the conversation goes as long as it needs to.
+        mind_cycle = ("alpha", "beta", "gamma")
+        turn_count = 0
+
         while True:
-            rounds_used += 1
-            emit("round_start", round_num=rounds_used)
+            mind_name = mind_cycle[turn_count % 3]
+            current_pass = (turn_count // 3) + 1
 
-            for mind_name in ("alpha", "beta", "gamma"):
-                text = await self.minds[mind_name].converse(
-                    brief, dialogue, conversation=conversation, complexity=complexity
-                )
-                dialogue.append({"mind": mind_name, "round": rounds_used, "text": text})
-                emit("mind_turn", name=mind_name, text=text)
-                self.bus.post(f"mind-{mind_name}", "brain",
-                              MessageType.RESPONSE, text,
-                              confidence=0.0, round_num=rounds_used)
+            if turn_count % 3 == 0:
+                emit("round_start", round_num=current_pass)
 
-            convergence = await self.brain.check_convergence(
-                brief, dialogue, conversation=conversation
+            text = await self.minds[mind_name].converse(
+                brief, dialogue, conversation=conversation,
+                complexity=complexity, max_tokens=self.turn_max_tokens
             )
-            if convergence.get("ready_to_execute", False) or rounds_used >= self.max_rounds:
-                intent["agreed_approach"] = convergence.get("agreed_approach", "")
-                emit("converging",
-                     confidence=1.0,
-                     strongest=convergence.get("agreed_approach", ""))
-                break
+            dialogue.append({"mind": mind_name, "round": current_pass, "text": text})
+            emit("mind_turn", name=mind_name, text=text)
+            self.bus.post(f"mind-{mind_name}", "brain",
+                          MessageType.RESPONSE, text,
+                          confidence=0.0, round_num=current_pass)
 
-            emit("tension",
-                 description=convergence.get("reason", ""),
-                 followup="")
+            turn_count += 1
+
+            # Only check convergence after min_turns, at the end of a full 3-mind cycle
+            if turn_count >= self.min_turns and turn_count % 3 == 0:
+                convergence = await self.brain.check_convergence(
+                    brief, dialogue, conversation=conversation
+                )
+                if convergence.get("ready_to_execute", False) or current_pass >= self.max_rounds:
+                    intent["agreed_approach"] = convergence.get("agreed_approach", "")
+                    rounds_used = current_pass
+                    emit("converging",
+                         confidence=1.0,
+                         strongest=convergence.get("agreed_approach", ""))
+                    break
+
+                emit("tension",
+                     description=convergence.get("reason", ""),
+                     followup="")
 
         # ── Phase 3: Execution ────────────────────────────────────────────────
         emit("synthesizing")
