@@ -114,9 +114,9 @@ Use "analysis" for evaluation, comparison, review tasks."""
         execution_note = ""
         if task_type in ("code", "artifact"):
             execution_note = (
-                "\n\nIMPORTANT: After deliberation, the brain will produce the final output. "
-                "Your job is to decide HOW it should be built — approach, structure, key details. "
-                "Not to build it yourselves."
+                "\n\nDO NOT write any code. The brain writes the code AFTER this discussion. "
+                "Your job: decide the approach, structure, and key decisions. "
+                "Talk about WHAT to use and WHY — never show code."
             )
 
         return (

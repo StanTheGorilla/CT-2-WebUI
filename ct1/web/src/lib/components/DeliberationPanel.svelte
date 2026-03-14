@@ -11,7 +11,7 @@
 
     $effect(() => {
         if (dialogue.length && container) {
-            container.scrollTop = container.scrollHeight;
+            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
         }
     });
 </script>

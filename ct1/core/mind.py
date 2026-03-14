@@ -91,12 +91,12 @@ class Mind:
             user_content = (
                 f"{brief}\n\n"
                 f"--- conversation ---\n{turns_text}\n---\n\n"
-                f"{self.name}, what do you think? Say something NEW — don't repeat what others said."
+                f"{self.name}, respond in 2-5 sentences. NO code. Just discuss the approach."
             )
         else:
             user_content = (
                 f"{brief}\n\n"
-                f"{self.name}, you go first. What's your approach?"
+                f"{self.name}, you go first. Describe the approach in 2-5 sentences. NO code."
             )
 
         messages = [{"role": "system", "content": self._build_system_prompt(complexity)}]

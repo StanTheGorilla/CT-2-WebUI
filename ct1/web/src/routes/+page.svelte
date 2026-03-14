@@ -66,6 +66,7 @@
     .messages {
         flex: 1;
         overflow-y: auto;
+        scroll-behavior: smooth;
         display: flex;
         flex-direction: column;
         gap: 16px;
