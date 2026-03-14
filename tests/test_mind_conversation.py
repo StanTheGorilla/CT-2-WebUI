@@ -48,3 +48,19 @@ async def test_think_no_conversation_only_system_and_user():
     assert len(captured["messages"]) == 2
     assert captured["messages"][0]["role"] == "system"
     assert captured["messages"][1]["role"] == "user"
+
+@pytest.mark.asyncio
+async def test_think_prior_voices_injected_into_user_content():
+    mind = make_mind()
+    captured = {}
+
+    async def fake_post(url, json=None, **kwargs):
+        captured["messages"] = json["messages"]
+        return fake_response("answer")
+
+    mind.client.post = fake_post
+    await mind.think("What should we do?", prior_voices="alpha said: use flexbox")
+
+    user_content = captured["messages"][-1]["content"]
+    assert "alpha said: use flexbox" in user_content
+    assert "What should we do?" in user_content
