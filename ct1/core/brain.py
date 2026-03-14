@@ -276,21 +276,6 @@ Do not mention inner voices or deliberation. Just answer."""
         return await self._call(messages, max_tokens=self.max_tokens, presence_penalty=0.0,
                                 conversation=conversation)
 
-    @staticmethod
-    def _extract_best_code(mind_responses: list) -> str:
-        """Return the longest fenced code block found across mind conclusions."""
-        import re
-        best = ""
-        for resp in mind_responses:
-            if not isinstance(resp, dict):
-                continue
-            text = resp.get("conclusion", "") or resp.get("reasoning", "")
-            blocks = re.findall(r"```[^\n]*\n(.*?)```", text, re.DOTALL)
-            for block in blocks:
-                if len(block) > len(best):
-                    best = block
-        return best
-
     async def reflect(self, goal: str, complexity: str, rounds: int, outcome: str,
                       conversation: list[dict] = None) -> dict:
         """Write structured journal reflection."""

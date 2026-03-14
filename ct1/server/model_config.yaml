@@ -45,9 +45,9 @@ models:
     max_tokens: 10000
 
 deliberation:
-  max_rounds: 3
+  max_rounds: 999
   confidence_threshold: 0.8
-  token_budget_per_session: 16000
+  convergence_check_every: 1
 
 journal:
   path: "ct1/data/journals"
