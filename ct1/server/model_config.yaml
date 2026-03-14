@@ -41,7 +41,7 @@ models:
     temperature: 0.3
     top_p: 0.9
     top_k: 10
-    presence_penalty: 1.0
+    presence_penalty: 1.8
     max_tokens: 100000
 
   mind_gamma:
@@ -57,7 +57,7 @@ deliberation:
   max_rounds: 999
   confidence_threshold: 0.8
   min_turns: 9
-  turn_max_tokens: 1500
+  turn_max_tokens: 400
 
 journal:
   path: "ct1/data/journals"

@@ -84,14 +84,19 @@ class Mind:
         Returns a plain string — the mind's contribution.
         """
         if dialogue:
-            turns_text = "\n\n".join(
+            # Only show last 3 turns to keep context focused for 0.8B model
+            recent = dialogue[-3:]
+            recent_text = "\n".join(
                 f"{t['mind']}: {t['text']}"
-                for t in dialogue
+                for t in recent
             )
+            # Find what the last speaker said so this mind can respond directly
+            last = dialogue[-1]
             user_content = (
                 f"{brief}\n\n"
-                f"--- conversation ---\n{turns_text}\n---\n\n"
-                f"{self.name}, respond in 2-5 sentences. NO code. Just discuss the approach."
+                f"Recent discussion:\n{recent_text}\n\n"
+                f"{self.name}, respond to {last['mind']}. "
+                f"Do you agree or disagree? Add a NEW idea. 2-5 sentences. NO code."
             )
         else:
             user_content = (
