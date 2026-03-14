@@ -165,11 +165,12 @@ Use "analysis" for evaluation, comparison, review tasks."""
     async def check_convergence(self, brief: str, dialogue: list[dict],
                                  conversation: list[dict] = None) -> dict:
         """Ask brain if the dialogue has produced a solid enough plan to execute."""
-        formatted = "\n\n".join(
-            f"{t['mind']} (round {t['round']}): {t['text']}"
-            for t in dialogue
-        )
-        prompt = f"""You are reviewing a deliberation between your inner voices.
+        try:
+            formatted = "\n\n".join(
+                f"{t['mind']} (round {t['round']}): {t['text']}"
+                for t in dialogue
+            ) if dialogue else "(no dialogue yet)"
+            prompt = f"""You are reviewing a deliberation between your inner voices.
 
 Brief given to them:
 {brief}
@@ -184,15 +185,12 @@ Respond as JSON only:
   "reason": "brief reason",
   "agreed_approach": "1-2 sentence summary of what was decided"
 }}"""
-        messages = [
-            {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": prompt},
-        ]
-        raw = await self._call(messages, max_tokens=256, conversation=conversation)
-        try:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            result = json.loads(raw[start:end])
+            messages = [
+                {"role": "system", "content": self._system_prompt()},
+                {"role": "user", "content": prompt},
+            ]
+            raw = await self._call(messages, max_tokens=256, conversation=conversation)
+            result = json.loads(raw[raw.find("{"):raw.rfind("}")+1])
             if "ready_to_execute" not in result:
                 result["ready_to_execute"] = False
             return result
