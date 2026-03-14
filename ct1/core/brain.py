@@ -120,21 +120,20 @@ Use "analysis" for evaluation, comparison, review tasks."""
         if reqs:
             reqs_text = "\nRequirements:\n" + "\n".join(f"- {r}" for r in reqs)
 
-        execution_note = ""
         if task_type in ("code", "artifact"):
-            execution_note = (
-                "\n\nDO NOT write any code. The brain writes the code AFTER this discussion. "
-                "Your job: decide the approach, structure, and key decisions. "
-                "Talk about WHAT to use and WHY — never show code."
+            return (
+                f"We need to design: {what}"
+                f"{reqs_text}"
+                f"\n\nDiscuss the design — what layout, what colors, what fonts, "
+                f"what sections the page should have, what makes it feel premium. "
+                f"Debate the choices."
             )
 
         return (
-            f"We need to produce: {what}"
+            f"We need to answer: {what}"
             f"{reqs_text}"
-            f"\n\nDebate the best approach. Explore alternatives. "
-            f"Identify risks and edge cases. Argue freely — agree, disagree, "
-            f"change your mind, ask each other questions."
-            f"{execution_note}"
+            f"\n\nDiscuss different angles and approaches. "
+            f"What are the key considerations? What could go wrong?"
         )
 
     async def assess_deliberation(self, brief: str, dialogue: list[dict],

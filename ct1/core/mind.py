@@ -90,18 +90,17 @@ class Mind:
                 f"{t['mind']}: {t['text']}"
                 for t in recent
             )
-            # Find what the last speaker said so this mind can respond directly
-            last = dialogue[-1]
+            # Conversation-completion format — model continues naturally
             user_content = (
-                f"{brief}\n\n"
-                f"Recent discussion:\n{recent_text}\n\n"
-                f"{self.name}, respond to {last['mind']}. "
-                f"Do you agree or disagree? Add a NEW idea. 2-5 sentences. NO code."
+                f"Topic: {brief}\n\n"
+                f"{recent_text}\n\n"
+                f"{self.name}:"
             )
         else:
             user_content = (
-                f"{brief}\n\n"
-                f"{self.name}, you go first. Describe the approach in 2-5 sentences. NO code."
+                f"Topic: {brief}\n\n"
+                f"What's the best approach for this? Think about structure, layout, and key design choices.\n\n"
+                f"{self.name}:"
             )
 
         messages = [{"role": "system", "content": self._build_system_prompt(complexity)}]
@@ -134,10 +133,9 @@ class Mind:
             f"{t['mind']}: {t['text']}" for t in recent_dialogue
         )
         user_content = (
-            f"Recent discussion:\n{recent_text}\n\n"
-            f"Brain says: {brain_assessment}\n\n"
-            f"{self.name}, do you agree we should stop? "
-            f"Reply in 1 sentence: 'I agree because...' or 'I disagree because...'"
+            f"{recent_text}\n\n"
+            f"brain: {brain_assessment}\n\n"
+            f"{self.name}:"
         )
         messages = [
             {"role": "system", "content": self._build_system_prompt()},
