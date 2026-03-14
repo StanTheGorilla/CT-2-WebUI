@@ -33,6 +33,7 @@ interface ChatState {
     intent: Intent | null;
     reflection: Reflection | null;
     response: string;
+    thinking: string;
     phase: 'idle' | 'framing' | 'deliberating' | 'synthesizing' | 'done';
     currentRound: number;
 }
@@ -44,6 +45,7 @@ const initial: ChatState = {
     intent: null,
     reflection: null,
     response: '',
+    thinking: '',
     phase: 'idle',
     currentRound: 0,
 };
@@ -91,6 +93,7 @@ function handleEvent(data: Record<string, any>) {
             case 'done':
                 s.phase = 'done';
                 s.response = data.response;
+                s.thinking = data.thinking || '';
                 s.reflection = data.reflection;
                 s.conversation = [
                     ...s.conversation,
@@ -130,6 +133,7 @@ export function sendThink(goal: string) {
         s.intent = null;
         s.reflection = null;
         s.response = '';
+        s.thinking = '';
         s.phase = 'framing';
         s.currentRound = 0;
         return s;

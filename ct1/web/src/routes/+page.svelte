@@ -44,7 +44,7 @@
         {/if}
 
         {#if $chat.response}
-            <ResponsePanel response={$chat.response} />
+            <ResponsePanel response={$chat.response} thinking={$chat.thinking} />
         {/if}
 
         {#if $chat.reflection}

@@ -60,7 +60,9 @@ class Brain:
         raw = r.json()["choices"][0]["message"]["content"].strip()
         if self.enable_thinking:
             parsed = parse_thinking_response(raw)
+            self._last_thinking = parsed.get("reasoning", "")
             return parsed.get("conclusion", raw)
+        self._last_thinking = ""
         return raw
 
     async def extract_intent(self, goal: str, conversation: list[dict] = None) -> dict:
@@ -229,8 +231,9 @@ Do not mention inner voices or deliberation. Just answer."""
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": prompt},
         ]
-        return await self._call(messages, max_tokens=self.max_tokens, presence_penalty=0.0,
-                                conversation=conversation)
+        result = await self._call(messages, max_tokens=self.max_tokens, presence_penalty=0.0,
+                                  conversation=conversation)
+        return {"text": result, "thinking": self._last_thinking}
 
     async def reflect(self, goal: str, complexity: str, rounds: int, outcome: str,
                       conversation: list[dict] = None) -> dict:

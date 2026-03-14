@@ -148,9 +148,11 @@ class Orchestrator:
 
         # ── Phase 3: Execution ────────────────────────────────────────────────
         emit("synthesizing")
-        final_response = await self.brain.synthesize(
+        synthesis = await self.brain.synthesize(
             goal, intent, dialogue, conversation=conversation
         )
+        final_response = synthesis["text"]
+        brain_thinking = synthesis.get("thinking", "")
 
         # Reflection
         reflection = await self.brain.reflect(
@@ -163,6 +165,7 @@ class Orchestrator:
 
         return {
             "response": final_response,
+            "thinking": brain_thinking,
             "rounds": rounds_used,
             "complexity": complexity,
             "tension_detected": rounds_used > 1,

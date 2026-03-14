@@ -104,6 +104,7 @@ async def ws_think(websocket: WebSocket):
                     queue.put_nowait({
                         "event": "done",
                         "response": result["response"],
+                        "thinking": result.get("thinking", ""),
                         "rounds": result["rounds"],
                         "complexity": result["complexity"],
                         "reflection": result.get("reflection", {}),
