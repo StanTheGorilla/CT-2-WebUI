@@ -105,3 +105,41 @@ async def test_check_convergence_fallback_on_bad_json():
     # Should not raise — return a safe default
     result = await brain.check_convergence("task", [])
     assert "ready_to_execute" in result
+
+@pytest.mark.asyncio
+async def test_synthesize_code_task_forbids_placeholders_in_prompt():
+    brain = make_brain()
+    captured = {}
+
+    async def fake_post(url, json=None, **kwargs):
+        captured["messages"] = json["messages"]
+        return fake_response("<!DOCTYPE html><html>...</html>")
+
+    brain.client.post = fake_post
+    intent = {"task_type": "code", "what_to_produce": "a dark HTML site", "requirements": [], "complexity": "moderate"}
+    dialogue = [{"mind": "alpha", "round": 1, "text": "Use dark bg and flexbox"}]
+    await brain.synthesize("build me a dark HTML site", intent, dialogue)
+
+    # The prompt sent to the LLM must contain the anti-placeholder rules
+    user_prompt = captured["messages"][-1]["content"]
+    assert "No placeholders" in user_prompt or "placeholder" in user_prompt.lower()
+    assert "complete" in user_prompt.lower()
+
+@pytest.mark.asyncio
+async def test_synthesize_question_task_uses_answer_prompt():
+    brain = make_brain()
+    captured = {}
+
+    async def fake_post(url, json=None, **kwargs):
+        captured["messages"] = json["messages"]
+        return fake_response("The answer is 42.")
+
+    brain.client.post = fake_post
+    intent = {"task_type": "question", "what_to_produce": "answer to question", "requirements": [], "complexity": "brief"}
+    dialogue = [{"mind": "alpha", "round": 1, "text": "The answer is 42"}]
+    result = await brain.synthesize("what is the answer?", intent, dialogue)
+    assert result == "The answer is 42."
+
+    user_prompt = captured["messages"][-1]["content"]
+    # Should not have the code-specific rules
+    assert "No placeholders" not in user_prompt

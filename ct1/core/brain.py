@@ -226,58 +226,54 @@ Respond as JSON only:
         except Exception:
             return {"agreement": True, "tension_description": "", "followup_question": "", "confidence": 0.6, "strongest_voice": "alpha"}
 
-    async def synthesize(self, goal: str, rounds_data: list[dict],
-                         tension_summary: str = "", conversation: list[dict] = None) -> str:
-        """Produce final response using mind conclusions as evidence."""
-        last_round = rounds_data[-1] if rounds_data else {}
-        responses = last_round.get("responses", {})
+    async def synthesize(self, goal: str, intent: dict, dialogue: list[dict],
+                         conversation: list[dict] = None) -> str:
+        """Phase 3: produce the final output using the deliberation as context."""
+        task_type = intent.get("task_type", "question")
+        agreed = intent.get("agreed_approach", "")
 
-        evidence_lines = []
-        for name in ("alpha", "beta", "gamma"):
-            resp = responses.get(name, {})
-            if isinstance(resp, dict):
-                conclusion = resp.get("conclusion", "")
-            else:
-                conclusion = str(resp)
-            # Truncate per-mind evidence; full code is extracted separately below
-            if len(conclusion) > 800:
-                conclusion = conclusion[:800] + "…"
-            evidence_lines.append(f"Mind-{name}: {conclusion}")
+        # Format dialogue as readable transcript
+        transcript = "\n\n".join(
+            f"{t['mind']} (round {t['round']}): {t['text']}"
+            for t in dialogue
+        ) if dialogue else "(no deliberation)"
 
-        evidence = "\n".join(evidence_lines)
+        if task_type in ("code", "artifact"):
+            what = intent.get("what_to_produce", goal)
+            reqs = intent.get("requirements", [])
+            reqs_text = ("\nRequirements:\n" + "\n".join(f"- {r}" for r in reqs)) if reqs else ""
 
-        # If any mind produced a code block, surface the best one directly
-        # rather than asking the brain to re-generate it from scratch.
-        code_block = self._extract_best_code(
-            [responses.get(n, {}) for n in ("alpha", "beta", "gamma")]
-        )
+            prompt = f"""The deliberation is complete. Produce the output now.
 
-        if code_block:
-            # One of the minds already produced real code — surface it directly.
-            # Don't ask the brain to regenerate; just wrap with a one-liner.
-            return f"Here is the result:\n\n```\n{code_block}\n```"
+Task: {goal}
+What to produce: {what}{reqs_text}
+{f"Agreed approach: {agreed}" if agreed else ""}
 
-        prompt = f"""You deliberated on: "{goal}"
+Deliberation transcript (for reference):
+{transcript}
 
-Your inner voices concluded:
+RULES — follow exactly:
+- Write the COMPLETE, working output. Every line must be real.
+- No placeholders. No "<!-- add content here -->". No TODO. No "...". No stubs.
+- If HTML: write the full HTML including all CSS and JavaScript inline. Nothing missing.
+- If code: write the full file. No imports left out. No functions left as stubs.
+- Do not explain what you are doing. Do not describe the output. Just produce it."""
+        else:
+            prompt = f"""The deliberation reached a conclusion. Answer the question now.
 
-{evidence}
+Question: {goal}
 
-{tension_summary}
+Deliberation transcript:
+{transcript}
 
-Now give your single, definitive response. Follow these rules exactly:
-- If the task asks for code, HTML, CSS, JavaScript, or any file: write the COMPLETE file. Every line must be real, working code. No placeholders.
-- BANNED: comments like <!-- ... -->, # ..., or // ... used as substitutes for actual code. If CSS belongs somewhere, write the CSS. If JavaScript belongs somewhere, write the JavaScript.
-- BANNED: phrases like "add your code here", "insert styles here", "TODO", "...", or any stub.
-- If the task asks a question: answer it directly.
-- Do not mention your inner voices or deliberation process."""
+Draw from the strongest reasoning above. Speak in first person.
+Do not mention inner voices or deliberation. Just answer."""
 
         messages = [
             {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": prompt},
         ]
-        # presence_penalty=0 for synthesis: code/HTML requires reusing tokens freely
-        return await self._call(messages, max_tokens=4096, presence_penalty=0.0,
+        return await self._call(messages, max_tokens=self.max_tokens, presence_penalty=0.0,
                                 conversation=conversation)
 
     @staticmethod
