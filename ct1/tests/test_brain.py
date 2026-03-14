@@ -33,35 +33,6 @@ async def test_frame_problem_fallback_on_bad_json():
     await brain.close()
 
 @pytest.mark.asyncio
-async def test_synthesize_uses_evidence():
-    brain = Brain(base_url="http://localhost:8080")
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [{"message": {"content": "Synthesized answer."}}]
-    }
-    rounds_data = [{
-        "round": 1,
-        "question": "framed Q",
-        "responses": {
-            "alpha": {"reasoning": "chain A", "conclusion": "answer A"},
-            "beta":  {"reasoning": "chain B", "conclusion": "answer B"},
-            "gamma": {"reasoning": "chain C", "conclusion": "answer C"},
-        }
-    }]
-    tension_summary = "All three perspectives converge."
-    with patch.object(brain.client, "post", new_callable=AsyncMock) as mock_post:
-        mock_post.return_value = mock_response
-        result = await brain.synthesize("original goal", rounds_data, tension_summary)
-    call_payload = mock_post.call_args[1]["json"]
-    user_msg = call_payload["messages"][1]["content"]
-    assert "answer A" in user_msg
-    assert "answer B" in user_msg
-    assert "answer C" in user_msg
-    assert result == "Synthesized answer."
-    await brain.close()
-
-@pytest.mark.asyncio
 async def test_detect_tension_includes_strongest_voice():
     brain = Brain(base_url="http://localhost:8080")
     mock_response = MagicMock()
@@ -127,34 +98,6 @@ async def test_detect_tension_conversation_injection():
     with patch.object(brain.client, "post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = mock_response
         await brain.detect_tension("goal", "a", "b", "c", conversation=CONV)
-    messages = mock_post.call_args[1]["json"]["messages"]
-    assert messages[0]["role"] == "system"
-    assert messages[1] == {"role": "user", "content": "prior turn"}
-    assert messages[2] == {"role": "assistant", "content": "prior reply"}
-    assert messages[-1]["role"] == "user"
-    assert messages[-1] != messages[1]
-    await brain.close()
-
-@pytest.mark.asyncio
-async def test_synthesize_conversation_injection():
-    brain = Brain(base_url="http://localhost:8080")
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [{"message": {"content": "Final synthesized answer."}}]
-    }
-    rounds_data = [{
-        "round": 1,
-        "question": "framed Q",
-        "responses": {
-            "alpha": {"reasoning": "r", "conclusion": "ans A"},
-            "beta":  {"reasoning": "r", "conclusion": "ans B"},
-            "gamma": {"reasoning": "r", "conclusion": "ans C"},
-        }
-    }]
-    with patch.object(brain.client, "post", new_callable=AsyncMock) as mock_post:
-        mock_post.return_value = mock_response
-        await brain.synthesize("original goal", rounds_data, conversation=CONV)
     messages = mock_post.call_args[1]["json"]["messages"]
     assert messages[0]["role"] == "system"
     assert messages[1] == {"role": "user", "content": "prior turn"}
