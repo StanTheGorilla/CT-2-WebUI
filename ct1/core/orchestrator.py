@@ -63,106 +63,75 @@ class Orchestrator:
                            conversation: list[dict] = None) -> dict:
         if conversation is None:
             conversation = []
+
         def emit(event: str, **data):
             if on_event:
                 on_event(event, **data)
 
         self.bus.clear()
-        rounds_data = []
 
-        # Brain frames with complexity
+        # ── Phase 1: Intent Extraction ────────────────────────────────────────
         emit("framing")
-        frame = await self.brain.frame_problem(goal, conversation=conversation)
-        question = frame["question"]
-        complexity = frame["complexity"]
-        emit("framed", text=question, complexity=complexity)
+        intent = await self.brain.extract_intent(goal, conversation=conversation)
+        intent["agreed_approach"] = ""          # populated after convergence
+        complexity = intent.get("complexity", "moderate")
+        emit("framed", text=intent.get("what_to_produce", goal), complexity=complexity)
 
-        current_question = question
+        # ── Phase 2: Free-Form Deliberation ──────────────────────────────────
+        brief = self.brain.write_deliberation_brief(intent)
+        dialogue: list[dict] = []
         rounds_used = 0
-        tension_ever_detected = False
-        tension_summary = ""
 
-        for round_num in range(1, self.max_rounds + 1):
-            rounds_used = round_num
-            emit("round_start", round_num=round_num)
+        while True:
+            rounds_used += 1
+            emit("round_start", round_num=rounds_used)
 
-            # Parallel broadcast to all 3 minds with complexity
-            alpha_r, beta_r, gamma_r = await asyncio.gather(
-                self.minds["alpha"].think(current_question, complexity=complexity, conversation=conversation),
-                self.minds["beta"].think(current_question, complexity=complexity, conversation=conversation),
-                self.minds["gamma"].think(current_question, complexity=complexity, conversation=conversation),
+            for mind_name in ("alpha", "beta", "gamma"):
+                text = await self.minds[mind_name].converse(
+                    brief, dialogue, conversation=conversation
+                )
+                dialogue.append({"mind": mind_name, "round": rounds_used, "text": text})
+                emit("mind_turn", name=mind_name, text=text)
+                self.bus.post(f"mind-{mind_name}", "brain",
+                              MessageType.RESPONSE, text,
+                              confidence=0.0, round_num=rounds_used)
+
+            convergence = await self.brain.check_convergence(
+                brief, dialogue, conversation=conversation
             )
-
-            emit("mind_response", name="alpha", response=alpha_r)
-            emit("mind_response", name="beta",  response=beta_r)
-            emit("mind_response", name="gamma", response=gamma_r)
-
-            # Post conclusions to bus
-            self.bus.post("mind-alpha", "brain", MessageType.RESPONSE,
-                          alpha_r["conclusion"], confidence=0.0, round_num=round_num)
-            self.bus.post("mind-beta", "brain", MessageType.RESPONSE,
-                          beta_r["conclusion"], confidence=0.0, round_num=round_num)
-            self.bus.post("mind-gamma", "brain", MessageType.RESPONSE,
-                          gamma_r["conclusion"], confidence=0.0, round_num=round_num)
-
-            rounds_data.append({
-                "round": round_num,
-                "question": current_question,
-                "responses": {"alpha": alpha_r, "beta": beta_r, "gamma": gamma_r}
-            })
-
-            # Brain analyzes tension using conclusions
-            tension = await self.brain.detect_tension(
-                current_question,
-                alpha_r["conclusion"],
-                beta_r["conclusion"],
-                gamma_r["conclusion"],
-                conversation=conversation,
-            )
-
-            confident = tension.get("confidence", 0) >= self.confidence_threshold
-            agreed = tension.get("agreement", False)
-
-            if confident or agreed or round_num == self.max_rounds:
-                strongest = tension.get("strongest_voice", "")
-                conf = tension.get("confidence", 0.0)
-                if tension_ever_detected:
-                    tension_summary = f"After {rounds_used} rounds of deliberation, tension resolved. Strongest reasoning from {strongest}. Confidence: {conf:.2f}."
-                else:
-                    tension_summary = f"All three perspectives converge. Strongest reasoning from {strongest}. Confidence: {conf:.2f}."
-                emit("converging", confidence=conf, strongest=strongest)
+            if convergence.get("ready_to_execute", False):
+                intent["agreed_approach"] = convergence.get("agreed_approach", "")
+                emit("converging",
+                     confidence=1.0,
+                     strongest=convergence.get("agreed_approach", ""))
                 break
-            else:
-                tension_ever_detected = True
-                desc = tension.get("tension_description", "")
-                followup = tension.get("followup_question") or current_question
-                emit("tension", description=desc, followup=followup)
-                self.bus.post("brain", "all", MessageType.TENSION, desc, round_num=round_num)
-                current_question = followup
 
-        # Evidence-based synthesis
+            emit("tension",
+                 description=convergence.get("reason", ""),
+                 followup="")
+
+        # ── Phase 3: Execution ────────────────────────────────────────────────
         emit("synthesizing")
-        final_response = await self.brain.synthesize(goal, rounds_data, tension_summary,
-                                                      conversation=conversation)
+        final_response = await self.brain.synthesize(
+            goal, intent, dialogue, conversation=conversation
+        )
 
-        # Reflection with complexity
-        reflection = await self.brain.reflect(goal, complexity, rounds_used, final_response,
-                                               conversation=conversation)
+        # Reflection
+        reflection = await self.brain.reflect(
+            goal, complexity, rounds_used, final_response,
+            conversation=conversation
+        )
         reflection["rounds"] = rounds_used
-        # Store full reasoning traces in journal entry
-        reflection["_reasoning_traces"] = {
-            name: [rd["responses"][name]["reasoning"] for rd in rounds_data]
-            for name in ("alpha", "beta", "gamma")
-        }
+        reflection["_dialogue"] = dialogue
         self.journal.write(reflection)
 
         return {
             "response": final_response,
             "rounds": rounds_used,
             "complexity": complexity,
-            "tension_detected": tension_ever_detected,
+            "tension_detected": rounds_used > 1,
             "reflection": reflection,
-            "rounds_data": rounds_data,
+            "dialogue": dialogue,
             "bus_history": self.bus.to_dict_list(),
         }
 
