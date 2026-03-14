@@ -90,6 +90,51 @@ Respond as JSON only:
         except Exception:
             return {"question": goal, "complexity": "moderate"}
 
+    async def extract_intent(self, goal: str, conversation: list[dict] = None) -> dict:
+        """Classify what the task requires and what must be produced.
+        Returns {task_type, what_to_produce, requirements, complexity}.
+        """
+        system = "You are a precise task classifier. Output only valid JSON."
+        prompt = f"""Analyze this task and classify it.
+
+Task: {goal}
+
+Respond as JSON only:
+{{
+  "task_type": "code" | "artifact" | "question" | "analysis",
+  "what_to_produce": "one sentence describing the exact output expected",
+  "requirements": ["key requirement 1", "key requirement 2"],
+  "complexity": "brief" | "moderate" | "deep"
+}}
+
+Use "code" for any task asking for code, HTML, CSS, scripts, programs.
+Use "artifact" for documents, designs, structured outputs.
+Use "question" for factual or conceptual questions.
+Use "analysis" for evaluation, comparison, review tasks."""
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._call(messages, max_tokens=256, conversation=conversation)
+        try:
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            parsed = json.loads(raw[start:end])
+            if parsed.get("task_type") not in ("code", "artifact", "question", "analysis"):
+                parsed["task_type"] = "question"
+            if parsed.get("complexity") not in ("brief", "moderate", "deep"):
+                parsed["complexity"] = "moderate"
+            if not parsed.get("what_to_produce"):
+                parsed["what_to_produce"] = goal
+            return parsed
+        except Exception:
+            return {
+                "task_type": "question",
+                "what_to_produce": goal,
+                "requirements": [],
+                "complexity": "moderate",
+            }
+
     async def detect_tension(self, goal: str, alpha: str, beta: str, gamma: str,
                               conversation: list[dict] = None) -> dict:
         """Analyze 3 mind conclusions. Return tension + strongest voice."""
@@ -146,7 +191,11 @@ Respond as JSON only:
         )
 
         if code_block:
-            prompt = f"""You deliberated on: "{goal}"
+            # One of the minds already produced real code — surface it directly.
+            # Don't ask the brain to regenerate; just wrap with a one-liner.
+            return f"Here is the result:\n\n```\n{code_block}\n```"
+
+        prompt = f"""You deliberated on: "{goal}"
 
 Your inner voices concluded:
 
@@ -154,23 +203,12 @@ Your inner voices concluded:
 
 {tension_summary}
 
-One of your voices produced working code. Present it as the final answer.
-Add a single sentence of context at the top, then output the code in full, unchanged:
-
-{code_block}"""
-        else:
-            prompt = f"""You deliberated on: "{goal}"
-
-Your inner voices concluded:
-
-{evidence}
-
-{tension_summary}
-
-Now give your single, definitive response. Rules:
-- If the task asks for code, HTML, a file, or any produced artifact: output it in full, complete, and ready to use. Do not describe it — produce it.
-- If the task asks a question: answer it directly and completely.
-- Speak as yourself. Do not reference your inner voices or deliberation process."""
+Now give your single, definitive response. Follow these rules exactly:
+- If the task asks for code, HTML, CSS, JavaScript, or any file: write the COMPLETE file. Every line must be real, working code. No placeholders.
+- BANNED: comments like <!-- ... -->, # ..., or // ... used as substitutes for actual code. If CSS belongs somewhere, write the CSS. If JavaScript belongs somewhere, write the JavaScript.
+- BANNED: phrases like "add your code here", "insert styles here", "TODO", "...", or any stub.
+- If the task asks a question: answer it directly.
+- Do not mention your inner voices or deliberation process."""
 
         messages = [
             {"role": "system", "content": self._system_prompt()},
@@ -189,7 +227,7 @@ Now give your single, definitive response. Rules:
             if not isinstance(resp, dict):
                 continue
             text = resp.get("conclusion", "") or resp.get("reasoning", "")
-            blocks = re.findall(r"```[\w]*\n(.*?)```", text, re.DOTALL)
+            blocks = re.findall(r"```[^\n]*\n(.*?)```", text, re.DOTALL)
             for block in blocks:
                 if len(block) > len(best):
                     best = block
