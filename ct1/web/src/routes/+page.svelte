@@ -27,6 +27,10 @@
             <IntentCard intent={$chat.intent} />
         {/if}
 
+        {#if $chat.phase === 'deliberating' && $chat.dialogue.length === 0}
+            <div class="status"><span class="pulse mind"></span> Minds deliberating...</div>
+        {/if}
+
         {#if $chat.dialogue.length > 0}
             <DeliberationPanel
                 dialogue={$chat.dialogue}
@@ -86,5 +90,6 @@
         background: var(--accent); animation: pulse 1.5s ease-in-out infinite;
     }
     .pulse.brain { background: var(--brain); }
+    .pulse.mind { background: var(--alpha); }
     @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 </style>

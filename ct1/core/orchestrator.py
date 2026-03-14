@@ -78,7 +78,11 @@ class Orchestrator:
         intent = await self.brain.extract_intent(goal, conversation=conversation)
         intent["agreed_approach"] = ""          # populated after convergence
         complexity = intent.get("complexity", "moderate")
-        emit("framed", text=intent.get("what_to_produce", goal), complexity=complexity)
+        emit("framed",
+             task_type=intent.get("task_type", "general"),
+             what_to_produce=intent.get("what_to_produce", goal),
+             requirements=intent.get("requirements", []),
+             complexity=complexity)
 
         # ── Phase 2: Free-Form Deliberation ──────────────────────────────────
         brief = self.brain.write_deliberation_brief(intent)

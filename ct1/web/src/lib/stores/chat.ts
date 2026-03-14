@@ -97,6 +97,10 @@ function handleEvent(data: Record<string, any>) {
                     { role: 'assistant', content: data.response },
                 ];
                 break;
+            case 'error':
+                s.phase = 'done';
+                s.response = `**Error:** ${data.message || 'Unknown error'}`;
+                break;
         }
         return s;
     });
