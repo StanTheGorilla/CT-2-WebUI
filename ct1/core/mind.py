@@ -35,14 +35,24 @@ class Mind:
         return MIND_SYSTEM_TEMPLATE.replace("{complexity_instruction}", instruction)
 
     async def think(self, question: str, complexity: str = "moderate",
-                    conversation: list[dict] = None) -> dict:
-        """Send question to LLM, return parsed {reasoning, conclusion}."""
+                    conversation: list[dict] = None,
+                    prior_voices: str = "") -> dict:
+        """Send question to LLM, return parsed {reasoning, conclusion}.
+
+        prior_voices: text showing what the other minds said so far this round,
+                      so this mind can respond to them directly.
+        """
+        if prior_voices:
+            user_content = f"{prior_voices}\n\n---\n\nNow respond with your own view on: {question}"
+        else:
+            user_content = question
+
         messages = [
             {"role": "system", "content": self._build_system_prompt(complexity)},
         ]
         if conversation:
             messages.extend(conversation)
-        messages.append({"role": "user", "content": question})
+        messages.append({"role": "user", "content": user_content})
 
         payload = {
             "model": "qwen",
@@ -59,6 +69,54 @@ class Mind:
         r.raise_for_status()
         raw = r.json()["choices"][0]["message"]["content"].strip()
         return parse_thinking_response(raw)
+
+    async def converse(self, brief: str, dialogue: list[dict],
+                       conversation: list[dict] = None) -> str:
+        """Contribute one turn to the free-form deliberation dialogue.
+
+        brief: what the minds are deliberating about (from brain.write_deliberation_brief)
+        dialogue: all prior turns [{mind, round, text}, ...]
+        Returns a plain string — the mind's contribution.
+        """
+        if dialogue:
+            turns_text = "\n\n".join(
+                f"{t['mind']}: {t['text']}"
+                for t in dialogue
+            )
+            user_content = (
+                f"{brief}\n\n"
+                f"Conversation so far:\n{turns_text}\n\n"
+                f"You are {self.name}. Continue the conversation. "
+                f"Be direct and specific. Engage with what was said."
+            )
+        else:
+            user_content = (
+                f"{brief}\n\n"
+                f"You are {self.name}. You go first. Think freely."
+            )
+
+        messages = [{"role": "system", "content": self._build_system_prompt("moderate")}]
+        if conversation:
+            messages.extend(conversation)
+        messages.append({"role": "user", "content": user_content})
+
+        payload = {
+            "model": "qwen",
+            "messages": messages,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "presence_penalty": self.presence_penalty,
+            "max_tokens": self.max_tokens,
+            "stream": False,
+            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
+        }
+        r = await self.client.post(f"{self.base_url}/v1/chat/completions", json=payload)
+        r.raise_for_status()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
+        parsed = parse_thinking_response(raw)
+        # Return just the conclusion text (thinking block stripped)
+        return parsed.get("conclusion", raw)
 
     async def close(self):
         await self.client.aclose()
