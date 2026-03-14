@@ -6,11 +6,13 @@
         alpha: 'var(--mind-alpha)',
         beta: 'var(--mind-beta)',
         gamma: 'var(--mind-gamma)',
+        brain: 'var(--brain)',
     };
     const labels: Record<string, string> = {
         alpha: '\u03B1',
         beta: '\u03B2',
         gamma: '\u03B3',
+        brain: '\u2B22',
     };
 </script>
 

@@ -19,7 +19,7 @@ llama_server_minds:
 models:
   brain:
     slot: 0
-    enable_thinking: false
+    enable_thinking: true
     temperature: 0.4
     top_p: 0.9
     top_k: 20

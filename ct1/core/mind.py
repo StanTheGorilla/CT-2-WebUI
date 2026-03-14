@@ -127,5 +127,38 @@ class Mind:
         # Return just the conclusion text (thinking block stripped)
         return parsed.get("conclusion", raw)
 
+    async def vote_on_stopping(self, brain_assessment: str,
+                               recent_dialogue: list[dict]) -> str:
+        """Respond to brain's assessment — agree or disagree with stopping."""
+        recent_text = "\n".join(
+            f"{t['mind']}: {t['text']}" for t in recent_dialogue
+        )
+        user_content = (
+            f"Recent discussion:\n{recent_text}\n\n"
+            f"Brain says: {brain_assessment}\n\n"
+            f"{self.name}, do you agree we should stop? "
+            f"Reply in 1 sentence: 'I agree because...' or 'I disagree because...'"
+        )
+        messages = [
+            {"role": "system", "content": self._build_system_prompt()},
+            {"role": "user", "content": user_content},
+        ]
+        payload = {
+            "model": "qwen",
+            "messages": messages,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "presence_penalty": self.presence_penalty,
+            "max_tokens": 100,
+            "stream": False,
+            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
+        }
+        r = await self.client.post(f"{self.base_url}/v1/chat/completions", json=payload)
+        r.raise_for_status()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
+        parsed = parse_thinking_response(raw)
+        return parsed.get("conclusion", raw)
+
     async def close(self):
         await self.client.aclose()

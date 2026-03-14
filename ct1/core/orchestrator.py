@@ -29,6 +29,7 @@ class Orchestrator:
             top_k=mc["brain"]["top_k"],
             presence_penalty=mc["brain"]["presence_penalty"],
             max_tokens=mc["brain"]["max_tokens"],
+            enable_thinking=mc["brain"].get("enable_thinking", True),
         )
 
         def _make_mind(name, key):
@@ -114,22 +115,36 @@ class Orchestrator:
 
             turn_count += 1
 
-            # Only check convergence after min_turns, at the end of a full 3-mind cycle
+            # After min_turns, at end of each 3-mind cycle: brain moderates
             if turn_count >= self.min_turns and turn_count % 3 == 0:
-                convergence = await self.brain.check_convergence(
+                # Brain reviews the conversation and speaks
+                assessment = await self.brain.assess_deliberation(
                     brief, dialogue, conversation=conversation
                 )
-                if convergence.get("ready_to_execute", False) or current_pass >= self.max_rounds:
-                    intent["agreed_approach"] = convergence.get("agreed_approach", "")
-                    rounds_used = current_pass
-                    emit("converging",
-                         confidence=1.0,
-                         strongest=convergence.get("agreed_approach", ""))
-                    break
+                dialogue.append({"mind": "brain", "round": current_pass,
+                                 "text": assessment["text"]})
+                emit("mind_turn", name="brain", text=assessment["text"])
 
-                emit("tension",
-                     description=convergence.get("reason", ""),
-                     followup="")
+                if assessment["should_stop"] or current_pass >= self.max_rounds:
+                    # Ask each mind if they agree we should stop
+                    agrees = 0
+                    for mn in mind_cycle:
+                        vote = await self.minds[mn].vote_on_stopping(
+                            assessment["text"], dialogue[-4:])
+                        dialogue.append({"mind": mn, "round": current_pass,
+                                         "text": vote})
+                        emit("mind_turn", name=mn, text=vote)
+                        if "agree" in vote.lower() or "yes" in vote.lower()[:20]:
+                            agrees += 1
+
+                    if agrees >= 2 or current_pass >= self.max_rounds:
+                        intent["agreed_approach"] = assessment.get("summary", "")
+                        rounds_used = current_pass
+                        emit("converging",
+                             confidence=1.0,
+                             strongest=assessment.get("summary", ""))
+                        break
+                    # Minds disagreed — continue deliberation
 
         # ── Phase 3: Execution ────────────────────────────────────────────────
         emit("synthesizing")

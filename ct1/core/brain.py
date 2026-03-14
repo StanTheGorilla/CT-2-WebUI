@@ -1,6 +1,7 @@
 import httpx
 import json
 from pathlib import Path
+from ct1.core.response_parser import parse_thinking_response
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 BRAIN_SYSTEM_TEMPLATE = (_PROMPTS_DIR / "brain_system.txt").read_text(encoding="utf-8")
@@ -8,13 +9,15 @@ BRAIN_SYSTEM_TEMPLATE = (_PROMPTS_DIR / "brain_system.txt").read_text(encoding="
 class Brain:
     def __init__(self, base_url: str, temperature: float = 0.4,
                  top_p: float = 0.9, top_k: int = 20,
-                 presence_penalty: float = 1.5, max_tokens: int = 10000):
+                 presence_penalty: float = 1.5, max_tokens: int = 10000,
+                 enable_thinking: bool = True):
         self.base_url = base_url
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
         self.presence_penalty = presence_penalty
         self.max_tokens = max_tokens
+        self.enable_thinking = enable_thinking
         self.client = httpx.AsyncClient(timeout=600.0)
         self.lessons: list[str] = []
         self.last_session: str = ""
@@ -46,7 +49,7 @@ class Brain:
             "presence_penalty": presence_penalty if presence_penalty is not None else self.presence_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": False,
-            "chat_template_kwargs": {"enable_thinking": False},
+            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
         }
         r = await self.client.post(f"{self.base_url}/v1/chat/completions", json=payload)
         if not r.is_success:
@@ -54,7 +57,11 @@ class Brain:
                 f"{r.status_code} from {r.url}: {r.text[:500]}",
                 request=r.request, response=r,
             )
-        return r.json()["choices"][0]["message"]["content"].strip()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
+        if self.enable_thinking:
+            parsed = parse_thinking_response(raw)
+            return parsed.get("conclusion", raw)
+        return raw
 
     async def extract_intent(self, goal: str, conversation: list[dict] = None) -> dict:
         """Classify what the task requires and what must be produced.
@@ -128,48 +135,52 @@ Use "analysis" for evaluation, comparison, review tasks."""
             f"{execution_note}"
         )
 
-    async def check_convergence(self, brief: str, dialogue: list[dict],
-                                 conversation: list[dict] = None) -> dict:
-        """Ask brain if the dialogue has produced a solid enough plan to execute."""
+    async def assess_deliberation(self, brief: str, dialogue: list[dict],
+                                   conversation: list[dict] = None) -> dict:
+        """Brain actively reviews the deliberation and speaks into the conversation.
+
+        Returns {text: visible assessment, should_stop: bool, summary: str}.
+        The 'text' field goes into the dialogue so minds can see it.
+        """
         try:
-            formatted = "\n\n".join(
-                f"{t['mind']} (round {t['round']}): {t['text']}"
-                for t in dialogue
-            ) if dialogue else "(no dialogue yet)"
-            prompt = f"""You are reviewing a deliberation between your inner voices.
+            # Only show recent dialogue to avoid overwhelming the model
+            recent = dialogue[-6:] if len(dialogue) > 6 else dialogue
+            formatted = "\n".join(
+                f"{t['mind']}: {t['text']}"
+                for t in recent
+            )
+            prompt = f"""You are the brain moderating a discussion between alpha, beta, and gamma.
 
-Brief given to them:
-{brief}
+Topic: {brief}
 
-Their dialogue:
+Recent discussion:
 {formatted}
 
-Judge whether the deliberation has produced a SPECIFIC, ACTIONABLE plan.
-Say ready_to_execute=true ONLY if ALL of these are met:
-- The voices have debated multiple aspects (not just one quick agreement)
-- There is a clear, concrete approach — not vague handwaving
-- Key trade-offs have been considered
-- For code/artifact tasks: the structure, components, and approach are decided
+Review the conversation. In 2-4 sentences:
+1. Summarize what was decided so far
+2. Call out anything that sounds wrong or made up (hallucinations)
+3. Say whether we should STOP discussing and start building, or CONTINUE because something important is missing
 
-If the conversation is still shallow, still disagreeing on fundamentals, or hasn't explored enough — say false.
-
-Respond as JSON only:
-{{
-  "ready_to_execute": true,
-  "reason": "brief reason",
-  "agreed_approach": "specific summary of the decided plan"
-}}"""
+End your response with exactly one of these lines:
+VERDICT: STOP - [one-line summary of the agreed approach]
+VERDICT: CONTINUE - [what still needs to be discussed]"""
             messages = [
                 {"role": "system", "content": self._system_prompt()},
                 {"role": "user", "content": prompt},
             ]
-            raw = await self._call(messages, max_tokens=256, conversation=conversation)
-            result = json.loads(raw[raw.find("{"):raw.rfind("}")+1])
-            if "ready_to_execute" not in result:
-                result["ready_to_execute"] = False
-            return result
+            raw = await self._call(messages, max_tokens=300, conversation=conversation)
+
+            should_stop = "VERDICT: STOP" in raw
+            summary = ""
+            if "VERDICT: STOP" in raw:
+                summary = raw.split("VERDICT: STOP")[-1].strip().lstrip("- ")
+            elif "VERDICT: CONTINUE" in raw:
+                summary = raw.split("VERDICT: CONTINUE")[-1].strip().lstrip("- ")
+
+            return {"text": raw, "should_stop": should_stop, "summary": summary}
         except Exception:
-            return {"ready_to_execute": False, "reason": "parse error", "agreed_approach": ""}
+            return {"text": "I can't assess the discussion right now. Let's continue.",
+                    "should_stop": False, "summary": ""}
 
     async def synthesize(self, goal: str, intent: dict, dialogue: list[dict],
                          conversation: list[dict] = None) -> str:
