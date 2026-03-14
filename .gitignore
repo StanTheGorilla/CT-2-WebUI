@@ -19,3 +19,4 @@ ct1/data/benchmarks/
 
 # llama.cpp server logs
 *.log
+.worktrees/
