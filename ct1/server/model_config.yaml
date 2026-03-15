@@ -24,7 +24,7 @@ models:
     top_p: 0.9
     top_k: 20
     presence_penalty: 1.5
-    max_tokens: 100000
+    max_tokens: 30000
 
   mind_alpha:
     slot: 1

@@ -35,7 +35,10 @@ class Brain:
 
     async def _call(self, messages: list[dict], max_tokens: int = None,
                     presence_penalty: float = None,
-                    conversation: list[dict] = None) -> str:
+                    conversation: list[dict] = None,
+                    thinking: bool = None) -> str:
+        """Call the LLM. thinking=None uses self.enable_thinking, or override per call."""
+        use_thinking = thinking if thinking is not None else self.enable_thinking
         if conversation:
             system = messages[:1]
             rest = messages[1:]
@@ -49,7 +52,7 @@ class Brain:
             "presence_penalty": presence_penalty if presence_penalty is not None else self.presence_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": False,
-            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
+            "chat_template_kwargs": {"enable_thinking": use_thinking},
         }
         r = await self.client.post(f"{self.base_url}/v1/chat/completions", json=payload)
         if not r.is_success:
@@ -58,7 +61,7 @@ class Brain:
                 request=r.request, response=r,
             )
         raw = r.json()["choices"][0]["message"]["content"].strip()
-        if self.enable_thinking:
+        if use_thinking:
             parsed = parse_thinking_response(raw)
             self._last_thinking = parsed.get("reasoning", "")
             return parsed.get("conclusion", raw)
@@ -90,7 +93,7 @@ Use "analysis" for evaluation, comparison, review tasks."""
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ]
-        raw = await self._call(messages, max_tokens=256, conversation=conversation)
+        raw = await self._call(messages, max_tokens=256, conversation=conversation, thinking=False)
         try:
             start = raw.find("{")
             end = raw.rfind("}") + 1
@@ -169,7 +172,7 @@ VERDICT: CONTINUE - [what still needs to be discussed]"""
                 {"role": "system", "content": self._system_prompt()},
                 {"role": "user", "content": prompt},
             ]
-            raw = await self._call(messages, max_tokens=300, conversation=conversation)
+            raw = await self._call(messages, max_tokens=300, conversation=conversation, thinking=False)
 
             should_stop = "VERDICT: STOP" in raw
             summary = ""
@@ -249,7 +252,7 @@ Do not mention inner voices or deliberation. Just answer."""
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": prompt}
         ]
-        raw = await self._call(messages, max_tokens=512, conversation=conversation)
+        raw = await self._call(messages, max_tokens=512, conversation=conversation, thinking=False)
         try:
             start = raw.find("{")
             end = raw.rfind("}") + 1
@@ -288,7 +291,7 @@ Summary:"""
             {"role": "user", "content": prompt},
         ]
         try:
-            return await self._call(messages, max_tokens=128)
+            return await self._call(messages, max_tokens=128, thinking=False)
         except Exception:
             return None
 
