@@ -35,7 +35,7 @@
 >
     <div
         class="pane left"
-        style={showRight ? `width: ${ratio * 100}%` : 'width: 100%'}
+        style={showRight ? `width: ${ratio * 100}%` : 'width: 100%; transition: none'}
     >
         {@render left()}
     </div>

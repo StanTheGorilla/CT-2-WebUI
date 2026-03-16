@@ -57,10 +57,11 @@
                 onclick={() => activeTab = 'code'}
             >Code</button>
         </div>
-        <button class="close" onclick={onClose} aria-label="Close preview">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <button class="close" onclick={onClose} aria-label="Close preview" title="Close preview">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
             </svg>
+            <span>Close</span>
         </button>
     </div>
 
@@ -136,21 +137,25 @@
         box-shadow: var(--shadow-xs);
     }
     .close {
-        width: 30px;
-        height: 30px;
-        border: none;
-        border-radius: var(--radius-sm);
-        background: transparent;
-        color: var(--text-muted);
-        cursor: pointer;
         display: flex;
         align-items: center;
-        justify-content: center;
+        gap: 6px;
+        height: 30px;
+        padding: 0 12px 0 10px;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+        border-radius: var(--radius-pill);
+        background: rgba(0, 0, 0, 0.04);
+        color: var(--text-secondary);
+        font-family: var(--font-body);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
         transition: all var(--transition);
     }
     .close:hover {
-        background: rgba(0, 0, 0, 0.04);
+        background: rgba(0, 0, 0, 0.08);
         color: var(--text);
+        border-color: rgba(0, 0, 0, 0.12);
     }
     .content { flex: 1; overflow: hidden; }
     .preview-frame {

@@ -20,8 +20,11 @@
     let previewCode = $derived($chat.response || $chat.streamingText || '');
     let codeExpanded = $state(false);
 
-    // Don't auto-open preview — user opens it from the code attachment
+    // Auto-open preview when code generation finishes; reset on new message
     $effect(() => {
+        if ($chat.phase === 'done' && isCode && $chat.response) {
+            showPreview = true;
+        }
         if ($chat.phase === 'routing') {
             showPreview = false;
             codeExpanded = false;
@@ -166,32 +169,34 @@
                 {#if $chat.response}
                     <div class="ai-bubble response-bubble">
                         {#if isCode}
-                            <p class="response-note">Here's the generated code:</p>
-                        {:else}
-                            {@html render($chat.response)}
-                        {/if}
-
-                        <!-- Code attachment for code routes -->
-                        {#if isCode}
+                            <!-- Code chip row: expand code + toggle preview -->
                             <div class="code-attachment">
                                 <button class="attachment-header" onclick={() => codeExpanded = !codeExpanded}>
-                                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                                        <path d="M4.5 1.5L8.5 7L4.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"
-                                            style="transform-origin: center; transform: rotate({codeExpanded ? 90 : 0}deg); transition: transform 200ms ease"/>
+                                    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="flex-shrink:0">
+                                        <path d="M4 2L9 6.5L4 11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+                                            style="transform-origin:center;transform:rotate({codeExpanded?90:0}deg);transition:transform 200ms ease"/>
                                     </svg>
-                                    <span class="attachment-label">Code</span>
+                                    <span class="attachment-label">
+                                        {$chat.plan?.output_type === 'python_script' ? 'Python' :
+                                         $chat.plan?.output_type === 'javascript' ? 'JavaScript' : 'HTML'}
+                                    </span>
                                     <span class="attachment-size">{$chat.response.length} chars</span>
                                 </button>
                                 {#if codeExpanded}
                                     <pre class="attachment-code">{$chat.response}</pre>
                                 {/if}
-                                <button class="preview-btn" onclick={() => showPreview = !showPreview}>
-                                    {showPreview ? 'Hide preview' : 'Open live preview'}
-                                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                                        <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                                    </svg>
-                                </button>
+                                {#if $chat.plan?.output_type !== 'python_script'}
+                                    <button class="preview-btn" onclick={() => showPreview = !showPreview}>
+                                        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+                                            <rect x="1.5" y="2.5" width="10" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+                                            <path d="M5 5.5l2.5 1.5L5 8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                                        </svg>
+                                        {showPreview ? 'Hide preview' : 'Open preview'}
+                                    </button>
+                                {/if}
                             </div>
+                        {:else}
+                            {@html render($chat.response)}
                         {/if}
                     </div>
                 {/if}
