@@ -7,57 +7,74 @@
     let scoreColor = $derived(score >= 0.7 ? 'var(--success)' : score >= 0.4 ? 'var(--warning)' : 'var(--error)');
 </script>
 
-<button class="bar" onclick={() => expanded = !expanded}>
-    <div class="score-group">
-        <span class="score-dot" style="background: {scoreColor}; box-shadow: 0 0 6px {scoreColor}"></span>
-        <span class="score-text">{(score * 100).toFixed(0)}%</span>
-    </div>
-    <span class="expand-icon">{expanded ? '\u2212' : '+'}</span>
-</button>
+<div class="island">
+    <button class="bar" onclick={() => expanded = !expanded}>
+        <div class="score-group">
+            <span class="score-dot" style="background: {scoreColor}; box-shadow: 0 0 6px {scoreColor}40"></span>
+            <span class="score-text">{(score * 100).toFixed(0)}%</span>
+            <span class="bar-label">Reflection</span>
+        </div>
+        <span class="chevron" class:open={expanded}>›</span>
+    </button>
 
-{#if expanded && reflection.lesson}
-    <div class="detail">
-        <span class="detail-label">Lesson</span>
-        <p>{reflection.lesson}</p>
-    </div>
-{/if}
+    {#if expanded && reflection.lesson}
+        <div class="detail">
+            <span class="detail-label">Lesson</span>
+            <p>{reflection.lesson}</p>
+        </div>
+    {/if}
+</div>
 
 <style>
-    .bar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        width: 100%;
+    .island {
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
         border-radius: var(--radius);
+        overflow: hidden;
+        box-shadow: var(--bubble-glow);
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+    }
+    .bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        background: transparent;
         padding: 10px 18px;
         cursor: pointer;
         transition: background var(--transition);
         font-family: var(--font-body);
-        box-shadow: var(--bubble-glow);
+        border: none;
     }
-    .bar:hover { background: var(--surface-hover); }
+    .bar:hover { background: rgba(0,0,0,0.02); }
     .score-group { display: flex; align-items: center; gap: 10px; }
-    .score-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .score-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
     .score-text {
         color: var(--text-secondary);
         font-size: 14px;
         font-weight: 600;
         font-variant-numeric: tabular-nums;
     }
-    .expand-icon { color: var(--text-muted); font-size: 18px; font-weight: 300; }
+    .bar-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .chevron {
+        color: var(--text-muted);
+        font-size: 16px;
+        font-weight: 300;
+        transition: transform var(--transition);
+        display: inline-block;
+    }
+    .chevron.open { transform: rotate(90deg); }
     .detail {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
-        border-top: none;
-        border-radius: 0 0 var(--radius) var(--radius);
-        padding: 14px 18px;
-        margin-top: -14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.35);
+        padding: 12px 18px 14px;
         font-size: 14px;
         color: var(--text-secondary);
         line-height: 1.6;
