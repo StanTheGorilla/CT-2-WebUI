@@ -6,7 +6,6 @@
     import SpecialistCard from '$lib/components/SpecialistCard.svelte';
     import ReflectionBar from '$lib/components/ReflectionBar.svelte';
     import PlanCard from '$lib/components/PlanCard.svelte';
-    import SplitPane from '$lib/components/SplitPane.svelte';
     import PreviewPanel from '$lib/components/PreviewPanel.svelte';
 
     onMount(() => connect());
@@ -69,8 +68,7 @@
     };
 </script>
 
-<SplitPane showRight={showPreview}>
-    {#snippet left()}
+<div class="page" class:preview-open={showPreview}>
     <div class="chat-panel">
         <div class="messages" bind:this={messagesEl}>
             <div class="messages-inner">
@@ -231,23 +229,45 @@
 
         <ChatInput />
     </div>
-    {/snippet}
 
-    {#snippet right()}
     {#if showPreview}
-        <PreviewPanel
-            code={previewCode}
-            onClose={() => { showPreview = false; }}
-        />
+        <div class="preview-panel">
+            <PreviewPanel
+                code={previewCode}
+                onClose={() => { showPreview = false; }}
+            />
+        </div>
     {/if}
-    {/snippet}
-</SplitPane>
+</div>
 
 <style>
+    /* ---- Page layout: chat always full width, preview is a fixed overlay ---- */
+    .page {
+        height: 100%;
+        position: relative;
+    }
+
     .chat-panel {
         display: flex;
         flex-direction: column;
         height: 100%;
+        transition: padding-right 400ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .page.preview-open .chat-panel {
+        padding-right: clamp(320px, 44vw, 680px);
+    }
+
+    /* Fixed overlay preview panel — no divider line ever */
+    .preview-panel {
+        position: fixed;
+        top: 56px; /* below topbar */
+        right: 0;
+        bottom: 0;
+        width: clamp(320px, 44vw, 680px);
+        z-index: 50;
+        border-left: 1px solid rgba(0, 0, 0, 0.06);
+        box-shadow: -8px 0 32px rgba(0, 0, 0, 0.06);
+        animation: slideInRight 350ms cubic-bezier(0.4, 0, 0.2, 1) both;
     }
 
     .messages {
