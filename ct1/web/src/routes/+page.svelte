@@ -19,6 +19,21 @@
     let previewCode = $derived($chat.response || $chat.streamingText || '');
     let codeExpanded = $state(false);
 
+    // Preview panel resize
+    let previewWidth = $state(Math.min(Math.round(window.innerWidth * 0.44), 700));
+    let resizing = $state(false);
+
+    function onResizeStart(e: PointerEvent) {
+        resizing = true;
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    }
+    function onResizeMove(e: PointerEvent) {
+        if (!resizing) return;
+        const newW = window.innerWidth - e.clientX;
+        previewWidth = Math.max(280, Math.min(newW, window.innerWidth - 320));
+    }
+    function onResizeEnd() { resizing = false; }
+
     // Auto-open preview when code generation finishes; reset on new message
     $effect(() => {
         if ($chat.phase === 'done' && isCode && $chat.response) {
@@ -236,7 +251,15 @@
     </div>
 
     {#if showPreview}
-        <div class="preview-panel">
+        <div class="preview-panel" style="width: {previewWidth}px" class:resizing>
+            <div
+                class="resize-handle"
+                role="separator"
+                aria-label="Resize preview"
+                onpointerdown={onResizeStart}
+                onpointermove={onResizeMove}
+                onpointerup={onResizeEnd}
+            ></div>
             <PreviewPanel
                 code={previewCode}
                 onClose={() => { showPreview = false; }}
@@ -265,10 +288,46 @@
         top: 56px;
         right: 0;
         bottom: 0;
-        width: min(48vw, 700px);
         z-index: 50;
         box-shadow: -12px 0 48px rgba(0, 0, 0, 0.08);
         animation: slideInRight 350ms cubic-bezier(0.4, 0, 0.2, 1) both;
+    }
+    .preview-panel.resizing {
+        animation: none;
+        user-select: none;
+    }
+    .preview-panel.resizing :global(*) {
+        pointer-events: none;
+    }
+
+    /* Drag handle on left edge */
+    .resize-handle {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 6px;
+        cursor: col-resize;
+        z-index: 10;
+        background: transparent;
+        transition: background var(--transition);
+    }
+    .resize-handle::after {
+        content: '';
+        position: absolute;
+        left: 2px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 2px;
+        height: 32px;
+        border-radius: 1px;
+        background: rgba(0, 0, 0, 0.12);
+        transition: background var(--transition), height var(--transition);
+    }
+    .resize-handle:hover::after,
+    .resizing .resize-handle::after {
+        background: rgba(0, 0, 0, 0.28);
+        height: 48px;
     }
 
     .messages {
