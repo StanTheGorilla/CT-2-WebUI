@@ -257,7 +257,7 @@
         <ChatInput />
     </div>
 
-    {#if showPreview}
+    {#if showPreview && previewCode}
         <div class="preview-panel" style="width: {previewWidth}px" class:resizing>
             <div
                 class="resize-handle"
