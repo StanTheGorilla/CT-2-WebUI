@@ -68,7 +68,7 @@
     };
 </script>
 
-<div class="page" class:preview-open={showPreview}>
+<div class="page">
     <div class="chat-panel">
         <div class="messages" bind:this={messagesEl}>
             <div class="messages-inner">
@@ -246,7 +246,7 @@
 </div>
 
 <style>
-    /* ---- Page layout: chat always full width, preview is a fixed overlay ---- */
+    /* ---- Page layout ---- */
     .page {
         height: 100%;
         position: relative;
@@ -256,22 +256,18 @@
         display: flex;
         flex-direction: column;
         height: 100%;
-        transition: padding-right 400ms cubic-bezier(0.4, 0, 0.2, 1);
-    }
-    .page.preview-open .chat-panel {
-        padding-right: clamp(320px, 44vw, 680px);
+        /* always full-width — preview floats on top, never shrinks chat */
     }
 
-    /* Fixed overlay preview panel — no divider line ever */
+    /* Preview panel: pure floating overlay, no border line */
     .preview-panel {
         position: fixed;
-        top: 56px; /* below topbar */
+        top: 56px;
         right: 0;
         bottom: 0;
-        width: clamp(320px, 44vw, 680px);
+        width: min(48vw, 700px);
         z-index: 50;
-        border-left: 1px solid rgba(0, 0, 0, 0.06);
-        box-shadow: -8px 0 32px rgba(0, 0, 0, 0.06);
+        box-shadow: -12px 0 48px rgba(0, 0, 0, 0.08);
         animation: slideInRight 350ms cubic-bezier(0.4, 0, 0.2, 1) both;
     }
 
