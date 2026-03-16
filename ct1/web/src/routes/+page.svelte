@@ -152,6 +152,11 @@
                             <span class="stream-meta">
                                 {$chat.streamingText ? `${$chat.streamingText.length} chars` : '...'}
                             </span>
+                            {#if isCode && $chat.streamingText.length > 200}
+                                <button class="stream-preview-btn" onclick={() => showPreview = !showPreview}>
+                                    {showPreview ? 'Hide' : '⬡ Preview'}
+                                </button>
+                            {/if}
                         </div>
                         {#if !isCode && $chat.streamingText}
                             <pre class="stream-body">{$chat.streamingText}</pre>
@@ -494,10 +499,28 @@
         letter-spacing: 0.05em;
     }
     .stream-meta {
-        margin-left: auto;
         font-size: 11px;
         font-family: var(--font-mono);
         color: var(--text-muted);
+        margin-left: auto;
+    }
+    .stream-preview-btn {
+        margin-left: 8px;
+        padding: 3px 10px;
+        background: rgba(232, 133, 12, 0.1);
+        border: 1px solid rgba(232, 133, 12, 0.25);
+        border-radius: var(--radius-pill);
+        font-family: var(--font-body);
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--brain);
+        cursor: pointer;
+        transition: all var(--transition);
+        flex-shrink: 0;
+    }
+    .stream-preview-btn:hover {
+        background: rgba(232, 133, 12, 0.18);
+        border-color: rgba(232, 133, 12, 0.4);
     }
     .stream-body {
         font-family: var(--font-mono);
