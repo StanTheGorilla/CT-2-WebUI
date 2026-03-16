@@ -108,13 +108,25 @@
                     <PlanCard plan={$chat.plan} />
                 {/if}
 
-                {#if $chat.phase === 'consulting' && $chat.specialistStream}
-                    <div class="stream-card specialist">
-                        <div class="stream-bar">
-                            <span class="stream-indicator specialist"></span>
-                            <span class="stream-title">Specialist</span>
-                        </div>
-                        <pre class="stream-body">{$chat.specialistStream}</pre>
+                <!-- Phase progress cards — always visible during active phases -->
+                {#if $chat.phase === 'routing'}
+                    <div class="working-card">
+                        <span class="dot-pulse"></span>
+                        <span class="working-label">Classifying request...</span>
+                    </div>
+                {/if}
+
+                {#if $chat.phase === 'planning'}
+                    <div class="working-card">
+                        <span class="dot-pulse"></span>
+                        <span class="working-label">Building task plan...</span>
+                    </div>
+                {/if}
+
+                {#if $chat.phase === 'consulting'}
+                    <div class="working-card specialist-wc">
+                        <span class="dot-pulse specialist-dot"></span>
+                        <span class="working-label">Consulting design specialist...</span>
                     </div>
                 {/if}
 
@@ -122,7 +134,8 @@
                     <SpecialistCard data={$chat.specialistData} />
                 {/if}
 
-                {#if ($chat.phase === 'generating' || $chat.phase === 'fixing') && ($chat.streamingThinking || $chat.streamingText)}
+                <!-- Generating: show card immediately, fill in as tokens arrive -->
+                {#if $chat.phase === 'generating' || $chat.phase === 'fixing'}
                     {#if $chat.streamingThinking}
                         <div class="stream-card muted">
                             <div class="stream-bar">
@@ -132,18 +145,27 @@
                         </div>
                     {/if}
 
-                    {#if $chat.streamingText}
-                        <div class="stream-card brain">
-                            <div class="stream-bar">
-                                <span class="stream-indicator brain"></span>
-                                <span class="stream-title">{isCode ? 'Generating code' : 'Response'}</span>
-                                <span class="stream-meta">{$chat.streamingText.length} chars</span>
-                            </div>
-                            {#if !isCode}
-                                <pre class="stream-body">{$chat.streamingText}</pre>
-                            {/if}
+                    <div class="stream-card brain">
+                        <div class="stream-bar">
+                            <span class="stream-indicator brain"></span>
+                            <span class="stream-title">
+                                {$chat.phase === 'fixing' ? 'Fixing issues' : isCode ? 'Generating code' : 'Responding'}
+                            </span>
+                            <span class="stream-meta">
+                                {$chat.streamingText ? `${$chat.streamingText.length} chars` : '...'}
+                            </span>
                         </div>
-                    {/if}
+                        {#if !isCode && $chat.streamingText}
+                            <pre class="stream-body">{$chat.streamingText}</pre>
+                        {/if}
+                    </div>
+                {/if}
+
+                {#if $chat.phase === 'validating'}
+                    <div class="working-card">
+                        <span class="dot-pulse"></span>
+                        <span class="working-label">Validating output...</span>
+                    </div>
                 {/if}
 
                 {#if $chat.validationIssues.length > 0}
@@ -369,6 +391,43 @@
         padding: 4px 16px;
         border-radius: var(--radius-pill);
         animation: springPop var(--spring-duration) var(--spring) both;
+    }
+
+    /* ---- Working/phase indicator cards ---- */
+    .working-card {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 18px;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        box-shadow: var(--bubble-glow);
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        align-self: flex-start;
+    }
+    .working-card.specialist-wc {
+        border-left: 3px solid var(--specialist);
+    }
+    .working-label {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-secondary);
+    }
+    .dot-pulse {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--brain);
+        box-shadow: 0 0 6px rgba(232, 133, 12, 0.4);
+        animation: pulse 1.4s ease-in-out infinite;
+        flex-shrink: 0;
+    }
+    .dot-pulse.specialist-dot {
+        background: var(--specialist);
+        box-shadow: 0 0 6px rgba(155, 109, 255, 0.4);
     }
 
     /* ---- Stream cards ---- */
