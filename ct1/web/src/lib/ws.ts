@@ -4,6 +4,7 @@ export class WS {
     private socket: WebSocket | null = null;
     private handler: EventHandler;
     private url: string;
+    onOpen: (() => void) | null = null;
 
     constructor(url: string, handler: EventHandler) {
         this.url = url;
@@ -12,6 +13,9 @@ export class WS {
 
     connect() {
         this.socket = new WebSocket(this.url);
+        this.socket.onopen = () => {
+            this.onOpen?.();
+        };
         this.socket.onmessage = (e) => {
             try {
                 const data = JSON.parse(e.data);

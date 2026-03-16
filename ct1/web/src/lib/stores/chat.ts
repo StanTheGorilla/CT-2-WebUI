@@ -160,10 +160,13 @@ function handleEvent(data: Record<string, any>) {
     });
 }
 
-export function connect() {
+type ConnectCallback = () => void;
+
+export function connect(onConnected?: ConnectCallback) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${protocol}//${window.location.host}/ws/think`;
     ws = new WS(url, handleEvent);
+    if (onConnected) ws.onOpen = onConnected;
     ws.connect();
 }
 

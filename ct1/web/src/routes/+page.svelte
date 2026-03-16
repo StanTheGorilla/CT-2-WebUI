@@ -8,7 +8,7 @@
     import PlanCard from '$lib/components/PlanCard.svelte';
     import PreviewPanel from '$lib/components/PreviewPanel.svelte';
 
-    onMount(() => connect());
+    onMount(() => connect(() => { showPreview = false; didGenerate = false; }));
     onDestroy(() => disconnect());
 
     let isCode = $derived(
