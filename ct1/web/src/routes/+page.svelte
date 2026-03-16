@@ -34,14 +34,21 @@
     }
     function onResizeEnd() { resizing = false; }
 
-    // Auto-open preview when code generation finishes; reset on new message
+    // Track whether a generation happened in THIS session (not a stale store from SPA nav)
+    let didGenerate = $state(false);
+
     $effect(() => {
-        if ($chat.phase === 'done' && isCode && $chat.response) {
+        if ($chat.phase === 'generating' || $chat.phase === 'fixing') {
+            didGenerate = true;
+        }
+        if ($chat.phase === 'done' && isCode && $chat.response && didGenerate) {
             showPreview = true;
+            didGenerate = false;
         }
         if ($chat.phase === 'routing') {
             showPreview = false;
             codeExpanded = false;
+            didGenerate = false;
         }
     });
 
@@ -282,14 +289,13 @@
         /* always full-width — preview floats on top, never shrinks chat */
     }
 
-    /* Preview panel: pure floating overlay, no border line */
+    /* Preview panel: pure floating overlay, zero shadow bleed */
     .preview-panel {
         position: fixed;
         top: 56px;
         right: 0;
         bottom: 0;
         z-index: 50;
-        box-shadow: -12px 0 48px rgba(0, 0, 0, 0.08);
         animation: slideInRight 350ms cubic-bezier(0.4, 0, 0.2, 1) both;
     }
     .preview-panel.resizing {
