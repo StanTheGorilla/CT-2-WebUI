@@ -18,8 +18,29 @@
 </div>
 
 <style>
-    .stats { display: flex; gap: 32px; padding: 16px 20px; background: var(--surface); border-radius: var(--radius); }
+    .stats {
+        display: flex;
+        gap: 32px;
+        padding: 18px 24px;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        box-shadow: var(--bubble-glow);
+    }
     .stat { display: flex; flex-direction: column; }
-    .value { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
-    .label { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
+    .value {
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        color: var(--text);
+    }
+    .label {
+        font-size: 11px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 500;
+    }
 </style>

@@ -28,62 +28,127 @@
     }
 </script>
 
-<div class="chat-input">
-    <textarea
-        bind:this={textarea}
-        bind:value={input}
-        onkeydown={onKeydown}
-        oninput={autoGrow}
-        placeholder="Ask CT-1 anything... (Ctrl+Enter to send)"
-        rows="1"
-        {disabled}
-    ></textarea>
-    <button onclick={submit} {disabled}>Send</button>
+<div class="input-dock">
+    <div class="island">
+        <textarea
+            bind:this={textarea}
+            bind:value={input}
+            onkeydown={onKeydown}
+            oninput={autoGrow}
+            placeholder="Ask CT-2 anything..."
+            rows="1"
+            {disabled}
+        ></textarea>
+        <div class="island-actions">
+            <span class="hint">Ctrl+Enter</span>
+            <button class="send" onclick={submit} {disabled} aria-label="Send message">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                    <path d="M3.5 9h11M10 4.5L14.5 9 10 13.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+        </div>
+    </div>
 </div>
 
 <style>
-    .chat-input {
-        display: flex;
-        gap: 12px;
-        align-items: flex-end;
-        padding: 16px 0;
-        border-top: 1px solid var(--border);
+    .input-dock {
+        padding: 8px 32px 28px;
+        flex-shrink: 0;
+        position: relative;
+        z-index: 2;
     }
+
+    .island {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 720px;
+        margin: 0 auto;
+        /* Crisp, solid white — the clear focal point */
+        background: rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(48px) saturate(1.5);
+        -webkit-backdrop-filter: blur(48px) saturate(1.5);
+        border: 1px solid rgba(255, 255, 255, 0.9);
+        border-radius: var(--radius-lg);
+        padding: 10px 12px 10px 22px;
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.03),
+            0 2px 4px rgba(0, 0, 0, 0.03),
+            0 8px 40px rgba(0, 0, 0, 0.06),
+            inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        transition: box-shadow var(--transition-slow), border-color var(--transition);
+    }
+    .island:focus-within {
+        border-color: rgba(255, 255, 255, 1);
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.04),
+            0 4px 8px rgba(0, 0, 0, 0.04),
+            0 16px 56px rgba(0, 0, 0, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 1);
+    }
+
     textarea {
         flex: 1;
-        background: var(--surface);
+        background: none;
         color: var(--text);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: 12px 16px;
+        border: none;
         font-family: var(--font-body);
         font-size: 15px;
         line-height: 1.5;
         resize: none;
         outline: none;
-        transition: border-color var(--transition);
+        padding: 4px 0;
     }
-    textarea:focus {
-        border-color: var(--accent);
-        box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.15);
+    textarea::placeholder {
+        color: var(--text-muted);
+        font-weight: 400;
     }
     textarea:disabled {
-        opacity: 0.5;
+        opacity: 0.4;
         cursor: not-allowed;
     }
-    button {
-        background: var(--accent);
-        color: white;
-        border: none;
-        border-radius: 20px;
-        padding: 10px 24px;
-        font-family: var(--font-body);
-        font-size: 14px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: opacity var(--transition);
-        white-space: nowrap;
+
+    .island-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
     }
-    button:hover:not(:disabled) { opacity: 0.85; }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .hint {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-muted);
+        letter-spacing: 0.02em;
+        opacity: 0;
+        transition: opacity var(--transition);
+    }
+    .island:focus-within .hint {
+        opacity: 1;
+    }
+
+    .send {
+        width: 38px;
+        height: 38px;
+        border: none;
+        border-radius: 50%;
+        background: var(--text);
+        color: white;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: transform var(--spring-duration) var(--spring), opacity var(--transition);
+    }
+    .send:hover:not(:disabled) {
+        transform: scale(1.05);
+    }
+    .send:active:not(:disabled) {
+        transform: scale(0.93);
+    }
+    .send:disabled {
+        opacity: 0.15;
+        cursor: not-allowed;
+    }
 </style>

@@ -28,6 +28,12 @@
                 <div class="col-header">{mind}</div>
                 <div class="col-body">
                     {#each columns[mind] as turn}
+                        {#if turn.thinking}
+                            <details class="col-thinking">
+                                <summary>thinking</summary>
+                                <div>{@html render(turn.thinking)}</div>
+                            </details>
+                        {/if}
                         <div class="col-turn">{@html render(turn.text)}</div>
                     {/each}
                 </div>
@@ -68,6 +74,9 @@
     .col-turn { color: var(--text); font-size: 13px; line-height: 1.6; }
     .col-turn :global(p) { margin-bottom: 6px; }
     .col-turn :global(p:last-child) { margin-bottom: 0; }
+    .col-thinking { font-size: 12px; color: var(--text-muted); }
+    .col-thinking summary { cursor: pointer; font-style: italic; }
+    .col-thinking div { padding: 6px 0; font-style: italic; line-height: 1.5; }
 
     .brain-row {
         background: var(--surface);

@@ -36,7 +36,21 @@
 </div>
 
 <style>
-    .journal-page { max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
-    .entries { display: flex; flex-direction: column; gap: 4px; }
-    .loading, .empty { color: var(--text-secondary); text-align: center; padding: 40px; }
+    .journal-page {
+        max-width: 800px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 32px 32px 40px;
+        height: 100%;
+        overflow-y: auto;
+    }
+    .entries { display: flex; flex-direction: column; gap: 6px; }
+    .loading, .empty {
+        color: var(--text-muted);
+        text-align: center;
+        padding: 48px;
+        font-size: 14px;
+    }
 </style>

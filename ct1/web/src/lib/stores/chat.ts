@@ -6,48 +6,74 @@ export interface Turn {
     content: string;
 }
 
-export interface MindTurn {
-    name: string;
-    round: number;
-    text: string;
-}
-
-export interface Intent {
-    task_type: string;
-    what_to_produce: string;
-    requirements: string[];
-    complexity: string;
-}
-
 export interface Reflection {
     self_score: number;
     lesson: string;
-    rounds: number;
     [key: string]: any;
+}
+
+export interface SpecialistData {
+    palette?: Record<string, string>;
+    typography?: Record<string, string>;
+    sections?: string[];
+    rationale?: string;
+}
+
+export interface ReviewResult {
+    pass: boolean;
+    critical_issues: string[];
+    fix_instructions: string;
+}
+
+export interface PlanComponent {
+    id: number;
+    name: string;
+    description: string;
+}
+
+export interface Plan {
+    output_type: string;
+    components: PlanComponent[];
+    complexity: string;
 }
 
 interface ChatState {
     conversation: Turn[];
     events: Record<string, any>[];
-    dialogue: MindTurn[];
-    intent: Intent | null;
+    route: string;
+    plan: Plan | null;
+    specialistData: SpecialistData | null;
+    specialistStream: string;
+    review: ReviewResult | null;
     reflection: Reflection | null;
     response: string;
     thinking: string;
-    phase: 'idle' | 'framing' | 'deliberating' | 'synthesizing' | 'done';
-    currentRound: number;
+    draft: string;
+    draftThinking: string;
+    streamingText: string;
+    streamingThinking: string;
+    validationIssues: string[];
+    phase: 'idle' | 'routing' | 'planning' | 'consulting' | 'generating'
+         | 'validating' | 'fixing' | 'done';
 }
 
 const initial: ChatState = {
     conversation: [],
     events: [],
-    dialogue: [],
-    intent: null,
+    route: '',
+    plan: null,
+    specialistData: null,
+    specialistStream: '',
+    review: null,
     reflection: null,
     response: '',
     thinking: '',
+    draft: '',
+    draftThinking: '',
+    streamingText: '',
+    streamingThinking: '',
+    validationIssues: [],
     phase: 'idle',
-    currentRound: 0,
 };
 
 export const chat = writable<ChatState>({ ...initial });
@@ -59,45 +85,70 @@ function handleEvent(data: Record<string, any>) {
         s.events = [...s.events, data];
 
         switch (data.event) {
-            case 'framing':
-                s.phase = 'framing';
+            case 'routing':
+                s.phase = 'routing';
                 break;
-            case 'framed':
-                s.phase = 'deliberating';
-                s.intent = {
-                    task_type: data.task_type,
-                    what_to_produce: data.what_to_produce || data.text,
-                    requirements: data.requirements || [],
-                    complexity: data.complexity,
-                };
+            case 'routed':
+                s.route = data.route;
                 break;
-            case 'round_start':
-                s.currentRound = data.round_num;
+            case 'planned':
+                s.phase = 'planning';
+                s.plan = data.plan || null;
                 break;
-            case 'mind_turn':
-                s.dialogue = [...s.dialogue, {
-                    name: data.name,
-                    round: s.currentRound,
-                    text: data.text,
-                }];
+            case 'consulting':
+                s.phase = 'consulting';
+                s.specialistStream = '';
                 break;
-            case 'tension':
-                // Tension events are informational — shown in the deliberation panel
+            case 'specialist_token':
+                s.specialistStream += data.text;
                 break;
-            case 'converging':
-                // Converging — deliberation wrapping up
+            case 'consulted':
+                s.specialistData = data.data || null;
                 break;
-            case 'synthesizing':
-                s.phase = 'synthesizing';
+            case 'generating':
+                s.phase = 'generating';
+                s.streamingText = '';
+                s.streamingThinking = '';
+                break;
+            case 'token':
+                if (data.kind === 'thinking') {
+                    s.streamingThinking += data.text;
+                } else {
+                    s.streamingText += data.text;
+                }
+                break;
+            case 'draft':
+                s.draft = data.text;
+                s.draftThinking = data.thinking || '';
+                break;
+            case 'validating':
+                s.phase = 'validating';
+                s.validationIssues = data.issues || [];
+                s.review = data.review || null;
+                break;
+            case 'validated':
+                s.validationIssues = [];
+                s.review = data.review || null;
+                break;
+            case 'fixing':
+                s.phase = 'fixing';
+                s.streamingText = '';
+                s.streamingThinking = '';
                 break;
             case 'done':
                 s.phase = 'done';
-                s.response = data.response;
-                s.thinking = data.thinking || '';
+                // Use the done event's response, but fall back to
+                // accumulated streaming text so the user always sees output
+                s.response = data.response || s.streamingText || '';
+                s.thinking = data.thinking || s.streamingThinking || '';
+                if (!s.draft) s.draft = data.draft || '';
+                if (!s.draftThinking) s.draftThinking = data.draft_thinking || '';
+                if (!s.route) s.route = data.route || '';
+                if (!s.specialistData) s.specialistData = data.specialist_data || null;
                 s.reflection = data.reflection;
                 s.conversation = [
                     ...s.conversation,
-                    { role: 'assistant', content: data.response },
+                    { role: 'assistant', content: s.response },
                 ];
                 break;
             case 'error':
@@ -129,13 +180,20 @@ export function sendThink(goal: string) {
     chat.update((s) => {
         s.conversation = [...s.conversation, { role: 'user', content: goal }];
         s.events = [];
-        s.dialogue = [];
-        s.intent = null;
+        s.route = '';
+        s.plan = null;
+        s.specialistData = null;
+        s.specialistStream = '';
+        s.review = null;
         s.reflection = null;
         s.response = '';
         s.thinking = '';
-        s.phase = 'framing';
-        s.currentRound = 0;
+        s.draft = '';
+        s.draftThinking = '';
+        s.validationIssues = [];
+        s.streamingText = '';
+        s.streamingThinking = '';
+        s.phase = 'routing';
         return s;
     });
 

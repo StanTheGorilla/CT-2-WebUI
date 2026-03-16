@@ -37,22 +37,52 @@
 
 <style>
     .entry {
-        display: block; width: 100%; background: var(--surface); border: none;
-        border-radius: var(--radius); padding: 14px 20px; cursor: pointer;
-        text-align: left; transition: background var(--transition);
+        display: block;
+        width: 100%;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        padding: 14px 20px;
+        cursor: pointer;
+        text-align: left;
+        transition: background var(--transition);
+        box-shadow: var(--bubble-glow);
+        font-family: var(--font-body);
     }
     .entry:hover { background: var(--surface-hover); }
     .entry-row { display: flex; justify-content: space-between; align-items: center; }
     .goal {
-        color: var(--text); font-family: var(--font-body); font-size: 14px;
-        flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 16px;
+        color: var(--text);
+        font-size: 14px;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        margin-right: 16px;
     }
     .meta { display: flex; gap: 12px; font-size: 13px; flex-shrink: 0; }
-    .score { font-weight: 600; }
+    .score { font-weight: 600; font-variant-numeric: tabular-nums; }
     .rounds { color: var(--text-secondary); }
     .complexity { color: var(--text-muted); }
-    .detail { background: var(--surface); border-radius: 0 0 var(--radius) var(--radius); padding: 0 20px 16px; margin-top: -8px; }
+    .detail {
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-top: none;
+        border-radius: 0 0 var(--radius) var(--radius);
+        padding: 0 20px 16px;
+        margin-top: -8px;
+    }
     .section { margin-top: 12px; }
-    .section-label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
-    .section p, .outcome { color: var(--text-secondary); font-size: 14px; margin-top: 4px; }
+    .section-label {
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    .section p, .outcome { color: var(--text-secondary); font-size: 14px; margin-top: 4px; line-height: 1.6; }
 </style>

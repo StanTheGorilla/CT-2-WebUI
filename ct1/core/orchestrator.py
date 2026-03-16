@@ -1,15 +1,25 @@
-import asyncio
+"""CT-2 Orchestrator: Sequential Supervisor-Worker pipeline.
+
+6-phase pipeline:
+  1. ROUTE    — Specialist classifies intent (ROUTE_DESIGN | ROUTE_CODE | ROUTE_DIRECT)
+  2. PLAN     — Specialist produces a structured task breakdown (code routes only)
+  3. CONSULT  — Specialist provides design data (ROUTE_DESIGN only)
+  4. GENERATE — Director produces full response (with plan context injected)
+  5. VALIDATE — Output-type-aware validation (HTML structural / Python AST / JS braces)
+  6. FORMAT   — Deterministic Python cleanup
+"""
 import yaml
 from pathlib import Path
-from ct1.core.brain import Brain
-from ct1.core.mind import Mind
-from ct1.core.message_bus import MessageBus, MessageType
-from ct1.core.tension_detector import TensionDetector
+from ct1.core.director import Director
+from ct1.core.specialist import Specialist
+from ct1.core.formatter import clean_response, validate_output
 from ct1.memory.journal import Journal
 from ct1.memory.journal_reader import JournalReader
 from ct1.memory.session_store import SessionStore
 
-_CONFIG_PATH = Path(__file__).parent.parent.parent / "ct1" / "server" / "model_config.yaml"
+_CONFIG_PATH = (Path(__file__).parent.parent.parent
+                / "ct1" / "server" / "model_config.yaml")
+
 
 class Orchestrator:
     def __init__(self, config_path: str = None):
@@ -17,54 +27,49 @@ class Orchestrator:
             config_path = str(_CONFIG_PATH)
 
         cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
-        brain_url = f"http://localhost:{cfg['llama_server']['port']}"
-        minds_url = f"http://localhost:{cfg['llama_server_minds']['port']}"
-        mc = cfg["models"]
-        dc = cfg["deliberation"]
+        director_url = f"http://localhost:{cfg['llama_server']['port']}"
+        specialist_url = f"http://localhost:{cfg['llama_server_specialist']['port']}"
+        dc = cfg["models"]["director"]
+        sc = cfg["models"]["specialist"]
 
-        self.brain = Brain(
-            base_url=brain_url,
-            temperature=mc["brain"]["temperature"],
-            top_p=mc["brain"]["top_p"],
-            top_k=mc["brain"]["top_k"],
-            presence_penalty=mc["brain"]["presence_penalty"],
-            max_tokens=mc["brain"]["max_tokens"],
-            enable_thinking=mc["brain"].get("enable_thinking", True),
+        self.director = Director(
+            base_url=director_url,
+            temperature=dc["temperature"],
+            top_p=dc["top_p"],
+            top_k=dc["top_k"],
+            presence_penalty=dc["presence_penalty"],
+            max_tokens=dc["max_tokens"],
         )
 
-        def _make_mind(name, key):
-            return Mind(name, minds_url,
-                        mc[key]["temperature"],
-                        mc[key]["top_p"],
-                        mc[key]["top_k"],
-                        mc[key]["presence_penalty"],
-                        mc[key]["max_tokens"],
-                        enable_thinking=mc[key].get("enable_thinking", True))
+        self.specialist = Specialist(
+            base_url=specialist_url,
+            temperature=sc["temperature"],
+            top_p=sc["top_p"],
+            top_k=sc["top_k"],
+            max_tokens=sc["max_tokens"],
+        )
 
-        self.minds = {
-            "alpha": _make_mind("alpha", "mind_alpha"),
-            "beta":  _make_mind("beta",  "mind_beta"),
-            "gamma": _make_mind("gamma", "mind_gamma"),
-        }
-        self.bus = MessageBus()
-        self.tension_detector = TensionDetector()
         self.journal = Journal(cfg["journal"]["path"])
         self.journal_reader = JournalReader(cfg["journal"]["path"])
-        self.max_rounds = dc["max_rounds"]
-        self.confidence_threshold = dc["confidence_threshold"]
-        self.min_turns = dc.get("min_turns", 9)
-        self.turn_max_tokens = dc.get("turn_max_tokens", 256)
         self.verbose = False
 
-        lessons = self.journal_reader.get_recent_lessons(cfg["journal"]["lessons_on_startup"])
-        self.brain.lessons = lessons
+        # Load lessons into Director personality
+        lessons = self.journal_reader.get_recent_lessons(
+            cfg["journal"]["lessons_on_startup"]
+        )
+        self.director.lessons = lessons
 
-        self.session_store = SessionStore(cfg.get("sessions", {}).get("path", "ct1/data/sessions"))
+        # Load last session for continuity
+        self.session_store = SessionStore(
+            cfg.get("sessions", {}).get("path", "ct1/data/sessions")
+        )
         last_session = self.session_store.read_latest()
-        self.brain.last_session = last_session or ""
+        self.director.last_session = last_session or ""
 
-    async def _deliberate(self, goal: str, on_event=None,
-                           conversation: list[dict] = None) -> dict:
+    # ── Main pipeline ────────────────────────────────────────────────
+
+    async def _pipeline(self, goal: str, on_event=None,
+                        conversation: list[dict] = None) -> dict:
         if conversation is None:
             conversation = []
 
@@ -72,114 +77,125 @@ class Orchestrator:
             if on_event:
                 on_event(event, **data)
 
-        self.bus.clear()
+        # ── Phase 1: ROUTE ──────────────────────────────────────────
+        emit("routing")
+        route = await self.specialist.route(goal, conversation=conversation)
+        is_code = route in ("ROUTE_DESIGN", "ROUTE_CODE")
+        emit("routed", route=route)
 
-        # ── Phase 1: Intent Extraction ────────────────────────────────────────
-        emit("framing")
-        intent = await self.brain.extract_intent(goal, conversation=conversation)
-        intent["agreed_approach"] = ""          # populated after convergence
-        complexity = intent.get("complexity", "moderate")
-        emit("framed",
-             task_type=intent.get("task_type", "general"),
-             what_to_produce=intent.get("what_to_produce", goal),
-             requirements=intent.get("requirements", []),
-             complexity=complexity)
+        # ── Phase 2: PLAN (code routes only) ────────────────────────
+        plan = None
+        if is_code:
+            plan = await self.specialist.plan(goal, route)
+            emit("planned", plan=plan)
 
-        # ── Phase 2: Free-Form Deliberation ──────────────────────────────────
-        brief = self.brain.write_deliberation_brief(intent)
-        dialogue: list[dict] = []
-        rounds_used = 0
-
-        # Continuous deliberation — minds converse freely, brain checks convergence
-        # only after enough substance has built up (min_turns). Like human thinking:
-        # the conversation goes as long as it needs to.
-        mind_cycle = ("alpha", "beta", "gamma")
-        turn_count = 0
-
-        while True:
-            mind_name = mind_cycle[turn_count % 3]
-            current_pass = (turn_count // 3) + 1
-
-            if turn_count % 3 == 0:
-                emit("round_start", round_num=current_pass)
-
-            text = await self.minds[mind_name].converse(
-                brief, dialogue, conversation=conversation,
-                complexity=complexity, max_tokens=self.turn_max_tokens
+        # ── Phase 3: CONSULT (ROUTE_DESIGN only — palette/sections) ──
+        # No streaming: specialist collects internally to avoid showing
+        # raw think-blocks or JSON fragments to the user.
+        specialist_data = None
+        if route == "ROUTE_DESIGN":
+            emit("consulting")
+            specialist_data = await self.specialist.consult(
+                goal, conversation=conversation,
             )
-            dialogue.append({"mind": mind_name, "round": current_pass, "text": text})
-            emit("mind_turn", name=mind_name, text=text)
-            self.bus.post(f"mind-{mind_name}", "brain",
-                          MessageType.RESPONSE, text,
-                          confidence=0.0, round_num=current_pass)
+            emit("consulted", data=specialist_data)
 
-            turn_count += 1
+        # ── Phase 4: GENERATE (streamed) ──────────────────────────────
+        emit("generating")
 
-            # After min_turns, at end of each 3-mind cycle: brain moderates
-            if turn_count >= self.min_turns and turn_count % 3 == 0:
-                # Brain reviews the conversation and speaks
-                assessment = await self.brain.assess_deliberation(
-                    brief, dialogue, conversation=conversation
+        def on_token(token, kind):
+            emit("token", text=token, kind=kind)
+
+        result = await self.director.generate(
+            goal, route,
+            specialist_data=specialist_data,
+            plan=plan,
+            conversation=conversation,
+            on_token=on_token,
+        )
+        draft = result["text"]
+        draft_thinking = result.get("thinking", "")
+        emit("draft", text=draft, thinking=draft_thinking)
+
+        final_response = draft
+        final_thinking = draft_thinking
+
+        # ── Phase 5: VALIDATE (output-type-aware) ────────────────────
+        if is_code:
+            output_type = plan.get("output_type", "html_page") if plan else "html_page"
+
+            # Programmatic validation (real syntax check, no AI)
+            issues = validate_output(draft, output_type)
+
+            # Specialist review only for HTML (2B can't audit Python logic)
+            review_result = {"pass": True, "critical_issues": [], "fix_instructions": ""}
+            if output_type in ("html_page", "other"):
+                review_result = await self.specialist.review(
+                    goal, draft, conversation=conversation
                 )
-                dialogue.append({"mind": "brain", "round": current_pass,
-                                 "text": assessment["text"]})
-                emit("mind_turn", name="brain", text=assessment["text"])
 
-                if assessment["should_stop"] or current_pass >= self.max_rounds:
-                    # Ask each mind if they agree we should stop
-                    agrees = 0
-                    for mn in mind_cycle:
-                        vote = await self.minds[mn].vote_on_stopping(
-                            assessment["text"], dialogue[-4:])
-                        dialogue.append({"mind": mn, "round": current_pass,
-                                         "text": vote})
-                        emit("mind_turn", name=mn, text=vote)
-                        if "agree" in vote.lower() or "yes" in vote.lower()[:20]:
-                            agrees += 1
+            all_issues = list(issues)
+            if not review_result["pass"]:
+                all_issues.extend(review_result.get("critical_issues", []))
 
-                    if agrees >= 2 or current_pass >= self.max_rounds:
-                        intent["agreed_approach"] = assessment.get("summary", "")
-                        rounds_used = current_pass
-                        emit("converging",
-                             confidence=1.0,
-                             strongest=assessment.get("summary", ""))
-                        break
-                    # Minds disagreed — continue deliberation
+            if all_issues:
+                emit("validating", issues=all_issues, review=review_result)
+                emit("fixing")
 
-        # ── Phase 3: Execution ────────────────────────────────────────────────
-        emit("synthesizing")
-        synthesis = await self.brain.synthesize(
-            goal, intent, dialogue, conversation=conversation
+                fix_prompt = (
+                    f"Fix ALL these issues in the code:\n"
+                    + "\n".join(f"- {i}" for i in all_issues)
+                    + (f"\n\n{review_result['fix_instructions']}"
+                       if review_result.get("fix_instructions") else "")
+                    + f"\n\nOriginal code:\n{draft}"
+                )
+
+                def on_fix_token(token, kind):
+                    emit("token", text=token, kind=kind)
+
+                fix_result = await self.director.generate(
+                    fix_prompt, route,
+                    specialist_data=specialist_data,
+                    plan=None,  # don't re-plan for fix pass
+                    conversation=conversation,
+                    on_token=on_fix_token,
+                )
+                final_response = fix_result["text"]
+                final_thinking = fix_result.get("thinking", "")
+            else:
+                emit("validated", issues=[], review=review_result)
+
+        # ── Phase 6: FORMAT ──────────────────────────────────────────
+        output_type = plan.get("output_type", "html_page") if plan else "html_page"
+        final_response = clean_response(
+            final_response, is_code=is_code, output_type=output_type
         )
-        final_response = synthesis["text"]
-        brain_thinking = synthesis.get("thinking", "")
 
-        # Reflection
-        reflection = await self.brain.reflect(
-            goal, complexity, rounds_used, final_response,
-            conversation=conversation
+        # ── Reflection ───────────────────────────────────────────────
+        complexity = plan.get("complexity", "moderate") if plan else "moderate"
+        reflection = await self.director.reflect(
+            goal, complexity, final_response,
+            conversation=conversation,
         )
-        reflection["rounds"] = rounds_used
-        reflection["_dialogue"] = dialogue
         self.journal.write(reflection)
 
         return {
             "response": final_response,
-            "thinking": brain_thinking,
-            "rounds": rounds_used,
-            "complexity": complexity,
-            "tension_detected": rounds_used > 1,
+            "thinking": final_thinking,
+            "draft": draft,
+            "draft_thinking": draft_thinking,
+            "route": route,
+            "specialist_data": specialist_data,
+            "plan": plan,
             "reflection": reflection,
-            "dialogue": dialogue,
-            "bus_history": self.bus.to_dict_list(),
         }
 
     async def think(self, goal: str, on_event=None,
                     conversation: list[dict] = None) -> dict:
-        return await self._deliberate(goal, on_event=on_event,
-                                      conversation=conversation or [])
+        return await self._pipeline(
+            goal, on_event=on_event, conversation=conversation or []
+        )
 
     async def close(self):
-        await self.brain.close()
-        for m in self.minds.values():
-            await m.close()
+        await self.director.close()
+        await self.specialist.close()

@@ -10,9 +10,29 @@
 </div>
 
 <style>
-    .indicator { display: flex; align-items: center; gap: 10px; padding: 12px 20px; background: var(--surface); border-radius: var(--radius); }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--error); }
-    .dot.alive { background: var(--success); }
-    .label { font-weight: 600; font-size: 14px; }
-    .url { color: var(--text-secondary); font-size: 13px; font-family: var(--font-mono); }
+    .indicator {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 20px;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        box-shadow: var(--bubble-glow);
+    }
+    .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--error);
+        flex-shrink: 0;
+    }
+    .dot.alive {
+        background: var(--success);
+        box-shadow: 0 0 6px rgba(45, 164, 78, 0.3);
+    }
+    .label { font-weight: 600; font-size: 14px; color: var(--text); }
+    .url { color: var(--text-muted); font-size: 13px; font-family: var(--font-mono); }
 </style>

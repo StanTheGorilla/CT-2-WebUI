@@ -2,7 +2,28 @@ import subprocess
 import asyncio
 import yaml
 import os
+import signal
 from ct1.server.health import wait_for_server
+
+
+def kill_existing_llama_servers():
+    """Kill any leftover llama-server processes before starting new ones."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "llama-server.exe"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        else:
+            subprocess.run(
+                ["pkill", "-f", "llama-server"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        # Give OS a moment to release ports
+        import time
+        time.sleep(1)
+    except Exception:
+        pass
 
 def load_config(config_path: str = "ct1/server/model_config.yaml") -> dict:
     with open(config_path, encoding="utf-8") as f:
@@ -41,10 +62,11 @@ async def _launch_one(s: dict) -> subprocess.Popen:
     return proc
 
 async def start_server(config_path: str = "ct1/server/model_config.yaml") -> list:
+    kill_existing_llama_servers()
     cfg = load_config(config_path)
-    brain_proc = await _launch_one(cfg["llama_server"])
-    minds_proc = await _launch_one(cfg["llama_server_minds"])
-    return [brain_proc, minds_proc]
+    director_proc = await _launch_one(cfg["llama_server"])
+    specialist_proc = await _launch_one(cfg["llama_server_specialist"])
+    return [director_proc, specialist_proc]
 
 def stop_server(procs):
     if isinstance(procs, subprocess.Popen):
@@ -54,3 +76,14 @@ def stop_server(procs):
             proc.terminate()
             proc.wait(timeout=10)
     print("[launcher] Servers stopped.")
+
+
+if __name__ == "__main__":
+    import time as _time
+    procs = asyncio.run(start_server())
+    print("[launcher] Both servers running. Press Ctrl+C to stop.")
+    try:
+        while True:
+            _time.sleep(1)
+    except KeyboardInterrupt:
+        stop_server(procs)

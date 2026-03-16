@@ -63,13 +63,46 @@
 </div>
 
 <style>
-    .settings-page { max-width: 600px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
-    h2 { font-size: 17px; margin-top: 12px; }
-    .status-grid { display: flex; flex-direction: column; gap: 4px; }
-    .config-card { background: var(--surface); border-radius: var(--radius); padding: 16px 20px; }
-    .config-card-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
-    .config-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
+    .settings-page {
+        max-width: 600px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 32px 32px 40px;
+        height: 100%;
+        overflow-y: auto;
+    }
+    h2 {
+        font-size: 17px;
+        margin-top: 12px;
+        color: var(--text);
+    }
+    .status-grid { display: flex; flex-direction: column; gap: 6px; }
+    .config-card {
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        padding: 16px 20px;
+        box-shadow: var(--bubble-glow);
+    }
+    .config-card-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 8px;
+    }
+    .config-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 5px 0;
+        font-size: 14px;
+    }
     .config-key { color: var(--text-secondary); }
     .config-value { color: var(--text); font-family: var(--font-mono); font-size: 13px; }
-    .loading { color: var(--text-secondary); }
+    .loading { color: var(--text-muted); }
 </style>

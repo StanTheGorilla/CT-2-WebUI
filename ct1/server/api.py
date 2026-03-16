@@ -27,7 +27,7 @@ async def lifespan(application: FastAPI):
         await _orch.close()
 
 
-app = FastAPI(title="CT-1 API", lifespan=lifespan)
+app = FastAPI(title="CT-2 API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,11 +39,11 @@ app.add_middleware(
 
 @app.get("/api/status")
 async def get_status():
-    brain_url = f"http://localhost:{_cfg['llama_server']['port']}"
-    minds_url = f"http://localhost:{_cfg['llama_server_minds']['port']}"
-    brain = await check_server_health(brain_url)
-    minds = await check_server_health(minds_url)
-    return {"brain": brain, "minds": minds}
+    director_url = f"http://localhost:{_cfg['llama_server']['port']}"
+    specialist_url = f"http://localhost:{_cfg['llama_server_specialist']['port']}"
+    director = await check_server_health(director_url)
+    specialist = await check_server_health(specialist_url)
+    return {"director": director, "specialist": specialist}
 
 
 @app.get("/api/journal")
@@ -72,7 +72,6 @@ async def get_sessions():
 async def get_config():
     return {
         "models": _cfg.get("models", {}),
-        "deliberation": _cfg.get("deliberation", {}),
     }
 
 
@@ -105,10 +104,11 @@ async def ws_think(websocket: WebSocket):
                         "event": "done",
                         "response": result["response"],
                         "thinking": result.get("thinking", ""),
-                        "rounds": result["rounds"],
-                        "complexity": result["complexity"],
+                        "draft": result.get("draft", ""),
+                        "draft_thinking": result.get("draft_thinking", ""),
+                        "route": result.get("route", ""),
+                        "specialist_data": result.get("specialist_data"),
                         "reflection": result.get("reflection", {}),
-                        "dialogue": result.get("dialogue", []),
                     })
 
                 await asyncio.gather(run_think(), stream_events())
@@ -122,7 +122,17 @@ async def ws_think(websocket: WebSocket):
             pass
 
 
-# Serve SvelteKit build in production
+# Serve SvelteKit build with SPA fallback
 _WEB_BUILD = Path(__file__).parent.parent / "web" / "build"
 if _WEB_BUILD.exists():
-    app.mount("/", StaticFiles(directory=str(_WEB_BUILD), html=True), name="static")
+    from starlette.responses import FileResponse
+
+    class SPAStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope):
+            try:
+                return await super().get_response(path, scope)
+            except Exception:
+                # SPA fallback: serve index.html for any unmatched route
+                return FileResponse(Path(self.directory) / "index.html")
+
+    app.mount("/", SPAStaticFiles(directory=str(_WEB_BUILD), html=True), name="static")

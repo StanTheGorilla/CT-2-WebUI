@@ -1,71 +1,40 @@
 llama_server:
   executable: "F:/AI_Workstation/ct/llama-b8292-bin-win-vulkan-x64/llama-server.exe"
-  model: "F:/AI_Workstation/models/Qwen3.5-0.8B-Q4_K_M.gguf"
+  model: "F:/AI_Workstation/models/Qwen3.5-4B-Q3_K_S.gguf"
   port: 8080
   n_gpu_layers: 99
   parallel_slots: 1
-  context_size: 32768
+  context_size: 8192
   cont_batching: false
 
-llama_server_minds:
+llama_server_specialist:
   executable: "F:/AI_Workstation/ct/llama-b8292-bin-win-vulkan-x64/llama-server.exe"
-  model: "F:/AI_Workstation/models/Qwen3.5-0.8B-Q4_K_M.gguf"
+  model: "F:/AI_Workstation/models/Qwen3.5-2B.Q4_K_M.gguf"
   port: 8081
   n_gpu_layers: 99
-  parallel_slots: 3
-  context_size: 32768
-  cont_batching: true
+  parallel_slots: 1
+  context_size: 4096
+  cont_batching: false
 
 models:
-  brain:
-    slot: 0
+  director:
     enable_thinking: true
-    temperature: 0.4
+    temperature: 0.6
     top_p: 0.9
-    top_k: 20
-    presence_penalty: 1.5
-    max_tokens: 30000
-
-  mind_alpha:
-    slot: 1
-    enable_thinking: true
-    temperature: 0.9
-    top_p: 1.0
     top_k: 40
-    presence_penalty: 1.5
+    presence_penalty: 1.0
     max_tokens: 100000
 
-  mind_beta:
-    slot: 2
-    enable_thinking: true
-    temperature: 0.3
+  specialist:
+    enable_thinking: false
+    temperature: 0.1
     top_p: 0.9
     top_k: 10
-    presence_penalty: 1.8
-    max_tokens: 100000
-
-  mind_gamma:
-    slot: 3
-    enable_thinking: true
-    temperature: 0.95
-    top_p: 1.0
-    top_k: 50
-    presence_penalty: 1.8
-    max_tokens: 100000
-
-deliberation:
-  max_rounds: 999
-  confidence_threshold: 0.8
-  min_turns: 9
-  turn_max_tokens: 400
+    max_tokens: 1024
 
 journal:
   path: "ct1/data/journals"
   lessons_on_startup: 10
-
-adapters:
-  path: "ct1/data/adapters"
-  min_entries_for_training: 100
 
 sessions:
   path: "ct1/data/sessions"

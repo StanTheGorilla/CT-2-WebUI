@@ -8,35 +8,68 @@
 </script>
 
 <button class="bar" onclick={() => expanded = !expanded}>
-    <div class="metrics">
-        <span class="metric"><span class="score-dot" style="background: {scoreColor}"></span> {(score * 100).toFixed(0)}%</span>
-        <span class="sep"></span>
-        <span class="metric">{reflection.rounds ?? '?'} rounds</span>
+    <div class="score-group">
+        <span class="score-dot" style="background: {scoreColor}; box-shadow: 0 0 6px {scoreColor}"></span>
+        <span class="score-text">{(score * 100).toFixed(0)}%</span>
     </div>
-    <span class="expand">{expanded ? '\u2212' : '+'}</span>
+    <span class="expand-icon">{expanded ? '\u2212' : '+'}</span>
 </button>
 
 {#if expanded && reflection.lesson}
     <div class="detail">
-        <span class="lesson-label">Lesson:</span> {reflection.lesson}
+        <span class="detail-label">Lesson</span>
+        <p>{reflection.lesson}</p>
     </div>
 {/if}
 
 <style>
     .bar {
-        display: flex; align-items: center; justify-content: space-between; width: 100%;
-        background: var(--surface); border: none; border-radius: var(--radius);
-        padding: 10px 20px; cursor: pointer; transition: background var(--transition);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        padding: 10px 18px;
+        cursor: pointer;
+        transition: background var(--transition);
+        font-family: var(--font-body);
+        box-shadow: var(--bubble-glow);
     }
     .bar:hover { background: var(--surface-hover); }
-    .metrics { display: flex; align-items: center; gap: 12px; }
-    .metric { color: var(--text-secondary); font-family: var(--font-body); font-size: 13px; display: flex; align-items: center; gap: 6px; }
+    .score-group { display: flex; align-items: center; gap: 10px; }
     .score-dot { width: 8px; height: 8px; border-radius: 50%; }
-    .sep { width: 1px; height: 14px; background: var(--border); }
-    .expand { color: var(--text-muted); font-size: 16px; }
-    .detail {
-        background: var(--surface); border-radius: 0 0 var(--radius) var(--radius);
-        padding: 12px 20px; margin-top: -12px; font-size: 14px; color: var(--text-secondary);
+    .score-text {
+        color: var(--text-secondary);
+        font-size: 14px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
     }
-    .lesson-label { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .expand-icon { color: var(--text-muted); font-size: 18px; font-weight: 300; }
+    .detail {
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-top: none;
+        border-radius: 0 0 var(--radius) var(--radius);
+        padding: 14px 18px;
+        margin-top: -14px;
+        font-size: 14px;
+        color: var(--text-secondary);
+        line-height: 1.6;
+    }
+    .detail-label {
+        display: block;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 6px;
+    }
+    .detail p { margin: 0; }
 </style>

@@ -1,25 +1,41 @@
+import re
 import httpx
-from pathlib import Path
-from ct1.core.response_parser import parse_thinking_response
 
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
-MIND_SYSTEM_TEMPLATE = (_PROMPTS_DIR / "mind_system.txt").read_text(encoding="utf-8")
 
-COMPLEXITY_INSTRUCTIONS = {}
-for level in ("brief", "moderate", "deep"):
-    path = _PROMPTS_DIR / f"complexity_{level}.txt"
-    if path.exists():
-        COMPLEXITY_INSTRUCTIONS[level] = path.read_text(encoding="utf-8").strip()
+_SENTENCE_RE = re.compile(r'(?<=[.!?])\s+')
 
-COMPLEXITY_INSTRUCTIONS.setdefault("brief", "Think concisely. Identify the 1-2 most important observations and conclude directly.")
-COMPLEXITY_INSTRUCTIONS.setdefault("moderate", "Think step by step. Consider the main angles of this problem before concluding.")
-COMPLEXITY_INSTRUCTIONS.setdefault("deep", "Think thoroughly. Explore your assumptions, consider counterarguments, examine edge cases, and only then draw your conclusion. Take the space you need.")
+
+def _truncate_sentences(text: str, max_sentences: int = 4) -> str:
+    """Hard-limit text to max_sentences. 0.8B models can't self-limit."""
+    lines = text.strip().splitlines()
+    cleaned = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        line = re.sub(r'^[-*•]\s+', '', line)
+        line = re.sub(r'^\d+\.\s+', '', line)
+        if line:
+            cleaned.append(line)
+    text = ' '.join(cleaned)
+    sentences = _SENTENCE_RE.split(text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if len(sentences) <= max_sentences:
+        return text
+    return ' '.join(sentences[:max_sentences])
+
 
 class Mind:
+    """Thin executor for 0.8B mind models.
+
+    These models are too small for reasoning or critique. They excel at
+    simple, structured tasks: fill-in-the-blank, listing, extraction.
+    The orchestrator constructs the prompts; the mind just executes.
+    """
+
     def __init__(self, name: str, base_url: str, temperature: float,
                  top_p: float = 1.0, top_k: int = 40,
-                 presence_penalty: float = 1.5, max_tokens: int = 10000,
-                 enable_thinking: bool = True):
+                 presence_penalty: float = 1.5, max_tokens: int = 512):
         self.name = name
         self.base_url = base_url
         self.temperature = temperature
@@ -27,86 +43,25 @@ class Mind:
         self.top_k = top_k
         self.presence_penalty = presence_penalty
         self.max_tokens = max_tokens
-        self.enable_thinking = enable_thinking
-        self.client = httpx.AsyncClient(timeout=600.0)
+        self.client = httpx.AsyncClient(timeout=120.0)
 
-    def _build_system_prompt(self, complexity: str = "moderate") -> str:
-        instruction = COMPLEXITY_INSTRUCTIONS.get(complexity, COMPLEXITY_INSTRUCTIONS["moderate"])
-        return (MIND_SYSTEM_TEMPLATE
-                .replace("{name}", self.name)
-                .replace("{complexity_instruction}", instruction))
+    async def execute(self, system: str, user: str,
+                      max_tokens: int = 0,
+                      truncate_sentences: int = 0,
+                      conversation: list[dict] = None) -> str:
+        """Execute a task with explicit system/user prompts.
 
-    async def think(self, question: str, complexity: str = "moderate",
-                    conversation: list[dict] = None,
-                    prior_voices: str = "") -> dict:
-        """Send question to LLM, return parsed {reasoning, conclusion}.
-
-        prior_voices: text showing what the other minds said so far this round,
-                      so this mind can respond to them directly.
+        Args:
+            system: System prompt (keep very short for 0.8B).
+            user: User prompt (structured fill-in-the-blank works best).
+            max_tokens: Override default (0 = use self.max_tokens).
+            truncate_sentences: If >0, hard-limit to N sentences.
+            conversation: Optional prior conversation for context.
         """
-        if prior_voices:
-            user_content = f"{prior_voices}\n\n---\n\nNow respond with your own view on: {question}"
-        else:
-            user_content = question
-
-        messages = [
-            {"role": "system", "content": self._build_system_prompt(complexity)},
-        ]
+        messages = [{"role": "system", "content": system}]
         if conversation:
             messages.extend(conversation)
-        messages.append({"role": "user", "content": user_content})
-
-        payload = {
-            "model": "qwen",
-            "messages": messages,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "top_k": self.top_k,
-            "presence_penalty": self.presence_penalty,
-            "max_tokens": self.max_tokens,
-            "stream": False,
-            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
-        }
-        r = await self.client.post(f"{self.base_url}/v1/chat/completions", json=payload)
-        r.raise_for_status()
-        raw = r.json()["choices"][0]["message"]["content"].strip()
-        return parse_thinking_response(raw)
-
-    async def converse(self, brief: str, dialogue: list[dict],
-                       conversation: list[dict] = None,
-                       complexity: str = "moderate",
-                       max_tokens: int = None) -> str:
-        """Contribute one turn to the free-form deliberation dialogue.
-
-        brief: what the minds are deliberating about (from brain.write_deliberation_brief)
-        dialogue: all prior turns [{mind, round, text}, ...]
-        max_tokens: override for turn length (deliberation turns should be short)
-        Returns a plain string — the mind's contribution.
-        """
-        if dialogue:
-            # Only show last 3 turns to keep context focused for 0.8B model
-            recent = dialogue[-3:]
-            recent_text = "\n".join(
-                f"{t['mind']}: {t['text']}"
-                for t in recent
-            )
-            # Conversation-completion format — model continues naturally
-            user_content = (
-                f"Topic: {brief}\n\n"
-                f"{recent_text}\n\n"
-                f"{self.name}:"
-            )
-        else:
-            user_content = (
-                f"Topic: {brief}\n\n"
-                f"What's the best approach for this? Think about structure, layout, and key design choices.\n\n"
-                f"{self.name}:"
-            )
-
-        messages = [{"role": "system", "content": self._build_system_prompt(complexity)}]
-        if conversation:
-            messages.extend(conversation)
-        messages.append({"role": "user", "content": user_content})
+        messages.append({"role": "user", "content": user})
 
         payload = {
             "model": "qwen",
@@ -117,46 +72,17 @@ class Mind:
             "presence_penalty": self.presence_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": False,
-            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
+            "chat_template_kwargs": {"enable_thinking": False},
         }
-        r = await self.client.post(f"{self.base_url}/v1/chat/completions", json=payload)
+        r = await self.client.post(
+            f"{self.base_url}/v1/chat/completions", json=payload
+        )
         r.raise_for_status()
         raw = r.json()["choices"][0]["message"]["content"].strip()
-        parsed = parse_thinking_response(raw)
-        # Return just the conclusion text (thinking block stripped)
-        return parsed.get("conclusion", raw)
 
-    async def vote_on_stopping(self, brain_assessment: str,
-                               recent_dialogue: list[dict]) -> str:
-        """Respond to brain's assessment — agree or disagree with stopping."""
-        recent_text = "\n".join(
-            f"{t['mind']}: {t['text']}" for t in recent_dialogue
-        )
-        user_content = (
-            f"{recent_text}\n\n"
-            f"brain: {brain_assessment}\n\n"
-            f"{self.name}:"
-        )
-        messages = [
-            {"role": "system", "content": self._build_system_prompt()},
-            {"role": "user", "content": user_content},
-        ]
-        payload = {
-            "model": "qwen",
-            "messages": messages,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "top_k": self.top_k,
-            "presence_penalty": self.presence_penalty,
-            "max_tokens": 100,
-            "stream": False,
-            "chat_template_kwargs": {"enable_thinking": self.enable_thinking},
-        }
-        r = await self.client.post(f"{self.base_url}/v1/chat/completions", json=payload)
-        r.raise_for_status()
-        raw = r.json()["choices"][0]["message"]["content"].strip()
-        parsed = parse_thinking_response(raw)
-        return parsed.get("conclusion", raw)
+        if truncate_sentences > 0:
+            return _truncate_sentences(raw, truncate_sentences)
+        return raw
 
     async def close(self):
         await self.client.aclose()
