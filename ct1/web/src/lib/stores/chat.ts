@@ -2,10 +2,12 @@ import { writable } from 'svelte/store';
 import { WS } from '$lib/ws';
 
 export interface Attachment {
-    type: 'image';
+    type: 'image' | 'file';
     name: string;
-    /** data:image/...;base64,... */
+    /** data:image/...;base64,... — only for images */
     dataUrl: string;
+    /** text content — only for text files */
+    textContent?: string;
 }
 
 export interface Turn {
@@ -258,20 +260,44 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
     // Build conversation for backend — convert attachments to multimodal content
     const backendConv = conv.map(t => {
         if (t.attachments && t.attachments.length > 0) {
-            const content: any[] = [{ type: 'text', text: t.content }];
+            let text = t.content;
+            const images: Attachment[] = [];
             for (const att of t.attachments) {
-                content.push({ type: 'image_url', image_url: { url: att.dataUrl } });
+                if (att.type === 'file' && att.textContent) {
+                    text = `[File: ${att.name}]\n${att.textContent}\n\n${text}`;
+                } else if (att.type === 'image') {
+                    images.push(att);
+                }
             }
-            return { role: t.role, content };
+            if (images.length > 0) {
+                const content: any[] = [{ type: 'text', text }];
+                for (const att of images) {
+                    content.push({ type: 'image_url', image_url: { url: att.dataUrl } });
+                }
+                return { role: t.role, content };
+            }
+            return { role: t.role, content: text };
         }
         return { role: t.role, content: t.content };
     });
 
-    // Build current message content (may include images)
-    let goalContent: any = goal;
-    if (attachments.length > 0) {
-        const parts: any[] = [{ type: 'text', text: goal }];
-        for (const att of attachments) {
+    // Build current message content (may include images and text files)
+    let textPrefix = '';
+    const imageAtts: Attachment[] = [];
+    for (const att of attachments) {
+        if (att.type === 'file' && att.textContent) {
+            textPrefix += `[File: ${att.name}]\n${att.textContent}\n\n`;
+        } else if (att.type === 'image') {
+            imageAtts.push(att);
+        }
+    }
+
+    const fullGoal = textPrefix ? `${textPrefix}${goal}` : goal;
+
+    let goalContent: any = fullGoal;
+    if (imageAtts.length > 0) {
+        const parts: any[] = [{ type: 'text', text: fullGoal }];
+        for (const att of imageAtts) {
             parts.push({ type: 'image_url', image_url: { url: att.dataUrl } });
         }
         goalContent = parts;
