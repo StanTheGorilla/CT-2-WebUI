@@ -4,7 +4,7 @@
     import { render } from '$lib/markdown';
     import ChatInput from '$lib/components/ChatInput.svelte';
     import SpecialistCard from '$lib/components/SpecialistCard.svelte';
-    import ReflectionBar from '$lib/components/ReflectionBar.svelte';
+
     import PlanCard from '$lib/components/PlanCard.svelte';
     import PreviewPanel from '$lib/components/PreviewPanel.svelte';
 
@@ -224,8 +224,13 @@
                             </div>
                         </div>
                         {#if turn.reflection}
+                            {@const hsc = turn.reflection.self_score ?? 0.5}
+                            {@const hscColor = hsc >= 0.7 ? 'var(--success)' : hsc >= 0.4 ? 'var(--warning)' : 'var(--error)'}
                             <div class="trace-row">
-                                <ReflectionBar reflection={turn.reflection} />
+                                <span class="score-chip" style="--sc-color: {hscColor}">
+                                    <span class="trace-dot" style="background: {hscColor}; box-shadow: 0 0 6px {hscColor}40"></span>
+                                    {(hsc * 100).toFixed(0)}%
+                                </span>
                             </div>
                         {/if}
                     {:else}
@@ -399,19 +404,19 @@
                     </div>
                 {/if}
 
-                <!-- Trace pills -->
+                <!-- Trace: expandable pipeline details -->
                 {#if hasSpecialistTrace || hasThinking || hasValidation || $chat.reflection}
                     <div class="trace-row">
-                        {#if hasSpecialistTrace}
-                            <button class="trace-pill" class:open={traceOpen === 'specialist'} onclick={() => toggleTrace('specialist')}>
-                                <span class="trace-dot" style="background: var(--specialist)"></span>
-                                Specialist
-                            </button>
-                        {/if}
                         {#if hasThinking}
                             <button class="trace-pill" class:open={traceOpen === 'thinking'} onclick={() => toggleTrace('thinking')}>
                                 <span class="trace-dot" style="background: var(--brain)"></span>
                                 Thinking
+                            </button>
+                        {/if}
+                        {#if hasSpecialistTrace}
+                            <button class="trace-pill" class:open={traceOpen === 'specialist'} onclick={() => toggleTrace('specialist')}>
+                                <span class="trace-dot" style="background: var(--specialist)"></span>
+                                Specialist
                             </button>
                         {/if}
                         {#if hasValidation}
@@ -424,14 +429,13 @@
                             </button>
                         {/if}
                         {#if $chat.reflection}
-                            <ReflectionBar reflection={$chat.reflection} />
+                            {@const sc = $chat.reflection.self_score ?? 0.5}
+                            {@const scColor = sc >= 0.7 ? 'var(--success)' : sc >= 0.4 ? 'var(--warning)' : 'var(--error)'}
+                            <button class="trace-pill" class:open={traceOpen === 'reflection'} onclick={() => toggleTrace('reflection')}>
+                                <span class="trace-dot" style="background: {scColor}; box-shadow: 0 0 6px {scColor}40"></span>
+                                {(sc * 100).toFixed(0)}%
+                            </button>
                         {/if}
-                    </div>
-                {/if}
-
-                {#if traceOpen === 'specialist' && hasSpecialistTrace}
-                    <div class="trace-card specialist-trace">
-                        <pre class="trace-body">{$chat.specialistStream}</pre>
                     </div>
                 {/if}
 
@@ -452,6 +456,12 @@
                     </div>
                 {/if}
 
+                {#if traceOpen === 'specialist' && hasSpecialistTrace}
+                    <div class="trace-card specialist-trace">
+                        <pre class="trace-body">{$chat.specialistStream}</pre>
+                    </div>
+                {/if}
+
                 {#if traceOpen === 'validation' && hasValidation}
                     <div class="trace-card validation-trace">
                         {#if $chat.validationIssues.length > 0}
@@ -467,6 +477,15 @@
                                 <p class="trace-text">{$chat.review.fix_instructions}</p>
                             </div>
                         {/if}
+                    </div>
+                {/if}
+
+                {#if traceOpen === 'reflection' && $chat.reflection?.lesson}
+                    <div class="trace-card reflection-trace">
+                        <div class="trace-section">
+                            <span class="trace-label">Lesson learned</span>
+                            <p class="trace-text">{$chat.reflection.lesson}</p>
+                        </div>
                     </div>
                 {/if}
 
@@ -886,6 +905,23 @@
     .trace-card.specialist-trace { border-left: 3px solid var(--specialist); }
     .trace-card.thinking-trace { border-left: 3px solid var(--brain); }
     .trace-card.validation-trace { border-left: 3px solid var(--warning); }
+    .trace-card.reflection-trace { border-left: 3px solid var(--success); }
+
+    .score-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 6px 14px;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius-pill);
+        font-size: 13px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        color: var(--text-secondary);
+    }
     .trace-section { padding: 14px 18px; }
     .trace-section + .trace-section {
         border-top: 1px solid rgba(255, 255, 255, 0.35);

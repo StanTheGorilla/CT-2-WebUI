@@ -299,10 +299,11 @@ class Orchestrator:
         # Strip inlined file content for intent detection / routing
         user_message = _strip_file_context(goal_text)
 
-        # Warn if images attached but vision not supported
+        # Handle images when vision not supported
         has_images = (isinstance(goal, list) and
                       any(p.get("type") == "image_url" for p in goal))
-        if has_images and not self.director.vision_supported:
+        no_vision = has_images and not self.director.vision_supported
+        if no_vision:
             if on_event:
                 on_event("warning", message="Image attached but vision is not available with current model. The image will be ignored.")
 
@@ -315,7 +316,12 @@ class Orchestrator:
         is_edit = mode == "edit"
 
         # ── Phase 1: ROUTE ────────────────────────────────────
-        if is_edit:
+        if no_vision and not is_edit:
+            # Images without vision — answer directly, don't design/code
+            route = "ROUTE_DIRECT"
+            emit("routing")
+            emit("routed", route=route)
+        elif is_edit:
             route = "ROUTE_CODE"
             emit("routing")
             emit("routed", route=route)
