@@ -105,16 +105,36 @@ _CODE_KEYWORDS = {
 class Director:
     def __init__(self, base_url: str, temperature: float = 0.6,
                  top_p: float = 0.9, top_k: int = 40,
-                 presence_penalty: float = 1.0, max_tokens: int = 100000):
+                 presence_penalty: float = 1.0, max_tokens: int = 100000,
+                 vision_supported: bool = False):
         self.base_url = base_url
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
         self.presence_penalty = presence_penalty
         self.max_tokens = max_tokens
+        self.vision_supported = vision_supported
         self.client = httpx.AsyncClient(timeout=600.0)
         self.lessons: list[str] = []
         self.last_session: str = ""
+
+    def _sanitize_messages(self, messages: list[dict]) -> list[dict]:
+        """Strip image content from messages if vision is not supported."""
+        if self.vision_supported:
+            return messages
+        sanitized = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text_parts = [p.get("text", "") for p in content
+                              if p.get("type") == "text"]
+                sanitized.append({
+                    **msg,
+                    "content": " ".join(text_parts) or "(image attachment — vision not available)",
+                })
+            else:
+                sanitized.append(msg)
+        return sanitized
 
     def _personality_prompt(self) -> str:
         lessons_text = ""
@@ -138,6 +158,8 @@ class Director:
             system = messages[:1]
             rest = messages[1:]
             messages = system + conversation + rest
+
+        messages = self._sanitize_messages(messages)
 
         payload = {
             "model": "qwen",
@@ -222,6 +244,8 @@ class Director:
             system = messages[:1]
             rest = messages[1:]
             messages = system + conversation + rest
+
+        messages = self._sanitize_messages(messages)
 
         payload = {
             "model": "qwen",

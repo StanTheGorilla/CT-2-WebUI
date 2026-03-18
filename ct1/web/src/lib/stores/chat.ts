@@ -1,9 +1,29 @@
 import { writable } from 'svelte/store';
 import { WS } from '$lib/ws';
 
+export interface Attachment {
+    type: 'image';
+    name: string;
+    /** data:image/...;base64,... */
+    dataUrl: string;
+}
+
 export interface Turn {
     role: 'user' | 'assistant';
     content: string;
+    /** Frontend-only: attached images */
+    attachments?: Attachment[];
+    /** Frontend-only: was this a code response? */
+    isCode?: boolean;
+    /** Frontend-only: route label */
+    route?: string;
+    /** Frontend-only: pipeline metadata preserved per turn */
+    plan?: Plan | null;
+    specialistData?: SpecialistData | null;
+    reflection?: Reflection | null;
+    review?: ReviewResult | null;
+    thinking?: string;
+    draftThinking?: string;
 }
 
 export interface Reflection {
@@ -53,8 +73,10 @@ interface ChatState {
     streamingText: string;
     streamingThinking: string;
     validationIssues: string[];
+    editing: boolean;
+    warning: string;
     phase: 'idle' | 'routing' | 'planning' | 'consulting' | 'generating'
-         | 'validating' | 'fixing' | 'done';
+         | 'polishing' | 'validating' | 'fixing' | 'done';
 }
 
 const initial: ChatState = {
@@ -73,6 +95,8 @@ const initial: ChatState = {
     streamingText: '',
     streamingThinking: '',
     validationIssues: [],
+    editing: false,
+    warning: '',
     phase: 'idle',
 };
 
@@ -90,6 +114,7 @@ function handleEvent(data: Record<string, any>) {
                 break;
             case 'routed':
                 s.route = data.route;
+                s.phase = 'planning';
                 break;
             case 'planned':
                 s.phase = 'planning';
@@ -107,6 +132,7 @@ function handleEvent(data: Record<string, any>) {
                 break;
             case 'generating':
                 s.phase = 'generating';
+                s.editing = !!data.editing;
                 s.streamingText = '';
                 s.streamingThinking = '';
                 break;
@@ -120,6 +146,16 @@ function handleEvent(data: Record<string, any>) {
             case 'draft':
                 s.draft = data.text;
                 s.draftThinking = data.thinking || '';
+                break;
+            case 'polishing':
+                s.phase = 'polishing';
+                s.streamingThinking = '';
+                break;
+            case 'polished':
+                // CSS was improved — replace streamingText with polished version
+                if (data.code) {
+                    s.streamingText = data.code;
+                }
                 break;
             case 'validating':
                 s.phase = 'validating';
@@ -135,10 +171,8 @@ function handleEvent(data: Record<string, any>) {
                 s.streamingText = '';
                 s.streamingThinking = '';
                 break;
-            case 'done':
+            case 'done': {
                 s.phase = 'done';
-                // Use the done event's response, but fall back to
-                // accumulated streaming text so the user always sees output
                 s.response = data.response || s.streamingText || '';
                 s.thinking = data.thinking || s.streamingThinking || '';
                 if (!s.draft) s.draft = data.draft || '';
@@ -146,10 +180,26 @@ function handleEvent(data: Record<string, any>) {
                 if (!s.route) s.route = data.route || '';
                 if (!s.specialistData) s.specialistData = data.specialist_data || null;
                 s.reflection = data.reflection;
+                const codeRoute = s.route === 'ROUTE_DESIGN' || s.route === 'ROUTE_CODE';
                 s.conversation = [
                     ...s.conversation,
-                    { role: 'assistant', content: s.response },
+                    {
+                        role: 'assistant',
+                        content: s.response,
+                        isCode: codeRoute,
+                        route: s.route,
+                        plan: s.plan,
+                        specialistData: s.specialistData,
+                        reflection: s.reflection,
+                        review: s.review,
+                        thinking: s.thinking,
+                        draftThinking: s.draftThinking,
+                    },
                 ];
+                break;
+            }
+            case 'warning':
+                s.warning = data.message || '';
                 break;
             case 'error':
                 s.phase = 'done';
@@ -175,13 +225,16 @@ export function disconnect() {
     ws = null;
 }
 
-export function sendThink(goal: string) {
+export function sendThink(goal: string, attachments: Attachment[] = []) {
     let conv: Turn[] = [];
     const unsub = chat.subscribe((s) => { conv = s.conversation; });
     unsub();
 
     chat.update((s) => {
-        s.conversation = [...s.conversation, { role: 'user', content: goal }];
+        s.conversation = [...s.conversation, {
+            role: 'user', content: goal,
+            attachments: attachments.length > 0 ? attachments : undefined,
+        }];
         s.events = [];
         s.route = '';
         s.plan = null;
@@ -196,13 +249,37 @@ export function sendThink(goal: string) {
         s.validationIssues = [];
         s.streamingText = '';
         s.streamingThinking = '';
+        s.editing = false;
+        s.warning = '';
         s.phase = 'routing';
         return s;
     });
 
+    // Build conversation for backend — convert attachments to multimodal content
+    const backendConv = conv.map(t => {
+        if (t.attachments && t.attachments.length > 0) {
+            const content: any[] = [{ type: 'text', text: t.content }];
+            for (const att of t.attachments) {
+                content.push({ type: 'image_url', image_url: { url: att.dataUrl } });
+            }
+            return { role: t.role, content };
+        }
+        return { role: t.role, content: t.content };
+    });
+
+    // Build current message content (may include images)
+    let goalContent: any = goal;
+    if (attachments.length > 0) {
+        const parts: any[] = [{ type: 'text', text: goal }];
+        for (const att of attachments) {
+            parts.push({ type: 'image_url', image_url: { url: att.dataUrl } });
+        }
+        goalContent = parts;
+    }
+
     ws?.send({
         type: 'think',
-        goal,
-        conversation: conv,
+        goal: goalContent,
+        conversation: backendConv,
     });
 }

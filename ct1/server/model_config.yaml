@@ -4,7 +4,7 @@ llama_server:
   port: 8080
   n_gpu_layers: 99
   parallel_slots: 1
-  context_size: 8192
+  context_size: 16384
   cont_batching: false
 
 llama_server_specialist:
@@ -24,6 +24,7 @@ models:
     top_k: 40
     presence_penalty: 1.0
     max_tokens: 100000
+    vision_supported: false
 
   specialist:
     enable_thinking: false

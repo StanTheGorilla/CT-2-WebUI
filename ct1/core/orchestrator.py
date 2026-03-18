@@ -75,6 +75,7 @@ class Orchestrator:
             top_k=dc["top_k"],
             presence_penalty=dc["presence_penalty"],
             max_tokens=dc["max_tokens"],
+            vision_supported=dc.get("vision_supported", False),
         )
 
         self.specialist = Specialist(
@@ -289,6 +290,13 @@ class Orchestrator:
 
         # Extract text for routing/planning (multimodal-safe)
         goal_text = _extract_text(goal)
+
+        # Warn if images attached but vision not supported
+        has_images = (isinstance(goal, list) and
+                      any(p.get("type") == "image_url" for p in goal))
+        if has_images and not self.director.vision_supported:
+            if on_event:
+                on_event("warning", message="Image attached but vision is not available with current model. The image will be ignored.")
 
         def emit(event: str, **data):
             if on_event:
