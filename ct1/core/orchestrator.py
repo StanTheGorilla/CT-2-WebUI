@@ -37,6 +37,12 @@ def _extract_text(goal) -> str:
     return str(goal)
 
 
+def _strip_file_context(text: str) -> str:
+    """Strip inlined [File: ...] blocks, keeping only the user's own message.
+    Used for routing/classification so file content doesn't pollute intent detection."""
+    return re.sub(r'\[File: [^\]]+\]\n.*?\n\n', '', text, flags=re.DOTALL).strip()
+
+
 _EDIT_INTENT = {
     "change", "modify", "update", "edit", "fix", "add", "remove",
     "replace", "swap", "move", "resize", "make it", "make the",
@@ -290,6 +296,8 @@ class Orchestrator:
 
         # Extract text for routing/planning (multimodal-safe)
         goal_text = _extract_text(goal)
+        # Strip inlined file content for intent detection / routing
+        user_message = _strip_file_context(goal_text)
 
         # Warn if images attached but vision not supported
         has_images = (isinstance(goal, list) and
@@ -303,7 +311,7 @@ class Orchestrator:
                 on_event(event, **data)
 
         # Detect conversation mode (edit / question / new)
-        mode, previous_code = self._detect_conversation_mode(goal_text, conversation)
+        mode, previous_code = self._detect_conversation_mode(user_message, conversation)
         is_edit = mode == "edit"
 
         # ── Phase 1: ROUTE ────────────────────────────────────
@@ -317,7 +325,7 @@ class Orchestrator:
             emit("routed", route=route)
         else:
             emit("routing")
-            route = await self.specialist.route(goal_text, conversation=conversation)
+            route = await self.specialist.route(user_message, conversation=conversation)
             emit("routed", route=route)
 
         is_code = route in ("ROUTE_DESIGN", "ROUTE_CODE")
@@ -325,7 +333,7 @@ class Orchestrator:
         # ── Phase 2: PLAN (code routes only, skip for edits) ────────
         plan = None
         if is_code and not is_edit:
-            plan = await self.specialist.plan(goal_text, route)
+            plan = await self.specialist.plan(user_message, route)
             emit("planned", plan=plan)
 
         # ── Phase 3: CONSULT (ROUTE_DESIGN only, skip for edits) ──
@@ -333,7 +341,7 @@ class Orchestrator:
         if route == "ROUTE_DESIGN" and not is_edit:
             emit("consulting")
             specialist_data = await self.specialist.consult(
-                goal_text, conversation=conversation,
+                user_message, conversation=conversation,
             )
             emit("consulted", data=specialist_data)
 
@@ -347,7 +355,7 @@ class Orchestrator:
 
         if is_edit and is_code:
             draft, draft_thinking, used_section_edit = await self._generate_edit(
-                goal_text, route, previous_code, on_token, emit,
+                user_message, route, previous_code, on_token, emit,
                 specialist_data=specialist_data,
                 conversation=conversation,
             )
