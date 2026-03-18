@@ -13,6 +13,12 @@ BRAIN_SYSTEM_TEMPLATE = (_PROMPTS_DIR / "brain_system.txt").read_text(
     encoding="utf-8"
 )
 
+_DESIGN_TOOLKIT_PATH = _PROMPTS_DIR / "design_toolkit.txt"
+_DESIGN_TOOLKIT = (
+    _DESIGN_TOOLKIT_PATH.read_text(encoding="utf-8")
+    if _DESIGN_TOOLKIT_PATH.exists() else ""
+)
+
 _ROUTER_SYSTEM = (
     "You are the CT-2 Routing Engine. Read the user request and categorize it.\n"
     "You may ONLY output one of the following exact strings:\n"
@@ -30,6 +36,47 @@ _GENERATOR_CODE_SYSTEM = (
     "and <meta viewport>, <title>, all CSS in <style>, <body> with content, "
     "all JS in <script> before </body>. Every tag must be closed.\n"
     "Think through your solution carefully, then output the final code."
+    + (f"\n\nMANDATORY CSS RULES — apply ALL of these:\n{_DESIGN_TOOLKIT}"
+       if _DESIGN_TOOLKIT else "")
+)
+
+_GENERATOR_EDIT_SYSTEM = (
+    "You are the CT-2 Director, an expert developer.\n"
+    "The user wants to MODIFY code from a previous response.\n"
+    "Apply the requested changes to the existing code. "
+    "Output the COMPLETE modified code — not just the changed parts.\n"
+    "No explanations. No markdown fences. No diffs.\n"
+    "For HTML: output the full document from <!DOCTYPE html> to </html>.\n"
+    "Keep everything that the user didn't ask to change exactly as it was."
+)
+
+_GENERATOR_SECTION_EDIT_SYSTEM = (
+    "You are editing a specific section of an HTML document.\n"
+    "Output ONLY the inner content of that section — no wrapping tags.\n"
+    "No markdown fences. No explanations. No commentary.\n"
+    "If editing <style>: output only the CSS rules.\n"
+    "If editing <body>: output only the HTML elements (no <script>).\n"
+    "If editing <script>: output only the JavaScript code.\n"
+    "If editing <head>: output only the meta/title/link tags (no <style>).\n"
+    "Keep everything the user didn't ask to change exactly as it was."
+)
+
+_GENERATOR_PATCH_SYSTEM = (
+    "You are a code editor. Make ONLY the specific changes requested.\n"
+    "Output one or more SEARCH/REPLACE blocks. Nothing else.\n\n"
+    "Format:\n"
+    "<<<SEARCH\n"
+    "exact lines from the original code\n"
+    "===\n"
+    "replacement lines\n"
+    ">>>\n\n"
+    "Rules:\n"
+    "- SEARCH text must match the original code EXACTLY (whitespace matters)\n"
+    "- Include 1-2 surrounding lines for context so the match is unique\n"
+    "- Only change what the user asked for. Do NOT rewrite other code.\n"
+    "- For insertions: use surrounding lines as SEARCH, add new lines in REPLACE\n"
+    "- You may use multiple blocks if the change touches multiple places\n"
+    "- No markdown fences. No explanations. Only SEARCH/REPLACE blocks."
 )
 
 _GENERATOR_TEXT_SYSTEM = (
@@ -37,6 +84,14 @@ _GENERATOR_TEXT_SYSTEM = (
     "Respond to the user's request comprehensively.\n"
     "If Specialist Data is provided, adhere to its constraints.\n"
     "Think through your solution carefully, then output the final response."
+)
+
+_GENERATOR_DISCUSS_SYSTEM = (
+    "You are the CT-2 Director, an expert developer.\n"
+    "The user is asking about code you generated previously.\n"
+    "Answer their question clearly and concisely. "
+    "Reference specific parts of the code when relevant.\n"
+    "Do NOT output modified code unless the user explicitly asks for changes."
 )
 
 _CODE_KEYWORDS = {
@@ -263,45 +318,95 @@ class Director:
 
     # ── Generator mode ───────────────────────────────────────────────
 
-    async def generate(self, goal: str, route: str,
+    @staticmethod
+    def _build_user_content(goal, suffix: str = ""):
+        """Build user message content, preserving multimodal parts if present."""
+        if isinstance(goal, list):
+            # Multimodal: append suffix to the text part, keep image parts
+            parts = []
+            for p in goal:
+                if p.get("type") == "text":
+                    parts.append({"type": "text", "text": p["text"] + suffix})
+                else:
+                    parts.append(p)
+            return parts
+        return f"{goal}{suffix}"
+
+    async def generate(self, goal, route: str,
                        specialist_data: dict = None,
                        plan: dict = None,
                        conversation: list[dict] = None,
-                       on_token=None) -> dict:
+                       on_token=None,
+                       is_edit: bool = False,
+                       code_context: str = None) -> dict:
         """Generate the full response. Returns {"text": str, "thinking": str}.
 
         plan: structured task breakdown from Specialist.plan().
         on_token: if provided, streams tokens via callback(token, kind).
+        is_edit: if True, uses edit-aware prompting to modify previous code.
         """
         is_code = route in ("ROUTE_DESIGN", "ROUTE_CODE")
         is_direct = route == "ROUTE_DIRECT"
 
+        goal_text = goal if isinstance(goal, str) else " ".join(
+            p.get("text", "") for p in goal if p.get("type") == "text"
+        )
+
+        # "Question about code" mode — answer about previously generated code
+        if code_context and is_direct:
+            truncated = self._truncate_context(code_context, 6000)
+            prompt = (
+                f"[Previously generated code for reference]\n{truncated}\n\n"
+                f"User question: {goal_text}"
+            )
+            system = _GENERATOR_DISCUSS_SYSTEM
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ]
+            if on_token:
+                return await self._call_stream(
+                    messages, on_token=on_token,
+                    max_tokens=2048,
+                    presence_penalty=0.0,
+                    conversation=conversation,
+                    enable_thinking=False,
+                )
+            return await self._call(
+                messages, max_tokens=2048,
+                conversation=conversation,
+                enable_thinking=False,
+            )
+
         # For complex Python/scripts: use the micro-fill loop instead
-        if (plan and not is_direct
+        if (plan and not is_direct and not is_edit
                 and plan.get("output_type") in ("python_script", "api")
                 and plan.get("complexity") == "complex"
                 and len(plan.get("components", [])) >= 4):
             return await self._generate_micro(
-                goal, plan, conversation=conversation, on_token=on_token
+                goal_text, plan, conversation=conversation, on_token=on_token
             )
 
         # Build prompt
         specialist_ctx = ""
         if specialist_data:
             specialist_ctx = (
-                "\n\n[DESIGN SPEC]\n"
-                + json.dumps(specialist_data, indent=2)
+                "\n\n[DESIGN SPEC] "
+                + json.dumps(specialist_data, separators=(",", ":"))
             )
         plan_ctx = self._build_plan_context(plan) if plan else ""
 
-        if is_code:
-            prompt = f"{goal}{plan_ctx}{specialist_ctx}"
+        if is_edit and is_code:
+            prompt = f"Modify the code from the previous response:\n{goal_text}"
+            system = _GENERATOR_EDIT_SYSTEM
+        elif is_code:
+            prompt = self._build_user_content(goal, f"{plan_ctx}{specialist_ctx}")
             system = _GENERATOR_CODE_SYSTEM
         elif is_direct:
-            prompt = goal
+            prompt = self._build_user_content(goal)
             system = _GENERATOR_TEXT_SYSTEM
         else:
-            prompt = f"{goal}{plan_ctx}{specialist_ctx}"
+            prompt = self._build_user_content(goal, f"{plan_ctx}{specialist_ctx}")
             system = self._personality_prompt()
 
         messages = [
@@ -325,6 +430,135 @@ class Director:
             conversation=conversation,
             enable_thinking=not is_direct,
         )
+
+    # ── Section-level edit ──────────────────────────────────────────────
+
+    async def generate_patch_edit(
+        self, goal: str, code: str, on_token=None,
+    ) -> dict:
+        """Ask the director to output SEARCH/REPLACE patches instead of full code.
+
+        Returns {"text": str, "thinking": str} where text contains patch blocks.
+        """
+        # Truncate code for context window — keep start + end
+        if len(code) > 8000:
+            code_for_prompt = (
+                code[:5000]
+                + "\n\n/* ... middle section ... */\n\n"
+                + code[-3000:]
+            )
+        else:
+            code_for_prompt = code
+
+        prompt = (
+            f"Original code:\n{code_for_prompt}\n\n"
+            f"Change requested: {goal}"
+        )
+
+        messages = [
+            {"role": "system", "content": _GENERATOR_PATCH_SYSTEM},
+            {"role": "user", "content": prompt},
+        ]
+
+        if on_token:
+            return await self._call_stream(
+                messages, on_token=on_token,
+                max_tokens=4096,
+                presence_penalty=0.0,
+                enable_thinking=True,
+            )
+
+        return await self._call(
+            messages, max_tokens=4096,
+            enable_thinking=True,
+        )
+
+    @staticmethod
+    def _truncate_context(text: str, max_chars: int) -> str:
+        """Truncate text keeping start and end for context."""
+        if len(text) <= max_chars:
+            return text
+        half = max_chars // 2
+        return text[:half] + "\n/* ... */\n" + text[-half:]
+
+    async def generate_section_edit(
+        self, goal: str, section: str,
+        sections: dict[str, str],
+        on_token=None,
+    ) -> dict:
+        """Regenerate a single HTML section. Returns {"text": str, "thinking": str}.
+
+        section: which section to edit ('style', 'body', 'script', 'head')
+        sections: dict of all section contents for read-only context
+        """
+        section_content = sections.get(section, "")
+
+        # Build compact context from other sections (truncated to fit context window)
+        context_parts = []
+        for name, content in sections.items():
+            if name == section:
+                continue
+            # Truncate large sections — director only needs a sketch for context
+            truncated = self._truncate_context(content, 1500)
+            context_parts.append(f"<{name}>\n{truncated}\n</{name}>")
+        context = "\n\n".join(context_parts)
+
+        prompt = (
+            f"[CONTEXT — other sections for reference, do NOT output these]\n"
+            f"{context}\n\n"
+            f"[SECTION TO EDIT — <{section}>]\n"
+            f"{section_content}\n\n"
+            f"User request: {goal}\n\n"
+            f"Output ONLY the modified <{section}> inner content. "
+            f"No wrapping <{section}> tags. No <!DOCTYPE>. No other sections."
+        )
+
+        messages = [
+            {"role": "system", "content": _GENERATOR_SECTION_EDIT_SYSTEM},
+            {"role": "user", "content": prompt},
+        ]
+
+        if on_token:
+            return await self._call_stream(
+                messages, on_token=on_token,
+                max_tokens=self.max_tokens,
+                presence_penalty=self.presence_penalty,
+                enable_thinking=True,
+            )
+
+        return await self._call(
+            messages, max_tokens=self.max_tokens,
+            enable_thinking=True,
+        )
+
+    # ── Polish pass ─────────────────────────────────────────────────
+
+    async def polish_css(self, css: str) -> dict:
+        """Improve CSS quality with design polish rules.
+
+        Returns {"text": str} — thinking disabled to keep output clean.
+        """
+        polish_prompt_path = _PROMPTS_DIR / "polish_system.txt"
+        system = polish_prompt_path.read_text(encoding="utf-8")
+
+        # Truncate if CSS is huge
+        if len(css) > 6000:
+            css_for_prompt = css[:4000] + "\n/* ... */\n" + css[-2000:]
+        else:
+            css_for_prompt = css
+
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"Improve this CSS:\n\n{css_for_prompt}"},
+        ]
+
+        raw = await self._call(
+            messages, max_tokens=self.max_tokens,
+            enable_thinking=False,
+        )
+        # _call with enable_thinking=False returns a plain string
+        text = raw if isinstance(raw, str) else raw.get("text", "")
+        return {"text": text}
 
     # ── Micro-fill loop (complex Python/scripts) ─────────────────────
 
