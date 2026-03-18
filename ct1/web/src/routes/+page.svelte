@@ -165,24 +165,24 @@
             <div class="messages-inner">
                 {#each history() as turn, idx}
                     {#if turn.role === 'user'}
+                        {#if turn.attachments && turn.attachments.length > 0}
+                            <div class="user-attachments" style="animation-delay: {idx * 30}ms">
+                                {#each turn.attachments as att}
+                                    {#if att.type === 'image'}
+                                        <img src={att.dataUrl} alt={att.name} class="bubble-img" />
+                                    {:else}
+                                        <span class="file-island">
+                                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                                <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
+                                                <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                                            </svg>
+                                            {att.name}
+                                        </span>
+                                    {/if}
+                                {/each}
+                            </div>
+                        {/if}
                         <div class="user-bubble" style="animation-delay: {idx * 30}ms">
-                            {#if turn.attachments && turn.attachments.length > 0}
-                                <div class="bubble-attachments">
-                                    {#each turn.attachments as att}
-                                        {#if att.type === 'image'}
-                                            <img src={att.dataUrl} alt={att.name} class="bubble-img" />
-                                        {:else}
-                                            <span class="bubble-file-badge">
-                                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                                                    <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
-                                                    <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                                                </svg>
-                                                {att.name}
-                                            </span>
-                                        {/if}
-                                    {/each}
-                                </div>
-                            {/if}
                             <p>{turn.content}</p>
                         </div>
                     {:else if turn.isCode}
@@ -238,24 +238,24 @@
                 {#if $chat.phase !== 'idle'}
                     {#each $chat.conversation as turn, i}
                         {#if turn.role === 'user' && i >= history().length}
+                            {#if turn.attachments && turn.attachments.length > 0}
+                                <div class="user-attachments">
+                                    {#each turn.attachments as att}
+                                        {#if att.type === 'image'}
+                                            <img src={att.dataUrl} alt={att.name} class="bubble-img" />
+                                        {:else}
+                                            <span class="file-island">
+                                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                                    <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
+                                                    <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                                                </svg>
+                                                {att.name}
+                                            </span>
+                                        {/if}
+                                    {/each}
+                                </div>
+                            {/if}
                             <div class="user-bubble">
-                                {#if turn.attachments && turn.attachments.length > 0}
-                                    <div class="bubble-attachments">
-                                        {#each turn.attachments as att}
-                                            {#if att.type === 'image'}
-                                                <img src={att.dataUrl} alt={att.name} class="bubble-img" />
-                                            {:else}
-                                                <span class="bubble-file-badge">
-                                                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                                                        <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
-                                                        <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                                                    </svg>
-                                                    {att.name}
-                                                </span>
-                                            {/if}
-                                        {/each}
-                                    </div>
-                                {/if}
                                 <p>{turn.content}</p>
                             </div>
                         {/if}
@@ -655,26 +655,32 @@
         object-fit: cover;
     }
 
-    .bubble-attachments {
+    .user-attachments {
         display: flex;
-        gap: 6px;
+        gap: 8px;
         flex-wrap: wrap;
-        margin-bottom: 6px;
+        justify-content: flex-end;
+        margin-bottom: 4px;
     }
 
-    .bubble-file-badge {
+    .file-island {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
+        gap: 6px;
         font-size: 12px;
         font-weight: 500;
         color: var(--text-secondary);
-        background: rgba(0, 0, 0, 0.05);
-        padding: 3px 8px;
-        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        border: 1px solid rgba(0, 0, 0, 0.06);
+        padding: 6px 12px 6px 8px;
+        border-radius: 10px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
     }
-    .bubble-file-badge svg {
-        opacity: 0.6;
+    .file-island svg {
+        opacity: 0.5;
+        flex-shrink: 0;
     }
 
     /* ---- AI bubble — frosted glass ---- */
