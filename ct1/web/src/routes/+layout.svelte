@@ -5,6 +5,7 @@
     import { onMount, onDestroy } from 'svelte';
     import Sidebar from '$lib/components/Sidebar.svelte';
     import { sidebarOpen } from '$lib/stores/conversations';
+    import { preferences, toggleTheme } from '$lib/stores/preferences';
 
     onMount(() => connect());
     onDestroy(() => disconnect());
@@ -121,6 +122,23 @@
         </div>
 
         <nav class="nav">
+            <button class="theme-toggle" onclick={toggleTheme} title="Toggle theme ({$preferences.theme})">
+                {#if $preferences.theme === 'dark'}
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <path d="M13.5 8.5a5.5 5.5 0 01-6-6 5.5 5.5 0 106 6z" stroke="currentColor" stroke-width="1.3"/>
+                    </svg>
+                {:else if $preferences.theme === 'light'}
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.3"/>
+                        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                {:else}
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                        <rect x="1.5" y="2" width="13" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+                        <path d="M6 14h4M8 11v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    </svg>
+                {/if}
+            </button>
             <a href="/journal" class="nav-link" class:active={$page.url.pathname === '/journal'}>Journal</a>
             <a href="/settings" class="nav-link" class:active={$page.url.pathname === '/settings'}>Settings</a>
         </nav>
@@ -180,12 +198,12 @@
         align-items: center;
         padding: 0 28px;
         gap: 16px;
-        background: rgba(255, 255, 255, 0.6);
+        background: var(--bubble-strong);
         backdrop-filter: blur(48px) saturate(1.4);
         -webkit-backdrop-filter: blur(48px) saturate(1.4);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.7);
+        border-bottom: var(--bubble-border);
         box-shadow:
-            0 1px 0 rgba(255, 255, 255, 0.5),
+            0 1px 0 rgba(255, 255, 255, 0.1),
             0 4px 24px rgba(0, 0, 0, 0.04);
         flex-shrink: 0;
         z-index: 100;
@@ -206,6 +224,23 @@
         justify-content: center;
     }
     .sidebar-toggle:hover {
+        color: var(--text);
+        background: rgba(0, 0, 0, 0.04);
+    }
+
+    .theme-toggle {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        padding: 7px;
+        border-radius: var(--radius-pill);
+        transition: color var(--transition), background var(--transition);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .theme-toggle:hover {
         color: var(--text);
         background: rgba(0, 0, 0, 0.04);
     }
