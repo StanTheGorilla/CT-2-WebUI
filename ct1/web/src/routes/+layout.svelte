@@ -1,8 +1,13 @@
 <script lang="ts">
     import '../app.css';
-    import { chat } from '$lib/stores/chat';
+    import { chat, connect, disconnect } from '$lib/stores/chat';
     import { page } from '$app/stores';
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
+    import Sidebar from '$lib/components/Sidebar.svelte';
+    import { sidebarOpen } from '$lib/stores/conversations';
+
+    onMount(() => connect());
+    onDestroy(() => disconnect());
 
     let { children } = $props();
 
@@ -12,6 +17,7 @@
         planning: 'Planning...',
         consulting: 'Consulting design...',
         generating: 'Generating...',
+        polishing: 'Polishing CSS...',
         validating: 'Validating...',
         fixing: 'Fixing issues...',
         done: 'Done',
@@ -96,6 +102,11 @@
     </div>
 
     <header class="topbar">
+        <button class="sidebar-toggle" onclick={() => sidebarOpen.update(v => !v)}>
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <path d="M2 4.5h14M2 9h14M2 13.5h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+        </button>
         <a href="/" class="logo">
             <span class="logo-mark">CT</span><span class="logo-sep">/</span><span class="logo-ver">2</span>
         </a>
@@ -115,7 +126,9 @@
         </nav>
     </header>
 
-    <main>
+    <Sidebar />
+
+    <main class:sidebar-open={$sidebarOpen}>
         {@render children()}
     </main>
 </div>
@@ -152,7 +165,12 @@
         padding: 0;
         background: none;
         border: none;
+        border-radius: 0;
+        outline: none;
+        overflow: hidden;
+        box-shadow: none;
         user-select: none;
+        scrollbar-width: none;
     }
 
     /* ---- Top bar — frosted glass bubble ---- */
@@ -172,6 +190,24 @@
         flex-shrink: 0;
         z-index: 100;
         position: relative;
+    }
+
+    .sidebar-toggle {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        padding: 6px;
+        border-radius: var(--radius-sm);
+        transition: color var(--transition), background var(--transition);
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .sidebar-toggle:hover {
+        color: var(--text);
+        background: rgba(0, 0, 0, 0.04);
     }
 
     .logo {
@@ -254,5 +290,9 @@
         overflow: hidden;
         position: relative;
         z-index: 1;
+        transition: margin-left var(--transition-slow);
+    }
+    main.sidebar-open {
+        margin-left: 280px;
     }
 </style>
