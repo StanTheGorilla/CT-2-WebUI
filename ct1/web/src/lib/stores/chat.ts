@@ -285,6 +285,53 @@ export function newConversation() {
     chat.set({ ...initial });
 }
 
+export async function setFeedback(turnIndex: number, feedback: number) {
+    let messageId: string | undefined;
+    const unsub = chat.subscribe((s) => {
+        messageId = s.conversation[turnIndex]?.messageId;
+    });
+    unsub();
+
+    if (messageId) {
+        await fetch(`/api/messages/${messageId}/feedback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ feedback }),
+        });
+    }
+
+    chat.update((s) => {
+        if (s.conversation[turnIndex]) {
+            s.conversation[turnIndex].feedback = feedback;
+        }
+        return s;
+    });
+}
+
+export function regenerate() {
+    let lastUserMsg = '';
+    let lastAttachments: Attachment[] = [];
+
+    chat.update((s) => {
+        // Remove last assistant turn
+        if (s.conversation.length >= 1 && s.conversation[s.conversation.length - 1].role === 'assistant') {
+            s.conversation = s.conversation.slice(0, -1);
+        }
+        // Get and remove last user turn
+        const lastUser = s.conversation[s.conversation.length - 1];
+        if (lastUser && lastUser.role === 'user') {
+            lastUserMsg = lastUser.content;
+            lastAttachments = lastUser.attachments || [];
+            s.conversation = s.conversation.slice(0, -1);
+        }
+        return s;
+    });
+
+    if (lastUserMsg) {
+        sendThink(lastUserMsg, lastAttachments);
+    }
+}
+
 export function sendThink(goal: string, attachments: Attachment[] = []) {
     let conv: Turn[] = [];
     const unsub = chat.subscribe((s) => { conv = s.conversation; });

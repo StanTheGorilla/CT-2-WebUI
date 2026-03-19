@@ -1,6 +1,5 @@
 <script lang="ts">
-    import { onMount, onDestroy } from 'svelte';
-    import { chat, connect, disconnect } from '$lib/stores/chat';
+    import { chat, setFeedback, regenerate } from '$lib/stores/chat';
     import { render } from '$lib/markdown';
     import ChatInput from '$lib/components/ChatInput.svelte';
     import SpecialistCard from '$lib/components/SpecialistCard.svelte';
@@ -8,16 +7,12 @@
     import PlanCard from '$lib/components/PlanCard.svelte';
     import PreviewPanel from '$lib/components/PreviewPanel.svelte';
 
-    onMount(() => connect(() => { showPreview = false; didGenerate = false; }));
-    onDestroy(() => disconnect());
-
     let isCode = $derived(
         $chat.route === 'ROUTE_DESIGN' || $chat.route === 'ROUTE_CODE'
     );
 
     let showPreview = $state(false);
     let previewOverride = $state<string | null>(null);
-    // During active generation/editing, streamingText takes priority over stale override
     let previewCode = $derived(
         ($chat.phase === 'generating' || $chat.phase === 'fixing' || $chat.phase === 'polishing') && $chat.streamingText
             ? $chat.streamingText
@@ -25,14 +20,12 @@
     );
     let codeExpanded = $state(false);
 
-    // Trace: expandable pills for each pipeline stage
     let traceOpen = $state<string | null>(null);
     function toggleTrace(key: string) { traceOpen = traceOpen === key ? null : key; }
     let hasThinking = $derived(!!$chat.thinking || !!$chat.draftThinking);
     let hasSpecialistTrace = $derived(!!$chat.specialistStream);
     let hasValidation = $derived(!!$chat.review || $chat.validationIssues.length > 0);
 
-    // Preview panel resize
     let previewWidth = $state(Math.min(Math.round(window.innerWidth * 0.44), 700));
     let resizing = $state(false);
     let previewEntered = $state(false);
@@ -77,21 +70,17 @@
         showPreview = true;
     }
 
-    // Track whether a generation happened in THIS session (not a stale store from SPA nav)
     let didGenerate = $state(false);
 
     $effect(() => {
         if ($chat.phase === 'generating' || $chat.phase === 'fixing') {
             didGenerate = true;
         }
-        // When new code arrives, clear stale override so preview shows latest
         if ($chat.phase === 'done' && isCode && $chat.response && didGenerate) {
             previewOverride = null;
             didGenerate = false;
         }
         if ($chat.phase === 'routing') {
-            // Don't touch showPreview — user controls that
-            // If preview is open, keep showing the last code until new code arrives
             if (showPreview && !previewOverride) {
                 const lastCode = $chat.response || $chat.streamingText;
                 if (lastCode) previewOverride = lastCode;
@@ -103,7 +92,7 @@
     });
 
     function previewCurrentCode() {
-        previewOverride = null;  // clear any history override
+        previewOverride = null;
         showPreview = !showPreview;
     }
 
@@ -128,7 +117,6 @@
         }
     });
 
-    // Always scroll to bottom on new user message
     $effect(() => {
         if ($chat.phase === 'routing') {
             userNearBottom = true;
@@ -157,26 +145,55 @@
         'ROUTE_CODE': 'var(--text)',
         'ROUTE_DIRECT': 'var(--success)',
     };
+
+    function extOf(name: string): string {
+        const i = name.lastIndexOf('.');
+        return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
+    }
+
+    function extColor(ext: string): string {
+        const map: Record<string, string> = {
+            html: '#E8850C', htm: '#E8850C',
+            css: '#5B8DEF', scss: '#5B8DEF', less: '#5B8DEF',
+            js: '#D4AA00', ts: '#3178C6', jsx: '#D4AA00', tsx: '#3178C6',
+            py: '#2DA44E',
+            json: '#9E9E96', yaml: '#9E9E96', yml: '#9E9E96', toml: '#9E9E96',
+            md: '#9E9E96', txt: '#9E9E96',
+            svg: '#E8850C', xml: '#9E9E96',
+            sql: '#5B8DEF',
+            go: '#00ADD8', rs: '#CE422B', java: '#B07219', rb: '#CC342D',
+            c: '#555555', cpp: '#F34B7D', h: '#555555', hpp: '#F34B7D',
+        };
+        return map[ext] || '#9E9E96';
+    }
+
+    function outputExt(): string {
+        return $chat.plan?.output_type === 'python_script' ? 'py'
+            : $chat.plan?.output_type === 'javascript' ? 'js' : 'html';
+    }
+
+    function formatChars(n: number): string {
+        return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+    }
 </script>
 
 <div class="page">
     <div class="chat-panel" class:resizing-layout={resizing} style={previewVisible ? `margin-right: ${previewWidth}px` : ''}>
         <div class="messages" bind:this={messagesEl} onscroll={onMessagesScroll}>
             <div class="messages-inner">
+                <!-- ==================== HISTORY ==================== -->
                 {#each history() as turn, idx}
                     {#if turn.role === 'user'}
                         {#if turn.attachments && turn.attachments.length > 0}
-                            <div class="user-attachments" style="animation-delay: {idx * 30}ms">
+                            <div class="att-row" style="animation-delay: {idx * 30}ms">
                                 {#each turn.attachments as att}
                                     {#if att.type === 'image'}
-                                        <img src={att.dataUrl} alt={att.name} class="bubble-img" />
+                                        <img src={att.dataUrl} alt={att.name} class="att-img" />
                                     {:else}
-                                        <span class="file-island">
-                                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                                <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
-                                                <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                                            </svg>
-                                            {att.name}
+                                        {@const ext = extOf(att.name)}
+                                        <span class="file-chip">
+                                            <span class="ext-dot" style="background: {extColor(ext)}"></span>
+                                            <span class="chip-name">{att.name}</span>
                                         </span>
                                     {/if}
                                 {/each}
@@ -186,75 +203,125 @@
                             <p>{turn.content}</p>
                         </div>
                     {:else if turn.isCode}
-                        {#if turn.route}
-                            <div class="badge-row">
-                                <span class="route-badge" style="background: {routeColors[turn.route] || 'var(--accent)'}">
-                                    {routeLabels[turn.route] || turn.route}
-                                </span>
-                            </div>
-                        {/if}
-                        {#if turn.plan && turn.plan.components.length > 0}
-                            <PlanCard plan={turn.plan} />
-                        {/if}
-                        {#if turn.specialistData}
-                            <SpecialistCard data={turn.specialistData} />
-                        {/if}
-                        <div class="file-card" style="animation-delay: {idx * 30}ms">
-                            <div class="file-row">
-                                <svg class="file-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                    <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
-                                    <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                                </svg>
-                                <span class="file-name">output.html</span>
-                                <span class="file-size">{turn.content.length.toLocaleString()} chars</span>
-                                <div class="file-actions">
-                                    <button class="file-btn" onclick={() => previewHistoryCode(turn.content)} title="Preview">
-                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                                            <rect x="1.5" y="2.5" width="11" height="9" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-                                            <path d="M5.5 5.5l3 1.5-3 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-                                        </svg>
-                                    </button>
-                                    <button class="file-btn" onclick={() => downloadBlob(turn.content)} title="Download">
-                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                                            <path d="M7 2v7.5M4 7.5L7 10.5l3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                                            <path d="M2 11.5h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                                        </svg>
-                                    </button>
+                        <div class="bubble-row">
+                            {#if turn.route}
+                                <div class="route-row">
+                                    <span class="route-tag" style="--rc: {routeColors[turn.route] || 'var(--accent)'}">
+                                        {routeLabels[turn.route] || turn.route}
+                                    </span>
+                                </div>
+                            {/if}
+                            {#if turn.plan && turn.plan.components.length > 0}
+                                <PlanCard plan={turn.plan} />
+                            {/if}
+                            {#if turn.specialistData}
+                                <SpecialistCard data={turn.specialistData} />
+                            {/if}
+                            <div class="output-card" style="animation-delay: {idx * 30}ms">
+                                <div class="output-bar">
+                                    <span class="ext-badge" style="--ec: {extColor('html')}">HTML</span>
+                                    <span class="output-name">output.html</span>
+                                    <span class="output-meta">{formatChars(turn.content.length)}</span>
+                                    <div class="output-actions">
+                                        <button class="act-btn" onclick={() => previewHistoryCode(turn.content)} title="Preview">
+                                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h8A1.5 1.5 0 0113 3.5v8a1.5 1.5 0 01-1.5 1.5h-8A1.5 1.5 0 012 11.5v-8z" stroke="currentColor" stroke-width="1.1"/><path d="M6 6l3 1.5-3 1.5V6z" fill="currentColor" opacity="0.6"/></svg>
+                                        </button>
+                                        <button class="act-btn" onclick={() => downloadBlob(turn.content)} title="Download">
+                                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 2.5v7M5 7.5l2.5 2.5L10 7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11.5h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
-                        {#if turn.reflection}
-                            {@const hsc = turn.reflection.self_score ?? 0.5}
-                            {@const hscColor = hsc >= 0.7 ? 'var(--success)' : hsc >= 0.4 ? 'var(--warning)' : 'var(--error)'}
-                            <div class="trace-row">
-                                <span class="score-chip" style="--sc-color: {hscColor}">
-                                    <span class="trace-dot" style="background: {hscColor}; box-shadow: 0 0 6px {hscColor}40"></span>
-                                    {(hsc * 100).toFixed(0)}%
-                                </span>
+                            {#if turn.reflection && turn.reflection.self_score > 0}
+                                {@const hsc = turn.reflection.self_score ?? 0.5}
+                                {@const hscColor = hsc >= 0.7 ? 'var(--success)' : hsc >= 0.4 ? 'var(--warning)' : 'var(--error)'}
+                                <div class="summary-row">
+                                    <span class="summary-chip" style="--sc: {hscColor}">
+                                        <span class="summary-dot" style="background: {hscColor}"></span>
+                                        {(hsc * 100).toFixed(0)}%
+                                    </span>
+                                </div>
+                            {/if}
+                            <div class="feedback-row">
+                                <button
+                                    class="feedback-btn"
+                                    class:active={turn.feedback === 1}
+                                    onclick={() => setFeedback(idx, turn.feedback === 1 ? 0 : 1)}
+                                    title="Good response"
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                        <path d="M4 8l3 3 5-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                                <button
+                                    class="feedback-btn bad"
+                                    class:active={turn.feedback === -1}
+                                    onclick={() => setFeedback(idx, turn.feedback === -1 ? 0 : -1)}
+                                    title="Bad response"
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                    </svg>
+                                </button>
+                                <button class="feedback-btn regen" onclick={regenerate} title="Regenerate response">
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                        <path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                        <path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
                             </div>
-                        {/if}
+                        </div>
                     {:else}
-                        <div class="ai-bubble" style="animation-delay: {idx * 30}ms">
-                            {@html render(turn.content)}
+                        <div class="bubble-row">
+                            <div class="ai-bubble" style="animation-delay: {idx * 30}ms">
+                                {@html render(turn.content)}
+                            </div>
+                            <div class="feedback-row">
+                                <button
+                                    class="feedback-btn"
+                                    class:active={turn.feedback === 1}
+                                    onclick={() => setFeedback(idx, turn.feedback === 1 ? 0 : 1)}
+                                    title="Good response"
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                        <path d="M4 8l3 3 5-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                                <button
+                                    class="feedback-btn bad"
+                                    class:active={turn.feedback === -1}
+                                    onclick={() => setFeedback(idx, turn.feedback === -1 ? 0 : -1)}
+                                    title="Bad response"
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                    </svg>
+                                </button>
+                                <button class="feedback-btn regen" onclick={regenerate} title="Regenerate response">
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                        <path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                        <path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                            </div>
                         </div>
                     {/if}
                 {/each}
 
+                <!-- ==================== ACTIVE TURN ==================== -->
                 {#if $chat.phase !== 'idle'}
                     {#each $chat.conversation as turn, i}
                         {#if turn.role === 'user' && i >= history().length}
                             {#if turn.attachments && turn.attachments.length > 0}
-                                <div class="user-attachments">
+                                <div class="att-row">
                                     {#each turn.attachments as att}
                                         {#if att.type === 'image'}
-                                            <img src={att.dataUrl} alt={att.name} class="bubble-img" />
+                                            <img src={att.dataUrl} alt={att.name} class="att-img" />
                                         {:else}
-                                            <span class="file-island">
-                                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                                    <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
-                                                    <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                                                </svg>
-                                                {att.name}
+                                            {@const ext = extOf(att.name)}
+                                            <span class="file-chip">
+                                                <span class="ext-dot" style="background: {extColor(ext)}"></span>
+                                                <span class="chip-name">{att.name}</span>
                                             </span>
                                         {/if}
                                     {/each}
@@ -267,9 +334,10 @@
                     {/each}
                 {/if}
 
+                <!-- Route badge -->
                 {#if $chat.route}
-                    <div class="badge-row">
-                        <span class="route-badge" style="background: {routeColors[$chat.route] || 'var(--accent)'}">
+                    <div class="route-row">
+                        <span class="route-tag" style="--rc: {routeColors[$chat.route] || 'var(--accent)'}">
                             {routeLabels[$chat.route] || $chat.route}
                         </span>
                     </div>
@@ -283,25 +351,25 @@
                     <PlanCard plan={$chat.plan} />
                 {/if}
 
-                <!-- Phase progress cards — always visible during active phases -->
+                <!-- ==================== PIPELINE STEPS ==================== -->
                 {#if $chat.phase === 'routing'}
-                    <div class="working-card">
-                        <span class="dot-pulse"></span>
-                        <span class="working-label">Classifying request...</span>
+                    <div class="step">
+                        <span class="step-dot pulse"></span>
+                        <span class="step-text">Classifying...</span>
                     </div>
                 {/if}
 
                 {#if $chat.phase === 'planning'}
-                    <div class="working-card">
-                        <span class="dot-pulse"></span>
-                        <span class="working-label">Building task plan...</span>
+                    <div class="step">
+                        <span class="step-dot pulse"></span>
+                        <span class="step-text">Planning...</span>
                     </div>
                 {/if}
 
                 {#if $chat.phase === 'consulting'}
-                    <div class="working-card specialist-wc">
-                        <span class="dot-pulse specialist-dot"></span>
-                        <span class="working-label">Consulting design specialist...</span>
+                    <div class="step specialist">
+                        <span class="step-dot pulse specialist"></span>
+                        <span class="step-text">Consulting specialist...</span>
                     </div>
                 {/if}
 
@@ -309,87 +377,77 @@
                     <SpecialistCard data={$chat.specialistData} />
                 {/if}
 
-                <!-- Generating: show card immediately, fill in as tokens arrive -->
+                <!-- ==================== GENERATION ==================== -->
                 {#if $chat.phase === 'generating' || $chat.phase === 'fixing'}
-                    <div class="stream-card brain">
-                        <div class="stream-bar">
-                            <span class="stream-indicator brain"></span>
-                            <span class="stream-title">
-                                {$chat.phase === 'fixing' ? 'Fixing issues' : $chat.editing ? 'Editing code' : isCode ? 'Generating code' : 'Responding'}
+                    <div class="gen-card" class:fixing={$chat.phase === 'fixing'}>
+                        <div class="gen-bar">
+                            <span class="gen-indicator"></span>
+                            <span class="gen-title">
+                                {$chat.phase === 'fixing' ? 'Fixing' : $chat.editing ? 'Editing' : isCode ? 'Generating' : 'Writing'}
                             </span>
-                            <span class="stream-meta">
+                            <span class="gen-meta">
                                 {#if $chat.editing}
-                                    patching...
+                                    patching
+                                {:else if $chat.streamingText}
+                                    {formatChars($chat.streamingText.length)}
                                 {:else}
-                                    {$chat.streamingText ? `${$chat.streamingText.length} chars` : '...'}
+                                    ...
                                 {/if}
                             </span>
                             {#if isCode && !$chat.editing && $chat.streamingText.length > 200}
-                                <button class="stream-preview-btn" onclick={previewCurrentCode}>
+                                <button class="preview-btn" onclick={previewCurrentCode}>
                                     {showPreview ? 'Hide' : 'Preview'}
                                 </button>
                             {/if}
                         </div>
                         {#if !isCode && $chat.streamingText}
-                            <pre class="stream-body">{$chat.streamingText}</pre>
+                            <div class="gen-body">
+                                {@html render($chat.streamingText)}
+                            </div>
                         {/if}
                     </div>
 
                     {#if $chat.streamingThinking}
-                        <details class="thinking-details" open>
-                            <summary class="thinking-summary">
-                                <span class="thinking-dot"></span>
+                        <details class="think-block" open>
+                            <summary class="think-header">
+                                <span class="think-dot"></span>
                                 Thinking
-                                <span class="thinking-len">{$chat.streamingThinking.length} chars</span>
+                                <span class="think-meta">{formatChars($chat.streamingThinking.length)}</span>
                             </summary>
-                            <pre class="thinking-body">{$chat.streamingThinking}</pre>
+                            <pre class="think-body">{$chat.streamingThinking}</pre>
                         </details>
-                    {/if}
-
-                    {#if $chat.draft}
-                        <div class="working-card">
-                            <span class="dot-pulse"></span>
-                            <span class="working-label">Reviewing output...</span>
-                        </div>
                     {/if}
                 {/if}
 
                 {#if $chat.phase === 'polishing'}
-                    <div class="stream-card polish-sc">
-                        <div class="stream-bar">
-                            <span class="stream-indicator polish-ind"></span>
-                            <span class="stream-title">Polishing CSS</span>
-                            <span class="stream-meta">
-                                {$chat.streamingText ? `${$chat.streamingText.length} chars` : '...'}
-                            </span>
-                            {#if $chat.streamingText.length > 200}
-                                <button class="stream-preview-btn" onclick={previewCurrentCode}>
-                                    {showPreview ? 'Hide' : 'Preview'}
-                                </button>
-                            {/if}
-                        </div>
+                    <div class="step polish">
+                        <span class="step-dot pulse polish"></span>
+                        <span class="step-text">Polishing CSS...</span>
+                        <span class="step-meta">{formatChars($chat.streamingText.length)}</span>
+                        {#if $chat.streamingText.length > 200}
+                            <button class="preview-btn sm" onclick={previewCurrentCode}>
+                                {showPreview ? 'Hide' : 'Preview'}
+                            </button>
+                        {/if}
                     </div>
                 {/if}
 
                 {#if $chat.phase === 'validating'}
-                    <div class="working-card">
-                        <span class="dot-pulse"></span>
-                        <span class="working-label">Validating output...</span>
+                    <div class="step">
+                        <span class="step-dot pulse"></span>
+                        <span class="step-text">Validating...</span>
                     </div>
                 {/if}
 
                 {#if $chat.validationIssues.length > 0 && ($chat.phase === 'validating' || $chat.phase === 'fixing')}
-                    <div class="validation-card">
-                        <div class="validation-bar">
-                            <span class="validation-dot"></span>
-                            <span>Validation</span>
+                    <div class="issues-card">
+                        <div class="issues-header">
+                            <span class="issues-label">Issues found</span>
                             {#if $chat.review}
-                                <span class="verdict" class:pass={$chat.review.pass} class:fail={!$chat.review.pass}>
-                                    {$chat.review.pass ? 'PASS' : 'FAIL'}
-                                </span>
+                                <span class="verdict" class:pass={$chat.review.pass}>{$chat.review.pass ? 'PASS' : 'FAIL'}</span>
                             {/if}
                         </div>
-                        <ul>
+                        <ul class="issues-list">
                             {#each $chat.validationIssues as issue}
                                 <li>{issue}</li>
                             {/each}
@@ -397,73 +455,103 @@
                     </div>
                 {/if}
 
-                <!-- Text response (non-code routes) -->
+                <!-- ==================== TEXT RESPONSE ==================== -->
                 {#if $chat.response && !isCode}
-                    <div class="ai-bubble response-bubble">
+                    <div class="ai-bubble">
                         {@html render($chat.response)}
                     </div>
                 {/if}
 
-                <!-- Trace: expandable pipeline details -->
-                {#if hasSpecialistTrace || hasThinking || hasValidation || $chat.reflection}
+                <!-- ==================== POST-RESPONSE ==================== -->
+
+                <!-- Output file card (code responses) -->
+                {#if $chat.response && isCode}
+                    {@const ext = outputExt()}
+                    <div class="output-card">
+                        <div class="output-bar">
+                            <span class="ext-badge" style="--ec: {extColor(ext)}">{ext.toUpperCase()}</span>
+                            <span class="output-name">output.{ext}</span>
+                            <span class="output-meta">{formatChars($chat.response.length)}</span>
+                            <div class="output-actions">
+                                <button class="act-btn" onclick={() => codeExpanded = !codeExpanded} title="Source" class:active={codeExpanded}>
+                                    <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M5.5 3.5L2.5 7.5l3 4M9.5 3.5l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                </button>
+                                {#if ext !== 'py'}
+                                    <button class="act-btn" onclick={previewCurrentCode} title={showPreview ? 'Hide preview' : 'Preview'} class:active={showPreview}>
+                                        <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h8A1.5 1.5 0 0113 3.5v8a1.5 1.5 0 01-1.5 1.5h-8A1.5 1.5 0 012 11.5v-8z" stroke="currentColor" stroke-width="1.1"/><path d="M6 6l3 1.5-3 1.5V6z" fill="currentColor" opacity="0.6"/></svg>
+                                    </button>
+                                {/if}
+                                <button class="act-btn" onclick={downloadCode} title="Download">
+                                    <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 2.5v7M5 7.5l2.5 2.5L10 7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11.5h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                        {#if codeExpanded}
+                            <pre class="output-source">{$chat.response}</pre>
+                        {/if}
+                    </div>
+                {/if}
+
+                <!-- Summary + Trace -->
+                {#if hasSpecialistTrace || hasThinking || hasValidation || ($chat.reflection && $chat.reflection.self_score > 0)}
                     <div class="trace-row">
+                        {#if $chat.reflection && $chat.reflection.self_score > 0}
+                            {@const sc = $chat.reflection.self_score ?? 0.5}
+                            {@const scColor = sc >= 0.7 ? 'var(--success)' : sc >= 0.4 ? 'var(--warning)' : 'var(--error)'}
+                            <button class="trace-pill score" class:open={traceOpen === 'reflection'} onclick={() => toggleTrace('reflection')} style="--tc: {scColor}">
+                                <span class="trace-dot" style="background: {scColor}"></span>
+                                {(sc * 100).toFixed(0)}%
+                            </button>
+                        {/if}
                         {#if hasThinking}
-                            <button class="trace-pill" class:open={traceOpen === 'thinking'} onclick={() => toggleTrace('thinking')}>
+                            <button class="trace-pill" class:open={traceOpen === 'thinking'} onclick={() => toggleTrace('thinking')} style="--tc: var(--brain)">
                                 <span class="trace-dot" style="background: var(--brain)"></span>
                                 Thinking
                             </button>
                         {/if}
                         {#if hasSpecialistTrace}
-                            <button class="trace-pill" class:open={traceOpen === 'specialist'} onclick={() => toggleTrace('specialist')}>
+                            <button class="trace-pill" class:open={traceOpen === 'specialist'} onclick={() => toggleTrace('specialist')} style="--tc: var(--specialist)">
                                 <span class="trace-dot" style="background: var(--specialist)"></span>
                                 Specialist
                             </button>
                         {/if}
                         {#if hasValidation}
-                            <button class="trace-pill" class:open={traceOpen === 'validation'} onclick={() => toggleTrace('validation')}>
+                            <button class="trace-pill" class:open={traceOpen === 'validation'} onclick={() => toggleTrace('validation')} style="--tc: var(--warning)">
                                 <span class="trace-dot" style="background: var(--warning)"></span>
                                 Validation
                                 {#if $chat.review}
-                                    <span class="trace-verdict" class:pass={$chat.review.pass}>{$chat.review.pass ? 'PASS' : 'FAIL'}</span>
+                                    <span class="trace-verdict" class:pass={$chat.review.pass}>{$chat.review.pass ? 'OK' : 'FAIL'}</span>
                                 {/if}
-                            </button>
-                        {/if}
-                        {#if $chat.reflection}
-                            {@const sc = $chat.reflection.self_score ?? 0.5}
-                            {@const scColor = sc >= 0.7 ? 'var(--success)' : sc >= 0.4 ? 'var(--warning)' : 'var(--error)'}
-                            <button class="trace-pill" class:open={traceOpen === 'reflection'} onclick={() => toggleTrace('reflection')}>
-                                <span class="trace-dot" style="background: {scColor}; box-shadow: 0 0 6px {scColor}40"></span>
-                                {(sc * 100).toFixed(0)}%
                             </button>
                         {/if}
                     </div>
                 {/if}
 
                 {#if traceOpen === 'thinking' && hasThinking}
-                    <div class="trace-card thinking-trace">
+                    <div class="trace-card" style="--tbc: var(--brain)">
                         {#if $chat.draftThinking}
                             <div class="trace-section">
                                 <span class="trace-label">Draft reasoning</span>
-                                <pre class="trace-body">{$chat.draftThinking}</pre>
+                                <pre class="trace-pre">{$chat.draftThinking}</pre>
                             </div>
                         {/if}
                         {#if $chat.thinking}
                             <div class="trace-section">
                                 <span class="trace-label">Final reasoning</span>
-                                <pre class="trace-body">{$chat.thinking}</pre>
+                                <pre class="trace-pre">{$chat.thinking}</pre>
                             </div>
                         {/if}
                     </div>
                 {/if}
 
                 {#if traceOpen === 'specialist' && hasSpecialistTrace}
-                    <div class="trace-card specialist-trace">
-                        <pre class="trace-body">{$chat.specialistStream}</pre>
+                    <div class="trace-card" style="--tbc: var(--specialist)">
+                        <pre class="trace-pre">{$chat.specialistStream}</pre>
                     </div>
                 {/if}
 
                 {#if traceOpen === 'validation' && hasValidation}
-                    <div class="trace-card validation-trace">
+                    <div class="trace-card" style="--tbc: var(--warning)">
                         {#if $chat.validationIssues.length > 0}
                             <ul class="trace-issues">
                                 {#each $chat.validationIssues as issue}
@@ -481,49 +569,11 @@
                 {/if}
 
                 {#if traceOpen === 'reflection' && $chat.reflection?.lesson}
-                    <div class="trace-card reflection-trace">
+                    <div class="trace-card" style="--tbc: var(--success)">
                         <div class="trace-section">
-                            <span class="trace-label">Lesson learned</span>
+                            <span class="trace-label">Lesson</span>
                             <p class="trace-text">{$chat.reflection.lesson}</p>
                         </div>
-                    </div>
-                {/if}
-
-                <!-- Code file attachment (bottom) -->
-                {#if $chat.response && isCode}
-                    <div class="file-card">
-                        <div class="file-row">
-                            <svg class="file-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
-                                <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                            </svg>
-                            <span class="file-name">output.{$chat.plan?.output_type === 'python_script' ? 'py' : $chat.plan?.output_type === 'javascript' ? 'js' : 'html'}</span>
-                            <span class="file-size">{$chat.response.length.toLocaleString()} chars</span>
-                            <div class="file-actions">
-                                <button class="file-btn" onclick={() => codeExpanded = !codeExpanded} title="View source">
-                                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                                        <path d="M5 3L2 7l3 4M9 3l3 4-3 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                                    </svg>
-                                </button>
-                                {#if $chat.plan?.output_type !== 'python_script'}
-                                    <button class="file-btn" onclick={previewCurrentCode} title={showPreview ? 'Hide preview' : 'Preview'}>
-                                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                                            <rect x="1.5" y="2.5" width="11" height="9" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-                                            <path d="M5.5 5.5l3 1.5-3 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-                                        </svg>
-                                    </button>
-                                {/if}
-                                <button class="file-btn" onclick={downloadCode} title="Download file">
-                                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                                        <path d="M7 2v7.5M4 7.5L7 10.5l3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                                        <path d="M2 11.5h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                                    </svg>
-                                </button>
-                            </div>
-                        </div>
-                        {#if codeExpanded}
-                            <pre class="attachment-code">{$chat.response}</pre>
-                        {/if}
                     </div>
                 {/if}
             </div>
@@ -557,11 +607,10 @@
 </div>
 
 <style>
-    /* ---- Page layout ---- */
-    .page {
-        height: 100%;
-        position: relative;
-    }
+    /* ================================================================
+       PAGE LAYOUT
+       ================================================================ */
+    .page { height: 100%; position: relative; }
 
     .chat-panel {
         display: flex;
@@ -569,698 +618,587 @@
         height: 100%;
         transition: margin-right 350ms cubic-bezier(0.4, 0, 0.2, 1);
     }
-    .chat-panel.resizing-layout {
-        transition: none;
-    }
+    .chat-panel.resizing-layout { transition: none; }
 
-    /* Preview panel: fixed right, pushes chat via margin */
     .preview-panel {
         position: fixed;
-        top: 56px;
-        right: 0;
-        bottom: 0;
+        top: 56px; right: 0; bottom: 0;
         z-index: 50;
     }
     .preview-panel.entering {
         animation: slideInRight 350ms cubic-bezier(0.4, 0, 0.2, 1) both;
     }
-    .preview-panel.resizing {
-        user-select: none;
-    }
-    .preview-panel.resizing :global(*) {
-        pointer-events: none;
-    }
+    .preview-panel.resizing { user-select: none; }
+    .preview-panel.resizing :global(*) { pointer-events: none; }
 
-    /* Drag handle on left edge */
     .resize-handle {
-        position: absolute;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 6px;
-        cursor: col-resize;
-        z-index: 10;
+        position: absolute; left: 0; top: 0; bottom: 0;
+        width: 6px; cursor: col-resize; z-index: 10;
         background: transparent;
         transition: background var(--transition);
     }
     .resize-handle::after {
         content: '';
-        position: absolute;
-        left: 2px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 2px;
-        height: 32px;
-        border-radius: 1px;
-        background: rgba(0, 0, 0, 0.12);
+        position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+        width: 2px; height: 32px; border-radius: 1px;
+        background: rgba(0, 0, 0, 0.10);
         transition: background var(--transition), height var(--transition);
     }
-    .resize-handle:hover::after,
-    .resizing .resize-handle::after {
-        background: rgba(0, 0, 0, 0.28);
-        height: 48px;
+    .resize-handle:hover::after, .resizing .resize-handle::after {
+        background: rgba(0, 0, 0, 0.24); height: 48px;
     }
 
     .messages {
-        flex: 1;
-        overflow-y: auto;
-        scroll-behavior: smooth;
-        position: relative;
-        z-index: 1;
-        scrollbar-width: none;
-        -ms-overflow-style: none;
+        flex: 1; overflow-y: auto; scroll-behavior: smooth;
+        position: relative; z-index: 1;
+        scrollbar-width: none; -ms-overflow-style: none;
     }
-    .messages::-webkit-scrollbar {
-        display: none;
-    }
+    .messages::-webkit-scrollbar { display: none; }
 
     .messages-inner {
-        display: flex;
-        flex-direction: column;
-        gap: 14px;
-        max-width: 800px;
-        margin: 0 auto;
-        padding: 32px 32px 20px;
+        display: flex; flex-direction: column; gap: 12px;
+        max-width: 780px; margin: 0 auto;
+        padding: 28px 28px 24px;
     }
 
-    /* ---- User bubble — solid dark ---- */
+    /* ================================================================
+       USER BUBBLE
+       ================================================================ */
     .user-bubble {
         align-self: flex-end;
         background: var(--text);
         color: #FAFAF9;
-        padding: 12px 20px;
-        border-radius: 22px 22px 6px 22px;
+        padding: 11px 20px;
+        border-radius: 20px 20px 6px 20px;
         max-width: 60%;
-        font-size: 15px;
+        font-size: 14.5px;
         font-weight: 400;
         line-height: 1.55;
-        box-shadow:
-            0 2px 8px rgba(0, 0, 0, 0.12),
-            0 1px 2px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.10), 0 1px 2px rgba(0, 0, 0, 0.06);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
     .user-bubble p { margin: 0; }
 
-    .bubble-images {
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-        margin-bottom: 8px;
-    }
-    .bubble-img {
-        max-width: 180px;
-        max-height: 120px;
-        border-radius: 8px;
-        object-fit: cover;
-    }
-
-    .user-attachments {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
+    /* ================================================================
+       ATTACHMENTS (in messages)
+       ================================================================ */
+    .att-row {
+        display: flex; gap: 8px; flex-wrap: wrap;
         justify-content: flex-end;
-        margin-bottom: 4px;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
 
-    .file-island {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
+    .att-img {
+        max-width: 200px; max-height: 140px;
+        border-radius: 12px; object-fit: cover;
+        border: 1px solid rgba(0, 0, 0, 0.06);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    }
+
+    .file-chip {
+        display: inline-flex; align-items: center; gap: 7px;
+        padding: 5px 14px 5px 10px;
+        background: rgba(255, 255, 255, 0.82);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.7);
+        border-radius: 20px;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
         font-size: 12px;
         font-weight: 500;
         color: var(--text-secondary);
-        background: rgba(255, 255, 255, 0.88);
-        backdrop-filter: blur(24px);
-        -webkit-backdrop-filter: blur(24px);
-        border: 1px solid rgba(0, 0, 0, 0.06);
-        padding: 6px 12px 6px 8px;
-        border-radius: 10px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        transition: box-shadow var(--transition);
     }
-    .file-island svg {
-        opacity: 0.5;
-        flex-shrink: 0;
+    .file-chip:hover { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07); }
+
+    .ext-dot {
+        width: 7px; height: 7px;
+        border-radius: 50%; flex-shrink: 0;
     }
 
-    /* ---- AI bubble — frosted glass ---- */
+    .chip-name {
+        max-width: 140px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    /* ================================================================
+       AI BUBBLE
+       ================================================================ */
     .ai-bubble {
         align-self: flex-start;
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
-        border-radius: 6px 22px 22px 22px;
+        border-radius: 6px 20px 20px 20px;
         padding: 16px 20px;
         color: var(--text);
-        font-size: 15px;
+        font-size: 14.5px;
         line-height: 1.7;
         max-width: 85%;
         box-shadow: var(--bubble-glow);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
-    .ai-bubble :global(h1) { font-size: 20px; font-weight: 700; margin: 20px 0 8px; line-height: 1.3; }
-    .ai-bubble :global(h2) { font-size: 17px; font-weight: 600; margin: 18px 0 6px; line-height: 1.35; }
-    .ai-bubble :global(h3) { font-size: 15px; font-weight: 600; margin: 14px 0 4px; line-height: 1.4; }
+    .ai-bubble :global(h1) { font-size: 19px; font-weight: 700; margin: 18px 0 6px; line-height: 1.3; }
+    .ai-bubble :global(h2) { font-size: 16px; font-weight: 600; margin: 16px 0 5px; line-height: 1.35; }
+    .ai-bubble :global(h3) { font-size: 14.5px; font-weight: 600; margin: 12px 0 4px; line-height: 1.4; }
     .ai-bubble :global(h1:first-child),
     .ai-bubble :global(h2:first-child),
     .ai-bubble :global(h3:first-child) { margin-top: 0; }
-    .ai-bubble :global(p) { margin-bottom: 10px; }
+    .ai-bubble :global(p) { margin-bottom: 8px; }
     .ai-bubble :global(p:last-child) { margin-bottom: 0; }
-    .ai-bubble :global(ul),
-    .ai-bubble :global(ol) {
-        margin: 8px 0 12px;
-        padding-left: 22px;
-    }
-    .ai-bubble :global(li) {
-        margin-bottom: 4px;
-        line-height: 1.6;
-    }
+    .ai-bubble :global(ul), .ai-bubble :global(ol) { margin: 6px 0 10px; padding-left: 20px; }
+    .ai-bubble :global(li) { margin-bottom: 3px; line-height: 1.6; }
     .ai-bubble :global(li:last-child) { margin-bottom: 0; }
-    .ai-bubble :global(li > ul),
-    .ai-bubble :global(li > ol) { margin: 4px 0 4px; }
+    .ai-bubble :global(li > ul), .ai-bubble :global(li > ol) { margin: 3px 0; }
     .ai-bubble :global(strong) { font-weight: 600; }
     .ai-bubble :global(pre) {
-        margin: 12px 0;
-        overflow-x: auto;
+        margin: 10px 0; overflow-x: auto;
         background: rgba(0, 0, 0, 0.03);
         border: 1px solid rgba(0, 0, 0, 0.04);
-        border-radius: var(--radius-sm);
-        padding: 12px 14px;
+        border-radius: 8px; padding: 11px 14px;
     }
-    .ai-bubble :global(code) { font-size: 13px; }
-    .ai-bubble :global(p code),
-    .ai-bubble :global(li code) {
-        background: rgba(0, 0, 0, 0.05);
-        padding: 1px 5px;
-        border-radius: 4px;
-        font-size: 13px;
+    .ai-bubble :global(code) { font-size: 12.5px; }
+    .ai-bubble :global(p code), .ai-bubble :global(li code) {
+        background: rgba(0, 0, 0, 0.045); padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
     }
-    .ai-bubble :global(hr) {
-        border: none;
-        border-top: 1px solid rgba(0, 0, 0, 0.06);
-        margin: 16px 0;
-    }
+    .ai-bubble :global(hr) { border: none; border-top: 1px solid rgba(0, 0, 0, 0.06); margin: 14px 0; }
     .ai-bubble :global(blockquote) {
-        border-left: 3px solid rgba(0, 0, 0, 0.1);
-        padding-left: 14px;
-        margin: 10px 0;
+        border-left: 3px solid rgba(0, 0, 0, 0.08);
+        padding-left: 14px; margin: 8px 0;
         color: var(--text-secondary);
     }
 
-    .response-bubble {
-        max-width: 85%;
+    /* ================================================================
+       ROUTE TAG
+       ================================================================ */
+    .route-row { display: flex; }
+    .route-tag {
+        color: white;
+        font-size: 10px; font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.08em;
+        padding: 3px 14px;
+        border-radius: var(--radius-pill);
+        background: var(--rc);
+        animation: springPop var(--spring-duration) var(--spring) both;
     }
 
-    /* ---- File attachment card (bottom) ---- */
-    .file-card {
+    .warning-banner {
+        max-width: 520px; margin: 4px auto;
+        padding: 8px 14px;
+        background: rgba(255, 180, 50, 0.10);
+        border: 1px solid rgba(255, 180, 50, 0.20);
+        border-radius: 10px;
+        font-size: 12.5px; color: var(--text-secondary); text-align: center;
+    }
+
+    /* ================================================================
+       PIPELINE STEPS (slim inline indicators)
+       ================================================================ */
+    .step {
+        display: flex; align-items: center; gap: 10px;
+        padding: 7px 14px;
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
+        border-radius: 12px;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        align-self: flex-start;
+        max-width: 300px;
+    }
+    .step.specialist { border-left: 2px solid var(--specialist); }
+    .step.polish { border-left: 2px solid var(--success); }
+
+    .step-dot {
+        width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+        background: var(--brain);
+    }
+    .step-dot.specialist { background: var(--specialist); }
+    .step-dot.polish { background: var(--success); }
+    .step-dot.pulse { animation: pulse 1.4s ease-in-out infinite; }
+
+    .step-text {
+        font-size: 12.5px; font-weight: 500;
+        color: var(--text-secondary);
+        letter-spacing: 0.01em;
+    }
+    .step-meta {
+        font-size: 11px; font-family: var(--font-mono);
+        color: var(--text-muted); margin-left: auto;
+    }
+
+    /* ================================================================
+       GENERATION CARD
+       ================================================================ */
+    .gen-card {
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-left: 2px solid var(--brain);
         border-radius: var(--radius);
+        overflow: hidden;
+        box-shadow: var(--bubble-glow);
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        max-width: 560px;
+    }
+    .gen-card.fixing { border-left-color: var(--warning); }
+
+    .gen-bar {
+        display: flex; align-items: center; gap: 10px;
+        padding: 9px 16px;
+    }
+    .gen-indicator {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: var(--brain);
+        box-shadow: 0 0 8px rgba(232, 133, 12, 0.35);
+        animation: pulse 1.4s ease-in-out infinite;
+    }
+    .gen-title {
+        font-size: 12px; font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    .gen-meta {
+        font-size: 11px; font-family: var(--font-mono);
+        color: var(--text-muted); margin-left: auto;
+    }
+
+    .gen-body {
+        padding: 12px 18px;
+        border-top: 1px solid rgba(0, 0, 0, 0.04);
+        font-size: 14.5px;
+        line-height: 1.65;
+        color: var(--text);
+        max-height: 400px; overflow-y: auto;
+    }
+    .gen-body :global(p) { margin-bottom: 8px; }
+    .gen-body :global(p:last-child) { margin-bottom: 0; }
+    .gen-body :global(ul), .gen-body :global(ol) { margin: 6px 0 10px; padding-left: 20px; }
+    .gen-body :global(li) { margin-bottom: 3px; line-height: 1.6; }
+    .gen-body :global(strong) { font-weight: 600; }
+    .gen-body :global(code) { font-size: 12.5px; background: rgba(0,0,0,0.04); padding: 1px 4px; border-radius: 3px; }
+
+    .preview-btn {
+        padding: 3px 12px;
+        background: rgba(232, 133, 12, 0.08);
+        border: 1px solid rgba(232, 133, 12, 0.18);
+        border-radius: var(--radius-pill);
+        font-family: var(--font-body);
+        font-size: 11px; font-weight: 600;
+        color: var(--brain); cursor: pointer;
+        transition: all var(--transition); flex-shrink: 0;
+    }
+    .preview-btn:hover {
+        background: rgba(232, 133, 12, 0.14);
+        border-color: rgba(232, 133, 12, 0.30);
+    }
+    .preview-btn.sm { font-size: 10px; padding: 2px 10px; }
+
+    /* ================================================================
+       THINKING BLOCK
+       ================================================================ */
+    .think-block {
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-left: 2px solid var(--text-muted);
+        border-radius: 12px;
+        overflow: hidden;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        max-width: 560px;
+    }
+    .think-header {
+        display: flex; align-items: center; gap: 8px;
+        padding: 7px 14px; cursor: pointer;
+        font-size: 10.5px; font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase; letter-spacing: 0.06em;
+        list-style: none; user-select: none;
+    }
+    .think-header::-webkit-details-marker { display: none; }
+    .think-header::after {
+        content: '\25BE'; margin-left: auto; font-size: 10px;
+        transition: transform var(--transition);
+    }
+    .think-block[open] .think-header::after { transform: rotate(180deg); }
+
+    .think-dot {
+        width: 5px; height: 5px; border-radius: 50%;
+        background: var(--text-muted);
+        animation: pulse 2s ease-in-out infinite;
+    }
+    .think-meta {
+        font-family: var(--font-mono); font-size: 10px;
+        font-weight: 400; color: var(--text-muted); opacity: 0.6;
+    }
+    .think-body {
+        font-family: var(--font-mono); font-size: 11px; line-height: 1.55;
+        color: var(--text-muted); white-space: pre-wrap; word-break: break-word;
+        margin: 0; padding: 8px 14px 10px;
+        border-top: 1px solid rgba(0, 0, 0, 0.04);
+        background: none; border-left: none; border-right: none; border-bottom: none; border-radius: 0;
+        max-height: 200px; overflow-y: auto;
+    }
+
+    /* ================================================================
+       ISSUES CARD (validation)
+       ================================================================ */
+    .issues-card {
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-left: 2px solid var(--warning);
+        border-radius: 12px;
+        padding: 12px 16px;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        max-width: 520px;
+    }
+    .issues-header {
+        display: flex; align-items: center; gap: 10px;
+        margin-bottom: 8px;
+    }
+    .issues-label {
+        font-size: 11px; font-weight: 600;
+        color: var(--warning); text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    .verdict {
+        margin-left: auto;
+        font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+        padding: 2px 8px; border-radius: 6px;
+        background: var(--error); color: white;
+    }
+    .verdict.pass { background: var(--success); }
+    .issues-list {
+        list-style: none; display: flex; flex-direction: column; gap: 3px;
+    }
+    .issues-list li {
+        font-size: 12.5px; color: var(--text-secondary);
+        padding-left: 14px; position: relative; line-height: 1.5;
+    }
+    .issues-list li::before {
+        content: '\2022'; position: absolute; left: 2px;
+        color: var(--warning); font-weight: bold;
+    }
+
+    /* ================================================================
+       OUTPUT FILE CARD
+       ================================================================ */
+    .output-card {
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: 14px;
         overflow: hidden;
         box-shadow: var(--bubble-glow);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
         max-width: 520px;
     }
-    .file-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 12px 18px;
+    .output-bar {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 16px;
     }
-    .file-icon {
+    .ext-badge {
+        font-size: 10px; font-weight: 700;
+        color: white; letter-spacing: 0.04em;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: var(--ec);
+    }
+    .output-name {
+        font-size: 13.5px; font-weight: 600;
+        color: var(--text); letter-spacing: -0.01em;
+    }
+    .output-meta {
+        font-size: 11px; font-family: var(--font-mono);
         color: var(--text-muted);
-        flex-shrink: 0;
     }
-    .file-name {
-        font-size: 14px;
-        font-weight: 600;
-        color: var(--text);
+    .output-actions {
+        margin-left: auto; display: flex; gap: 3px;
     }
-    .file-size {
-        font-size: 11px;
-        font-family: var(--font-mono);
-        color: var(--text-muted);
-    }
-    .file-actions {
-        margin-left: auto;
-        display: flex;
-        gap: 4px;
-    }
-    .file-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 32px;
-        height: 32px;
-        background: rgba(0, 0, 0, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.5);
-        border-radius: var(--radius-sm);
-        color: var(--text-muted);
-        cursor: pointer;
+    .act-btn {
+        display: flex; align-items: center; justify-content: center;
+        width: 30px; height: 30px;
+        background: rgba(0, 0, 0, 0.03);
+        border: 1px solid rgba(0, 0, 0, 0.04);
+        border-radius: 8px;
+        color: var(--text-muted); cursor: pointer;
         transition: all var(--transition);
     }
-    .file-btn:hover {
-        background: rgba(0, 0, 0, 0.07);
-        color: var(--text);
-    }
-    .attachment-code {
-        font-family: var(--font-mono);
-        font-size: 12px;
-        line-height: 1.55;
+    .act-btn:hover { background: rgba(0, 0, 0, 0.06); color: var(--text-secondary); }
+    .act-btn.active { background: rgba(0, 0, 0, 0.06); color: var(--text); }
+
+    .output-source {
+        font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55;
         color: var(--text-secondary);
-        background: rgba(0, 0, 0, 0.03);
-        border-top: 1px solid rgba(255, 255, 255, 0.35);
+        background: rgba(0, 0, 0, 0.02);
+        border-top: 1px solid rgba(0, 0, 0, 0.04);
         padding: 14px 18px;
-        white-space: pre-wrap;
-        word-break: break-all;
-        max-height: 300px;
-        overflow-y: auto;
-        margin: 0;
-        border-radius: 0;
+        white-space: pre-wrap; word-break: break-all;
+        max-height: 300px; overflow-y: auto; margin: 0; border-radius: 0;
     }
 
-    /* ---- Trace row: pipeline stage pills ---- */
-    .trace-row {
-        display: flex;
-        align-items: stretch;
-        gap: 8px;
-        flex-wrap: wrap;
+    /* ================================================================
+       SUMMARY + TRACE PILLS
+       ================================================================ */
+    .summary-row {
+        display: flex; gap: 8px; flex-wrap: wrap;
     }
-    .trace-pill {
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        padding: 9px 16px;
+    .summary-chip {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 4px 12px;
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
-        border-radius: var(--radius);
-        box-shadow: var(--bubble-glow);
+        border-radius: 20px;
+        font-size: 12.5px; font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        color: var(--text-secondary);
+    }
+    .summary-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+    }
+
+    .trace-row {
+        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .trace-pill {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 6px 14px;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: 1px solid rgba(255, 255, 255, 0.5);
+        border-radius: 20px;
         font-family: var(--font-body);
-        font-size: 11px;
-        font-weight: 600;
+        font-size: 11px; font-weight: 600;
         color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+        text-transform: uppercase; letter-spacing: 0.04em;
         cursor: pointer;
-        transition: color var(--transition), background var(--transition);
-        white-space: nowrap;
-        flex-shrink: 0;
+        transition: all var(--transition);
+        white-space: nowrap; flex-shrink: 0;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
-    .trace-pill:hover { color: var(--text-secondary); }
-    .trace-pill.open { color: var(--text-secondary); background: var(--bubble-strong); }
+    .trace-pill:hover { color: var(--text-secondary); border-color: rgba(0, 0, 0, 0.06); }
+    .trace-pill.open {
+        color: var(--text-secondary);
+        background: var(--bubble-strong);
+        border-color: rgba(0, 0, 0, 0.08);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+    }
+    .trace-pill.score {
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+    }
+
     .trace-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        flex-shrink: 0;
+        width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
     }
     .trace-verdict {
-        font-size: 9px;
-        font-weight: 700;
-        padding: 1px 6px;
-        border-radius: var(--radius-pill);
-        background: var(--error);
-        color: white;
-        letter-spacing: 0.04em;
+        font-size: 9px; font-weight: 700;
+        padding: 1px 5px; border-radius: 4px;
+        background: var(--error); color: white; letter-spacing: 0.03em;
     }
     .trace-verdict.pass { background: var(--success); }
 
-    /* ---- Trace cards: expandable detail ---- */
+    /* ================================================================
+       TRACE CARDS (expanded details)
+       ================================================================ */
     .trace-card {
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
-        border-radius: var(--radius);
+        border-left: 2px solid var(--tbc, var(--text-muted));
+        border-radius: 12px;
         overflow: hidden;
-        box-shadow: var(--bubble-glow);
-        animation: slideUpSpring 300ms var(--spring-soft) both;
+        animation: slideUpSpring 280ms var(--spring-soft) both;
         max-width: 560px;
     }
-    .trace-card.specialist-trace { border-left: 3px solid var(--specialist); }
-    .trace-card.thinking-trace { border-left: 3px solid var(--brain); }
-    .trace-card.validation-trace { border-left: 3px solid var(--warning); }
-    .trace-card.reflection-trace { border-left: 3px solid var(--success); }
-
-    .score-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        padding: 6px 14px;
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
-        border-radius: var(--radius-pill);
-        font-size: 13px;
-        font-weight: 600;
-        font-variant-numeric: tabular-nums;
-        color: var(--text-secondary);
-    }
-    .trace-section { padding: 14px 18px; }
-    .trace-section + .trace-section {
-        border-top: 1px solid rgba(255, 255, 255, 0.35);
-    }
+    .trace-section { padding: 12px 16px; }
+    .trace-section + .trace-section { border-top: 1px solid rgba(0, 0, 0, 0.04); }
     .trace-label {
         display: block;
-        font-size: 10px;
-        font-weight: 600;
+        font-size: 10px; font-weight: 600;
         color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        margin-bottom: 8px;
+        text-transform: uppercase; letter-spacing: 0.06em;
+        margin-bottom: 6px;
     }
-    .trace-body {
+    .trace-pre {
         font-family: var(--font-mono);
-        font-size: 12px;
-        line-height: 1.6;
+        font-size: 11.5px; line-height: 1.6;
         color: var(--text-secondary);
-        white-space: pre-wrap;
-        word-break: break-word;
-        margin: 0;
-        padding: 14px 18px;
-        background: none;
-        border: none;
-        border-radius: 0;
-        max-height: 400px;
-        overflow-y: auto;
+        white-space: pre-wrap; word-break: break-word;
+        margin: 0; padding: 12px 16px;
+        background: none; border: none; border-radius: 0;
+        max-height: 400px; overflow-y: auto;
     }
-    .trace-section .trace-body { padding: 0; }
+    .trace-section .trace-pre { padding: 0; }
     .trace-issues {
-        list-style: none;
-        padding: 14px 18px;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
+        list-style: none; padding: 12px 16px;
+        display: flex; flex-direction: column; gap: 3px;
     }
     .trace-issues li {
-        font-size: 13px;
-        color: var(--text-secondary);
-        padding-left: 14px;
-        position: relative;
-        line-height: 1.5;
+        font-size: 12.5px; color: var(--text-secondary);
+        padding-left: 14px; position: relative; line-height: 1.5;
     }
     .trace-issues li::before {
-        content: '\00d7';
-        position: absolute;
-        left: 0;
-        color: var(--warning);
-        font-weight: bold;
+        content: '\00d7'; position: absolute; left: 0;
+        color: var(--warning); font-weight: bold;
     }
     .trace-text {
-        font-size: 13px;
-        color: var(--text-secondary);
-        line-height: 1.6;
-        margin: 0;
+        font-size: 13px; color: var(--text-secondary);
+        line-height: 1.6; margin: 0;
     }
 
-    /* ---- Route badge ---- */
-    .badge-row { display: flex; }
-    .route-badge {
-        color: white;
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        padding: 4px 16px;
-        border-radius: var(--radius-pill);
-        animation: springPop var(--spring-duration) var(--spring) both;
+    /* ================================================================
+       FEEDBACK BUTTONS
+       ================================================================ */
+    .bubble-row {
+        display: flex; flex-direction: column; gap: 12px;
     }
-
-    .warning-banner {
-        max-width: 520px;
-        margin: 8px auto;
-        padding: 10px 16px;
-        background: rgba(255, 180, 50, 0.12);
-        border: 1px solid rgba(255, 180, 50, 0.25);
-        border-radius: 10px;
-        font-size: 13px;
-        color: var(--text-secondary);
-        text-align: center;
-    }
-
-    /* ---- Working/phase indicator cards ---- */
-    .working-card {
+    .feedback-row {
         display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 10px 16px;
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
-        border-radius: var(--radius);
-        box-shadow: var(--bubble-glow);
-        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        align-self: flex-start;
-        max-width: 320px;
+        gap: 4px;
+        margin-top: 4px;
+        opacity: 0;
+        transition: opacity var(--transition);
     }
-    .working-card.specialist-wc {
-        border-left: 3px solid var(--specialist);
+    .bubble-row:hover .feedback-row,
+    .feedback-row:has(.active) {
+        opacity: 1;
     }
-    .working-label {
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--text-secondary);
-    }
-    .dot-pulse {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--brain);
-        box-shadow: 0 0 6px rgba(232, 133, 12, 0.4);
-        animation: pulse 1.4s ease-in-out infinite;
-        flex-shrink: 0;
-    }
-    .dot-pulse.specialist-dot {
-        background: var(--specialist);
-        box-shadow: 0 0 6px rgba(155, 109, 255, 0.4);
-    }
-    .dot-pulse.polish-dot {
-        background: var(--success);
-        box-shadow: 0 0 6px rgba(52, 199, 89, 0.4);
-    }
-    .working-card.polish-wc {
-        border-left: 3px solid var(--success);
-    }
-
-    /* ---- Thinking details (collapsible) ---- */
-    .thinking-details {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
-        border-left: 3px solid var(--text-muted);
-        border-radius: var(--radius);
-        overflow: hidden;
-        box-shadow: var(--bubble-glow);
-        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 560px;
-    }
-    .thinking-summary {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 14px;
-        cursor: pointer;
-        font-size: 11px;
-        font-weight: 600;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        list-style: none;
-        user-select: none;
-    }
-    .thinking-summary::-webkit-details-marker { display: none; }
-    .thinking-summary::after {
-        content: '\25BE';
-        margin-left: auto;
-        font-size: 10px;
-        transition: transform var(--transition);
-    }
-    .thinking-details[open] .thinking-summary::after {
-        transform: rotate(180deg);
-    }
-    .thinking-dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--text-muted);
-        animation: pulse 2s ease-in-out infinite;
-    }
-    .thinking-len {
-        font-family: var(--font-mono);
-        font-size: 10px;
-        font-weight: 400;
-        color: var(--text-muted);
-        opacity: 0.7;
-    }
-    .thinking-body {
-        font-family: var(--font-mono);
-        font-size: 11px;
-        line-height: 1.55;
-        color: var(--text-muted);
-        white-space: pre-wrap;
-        word-break: break-word;
-        margin: 0;
-        padding: 8px 14px 12px;
-        border-top: 1px solid rgba(255, 255, 255, 0.35);
-        background: none;
-        border-left: none;
-        border-right: none;
-        border-bottom: none;
-        border-radius: 0;
-        max-height: 200px;
-        overflow-y: auto;
-    }
-
-    /* ---- Stream cards ---- */
-    .stream-card {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
-        border-radius: var(--radius);
-        overflow: hidden;
-        box-shadow: var(--bubble-glow);
-        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 520px;
-    }
-    .stream-card.brain { border-left: 3px solid var(--brain); }
-    .stream-card.polish-sc { border-left: 3px solid var(--success); }
-    .stream-card.muted { border-left: 3px solid var(--text-muted); }
-
-    .stream-bar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 10px 16px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.4);
-    }
-    .stream-indicator {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        animation: pulse 2s ease-in-out infinite;
-    }
-    .stream-indicator.brain {
-        background: var(--brain);
-        box-shadow: 0 0 6px rgba(232, 133, 12, 0.4);
-    }
-    .stream-indicator.polish-ind {
-        background: var(--success);
-        box-shadow: 0 0 6px rgba(52, 199, 89, 0.4);
-    }
-    .stream-title {
-        font-size: 12px;
-        font-weight: 600;
-        color: var(--text-secondary);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-    .stream-meta {
-        font-size: 11px;
-        font-family: var(--font-mono);
-        color: var(--text-muted);
-        margin-left: auto;
-    }
-    .stream-preview-btn {
-        margin-left: 8px;
-        padding: 3px 10px;
-        background: rgba(232, 133, 12, 0.1);
-        border: 1px solid rgba(232, 133, 12, 0.25);
-        border-radius: var(--radius-pill);
-        font-family: var(--font-body);
-        font-size: 11px;
-        font-weight: 600;
-        color: var(--brain);
-        cursor: pointer;
-        transition: all var(--transition);
-        flex-shrink: 0;
-    }
-    .stream-preview-btn:hover {
-        background: rgba(232, 133, 12, 0.18);
-        border-color: rgba(232, 133, 12, 0.4);
-    }
-    .stream-body {
-        font-family: var(--font-mono);
-        font-size: 12px;
-        color: var(--text-secondary);
-        white-space: pre-wrap;
-        word-break: break-all;
-        margin: 0;
-        padding: 14px 16px;
-        line-height: 1.6;
+    .feedback-btn {
         background: none;
         border: none;
-        border-radius: 0;
-        max-height: 300px;
-        overflow-y: auto;
+        color: var(--text-muted);
+        cursor: pointer;
+        padding: 4px 6px;
+        border-radius: 6px;
+        transition: color var(--transition), background var(--transition);
     }
-
-    /* ---- Validation ---- */
-    .validation-card {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
-        border-left: 3px solid var(--warning);
-        border-radius: var(--radius);
-        padding: 14px 16px;
-        box-shadow: var(--bubble-glow);
-        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 520px;
-    }
-    .validation-bar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 12px;
-        font-weight: 600;
-        color: var(--warning);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 12px;
-    }
-    .validation-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--warning);
-    }
-    .verdict {
-        margin-left: auto;
-        font-size: 11px;
-        padding: 3px 10px;
-        border-radius: var(--radius-sm);
-        font-weight: 700;
-        letter-spacing: 0.04em;
-    }
-    .verdict.pass { background: var(--success); color: white; }
-    .verdict.fail { background: var(--error); color: white; }
-    .validation-card ul {
-        list-style: none;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-    .validation-card li {
-        font-size: 14px;
+    .feedback-btn:hover {
+        background: rgba(0, 0, 0, 0.04);
         color: var(--text-secondary);
-        padding-left: 16px;
-        position: relative;
-        line-height: 1.5;
     }
-    .validation-card li::before {
-        content: '\00d7';
-        position: absolute;
-        left: 0;
-        color: var(--warning);
-        font-weight: bold;
+    .feedback-btn.active {
+        color: var(--success);
+        background: rgba(45, 164, 78, 0.08);
+    }
+    .feedback-btn.bad.active {
+        color: var(--error);
+        background: rgba(207, 34, 46, 0.08);
+    }
+    .feedback-btn.regen:hover {
+        color: var(--brain);
+        background: rgba(232, 133, 12, 0.08);
     }
 </style>
