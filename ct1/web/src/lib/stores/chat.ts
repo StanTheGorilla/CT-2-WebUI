@@ -26,6 +26,8 @@ export interface Turn {
     review?: ReviewResult | null;
     thinking?: string;
     draftThinking?: string;
+    messageId?: string;
+    feedback?: number;
 }
 
 export interface Reflection {
@@ -60,6 +62,7 @@ export interface Plan {
 }
 
 interface ChatState {
+    conversationId: string | null;
     conversation: Turn[];
     events: Record<string, any>[];
     route: string;
@@ -82,6 +85,7 @@ interface ChatState {
 }
 
 const initial: ChatState = {
+    conversationId: null,
     conversation: [],
     events: [],
     route: '',
@@ -111,6 +115,9 @@ function handleEvent(data: Record<string, any>) {
         s.events = [...s.events, data];
 
         switch (data.event) {
+            case 'conversation_id':
+                s.conversationId = data.id;
+                break;
             case 'routing':
                 s.phase = 'routing';
                 break;
@@ -227,10 +234,65 @@ export function disconnect() {
     ws = null;
 }
 
+export function loadFromHistory(conv: {
+    id: string;
+    messages: Array<{
+        id?: string;
+        role: string;
+        content: string;
+        thinking?: string;
+        draft?: string;
+        route?: string;
+        specialist_data?: string;
+        reflection?: string;
+        feedback?: number;
+    }>;
+}) {
+    chat.update((s) => {
+        s.conversationId = conv.id;
+        s.conversation = conv.messages.map((m) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            messageId: m.id,
+            thinking: m.thinking || undefined,
+            route: m.route || undefined,
+            specialistData: m.specialist_data ? JSON.parse(m.specialist_data) : undefined,
+            reflection: m.reflection ? JSON.parse(m.reflection) : undefined,
+            feedback: m.feedback,
+        }));
+        s.phase = 'idle';
+        s.events = [];
+        s.route = '';
+        s.plan = null;
+        s.specialistData = null;
+        s.specialistStream = '';
+        s.review = null;
+        s.reflection = null;
+        s.response = '';
+        s.thinking = '';
+        s.draft = '';
+        s.draftThinking = '';
+        s.streamingText = '';
+        s.streamingThinking = '';
+        s.validationIssues = [];
+        s.editing = false;
+        s.warning = '';
+        return s;
+    });
+}
+
+export function newConversation() {
+    chat.set({ ...initial });
+}
+
 export function sendThink(goal: string, attachments: Attachment[] = []) {
     let conv: Turn[] = [];
     const unsub = chat.subscribe((s) => { conv = s.conversation; });
     unsub();
+
+    let convId: string | null = null;
+    const unsub2 = chat.subscribe((s) => { convId = s.conversationId; });
+    unsub2();
 
     chat.update((s) => {
         s.conversation = [...s.conversation, {
@@ -307,5 +369,7 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         type: 'think',
         goal: goalContent,
         conversation: backendConv,
+        conversation_id: convId,
+        position: conv.length,
     });
 }
