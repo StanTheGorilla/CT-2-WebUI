@@ -201,11 +201,14 @@ async def get_conversation(conv_id: str):
     return conv
 
 
+class CreateConversationBody(BaseModel):
+    title: str = "New conversation"
+    preset: str = ""
+
 @app.post("/api/conversations")
-async def create_conversation_endpoint(body: dict):
-    title = body.get("title", "New conversation")
-    preset = body.get("preset", _raw_cfg.get("active_preset", ""))
-    conv_id = await _db.create_conversation(title, preset)
+async def create_conversation_endpoint(body: CreateConversationBody):
+    preset = body.preset or _raw_cfg.get("active_preset", "")
+    conv_id = await _db.create_conversation(body.title, preset)
     return {"id": conv_id}
 
 
@@ -273,29 +276,30 @@ async def ws_think(websocket: WebSocket):
 
                     # Auto-persist conversation
                     if _db:
-                        import json as _json
-                        conv_id = msg.get("conversation_id")
-                        if not conv_id:
-                            # Auto-title from first ~40 chars of goal
-                            title_text = goal if isinstance(goal, str) else (goal[0].get("text", "") if isinstance(goal, list) else str(goal))
-                            title = title_text[:40].strip()
-                            if len(title_text) > 40:
-                                title += "..."
-                            conv_id = await _db.create_conversation(title, _raw_cfg.get("active_preset", ""))
-                            await websocket.send_json({"event": "conversation_id", "id": conv_id})
+                        try:
+                            conv_id = msg.get("conversation_id")
+                            if not conv_id:
+                                title_text = goal if isinstance(goal, str) else (goal[0].get("text", "") if isinstance(goal, list) else str(goal))
+                                title = title_text[:40].strip()
+                                if len(title_text) > 40:
+                                    title += "..."
+                                conv_id = await _db.create_conversation(title, _raw_cfg.get("active_preset", ""))
+                                await websocket.send_json({"event": "conversation_id", "id": conv_id})
 
-                        position = msg.get("position", 0)
-                        user_content = goal if isinstance(goal, str) else _json.dumps(goal)
-                        await _db.add_message(conv_id, "user", user_content, position)
+                            position = msg.get("position", 0)
+                            user_content = goal if isinstance(goal, str) else json.dumps(goal)
+                            await _db.add_message(conv_id, "user", user_content, position)
 
-                        await _db.add_message(
-                            conv_id, "assistant", result["response"], position + 1,
-                            thinking=result.get("thinking", ""),
-                            draft=result.get("draft", ""),
-                            route=result.get("route", ""),
-                            specialist_data=_json.dumps(result.get("specialist_data") or {}),
-                            reflection=_json.dumps(result.get("reflection") or {}),
-                        )
+                            await _db.add_message(
+                                conv_id, "assistant", result["response"], position + 1,
+                                thinking=result.get("thinking", ""),
+                                draft=result.get("draft", ""),
+                                route=result.get("route", ""),
+                                specialist_data=json.dumps(result.get("specialist_data") or {}),
+                                reflection=json.dumps(result.get("reflection") or {}),
+                            )
+                        except Exception:
+                            pass  # persistence is non-fatal
 
                 await asyncio.gather(run_think(), stream_events())
 
