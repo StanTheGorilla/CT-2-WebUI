@@ -1,9 +1,10 @@
 <script lang="ts">
     import '../app.css';
-    import { chat, connect, disconnect } from '$lib/stores/chat';
+    import { chat, connect, disconnect, newConversation } from '$lib/stores/chat';
     import { page } from '$app/stores';
     import { onMount, onDestroy } from 'svelte';
     import Sidebar from '$lib/components/Sidebar.svelte';
+    import ShortcutOverlay from '$lib/components/ShortcutOverlay.svelte';
     import { sidebarOpen } from '$lib/stores/conversations';
     import { preferences, toggleTheme } from '$lib/stores/preferences';
 
@@ -11,6 +12,28 @@
     onDestroy(() => disconnect());
 
     let { children } = $props();
+
+    let shortcutOverlayOpen = $state(false);
+
+    function handleKeydown(e: KeyboardEvent) {
+        if (e.ctrlKey && e.key === 'n') {
+            e.preventDefault();
+            newConversation();
+            sidebarOpen.set(false);
+        }
+        if (e.ctrlKey && e.shiftKey && (e.key === 'S' || e.key === 's')) {
+            e.preventDefault();
+            sidebarOpen.update(v => !v);
+        }
+        if (e.ctrlKey && e.key === '/') {
+            e.preventDefault();
+            shortcutOverlayOpen = !shortcutOverlayOpen;
+        }
+        if (e.key === 'Escape') {
+            shortcutOverlayOpen = false;
+            sidebarOpen.set(false);
+        }
+    }
 
     const phaseLabels: Record<string, string> = {
         idle: '',
@@ -97,6 +120,8 @@
     });
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <div class="app">
     <div class="donut-bg" aria-hidden="true">
         <pre class="donut" bind:this={pre}></pre>
@@ -149,6 +174,8 @@
     <main class:sidebar-open={$sidebarOpen}>
         {@render children()}
     </main>
+
+    <ShortcutOverlay bind:open={shortcutOverlayOpen} />
 </div>
 
 <style>

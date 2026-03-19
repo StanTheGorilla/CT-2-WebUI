@@ -5,6 +5,7 @@
         loadConversation,
     } from '$lib/stores/conversations';
     import { loadFromHistory, newConversation } from '$lib/stores/chat';
+    import { exportMarkdown, downloadText } from '$lib/export';
     import { onMount } from 'svelte';
 
     let renamingId = $state<string | null>(null);
@@ -77,6 +78,20 @@
         await deleteConversation(id);
     }
 
+    async function handleExport(id: string, title: string) {
+        const conv = await loadConversation(id);
+        if (conv && conv.messages) {
+            const turns = conv.messages.map((m: any) => ({
+                role: m.role,
+                content: m.content,
+                route: m.route || undefined,
+            }));
+            const md = exportMarkdown(title, turns);
+            const safeTitle = title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+            downloadText(md, `${safeTitle}.md`, 'text/markdown');
+        }
+    }
+
     function closeSidebar() {
         sidebarOpen.set(false);
     }
@@ -138,6 +153,15 @@
                         >
                             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                                 <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                        <button
+                            class="action-btn"
+                            title="Export"
+                            onclick={() => handleExport(conv.id, conv.title)}
+                        >
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                <path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </button>
                         <button
