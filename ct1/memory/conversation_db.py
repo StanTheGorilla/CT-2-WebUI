@@ -55,6 +55,25 @@ class ConversationDB:
         )
         await self._conn.commit()
 
+        await self._conn.executescript(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                content,
+                content=messages,
+                content_rowid=rowid
+            );
+
+            CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+            END;
+            """
+        )
+        await self._conn.commit()
+
     async def close(self) -> None:
         """Close the database connection."""
         if self._conn:
@@ -205,6 +224,21 @@ class ConversationDB:
         )
         await self._conn.commit()
         return msg_id
+
+    async def search(self, query: str, limit: int = 20) -> list[dict]:
+        cursor = await self._conn.execute(
+            """SELECT m.id, m.conversation_id, m.role, m.content,
+                      c.title as conversation_title,
+                      snippet(messages_fts, 0, '<mark>', '</mark>', '...', 32) as snippet
+               FROM messages_fts
+               JOIN messages m ON m.rowid = messages_fts.rowid
+               JOIN conversations c ON c.id = m.conversation_id
+               WHERE messages_fts MATCH ?
+               ORDER BY rank
+               LIMIT ?""",
+            (query, limit),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
 
     async def set_feedback(self, message_id: str, feedback: int | None) -> bool:
         """Set feedback on a message (1=good, -1=bad, None=clear).

@@ -6,6 +6,7 @@
     } from '$lib/stores/conversations';
     import { loadFromHistory, newConversation } from '$lib/stores/chat';
     import { exportMarkdown, downloadText } from '$lib/export';
+    import SearchBar from '$lib/components/SearchBar.svelte';
     import { onMount } from 'svelte';
 
     let renamingId = $state<string | null>(null);
@@ -111,6 +112,8 @@
             </svg>
         </button>
     </div>
+
+    <SearchBar />
 
     <div class="conversation-list">
         {#if $conversations.length === 0}

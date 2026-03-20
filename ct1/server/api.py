@@ -193,6 +193,13 @@ async def list_conversations(limit: int = 50):
     return await _db.list_conversations(limit)
 
 
+@app.get("/api/search")
+async def search_conversations(q: str = "", limit: int = 20):
+    if not q.strip():
+        return []
+    return await _db.search(q.strip(), limit)
+
+
 @app.get("/api/conversations/{conv_id}")
 async def get_conversation(conv_id: str):
     conv = await _db.get_conversation(conv_id)
