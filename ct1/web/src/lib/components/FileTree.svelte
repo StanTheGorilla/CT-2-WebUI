@@ -157,7 +157,8 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        width: 100%;
+        width: calc(100% - 8px);
+        margin: 0 4px;
         padding: 6px 16px;
         border: none;
         background: none;
@@ -167,7 +168,7 @@
         color: var(--text);
         text-align: left;
         transition: all var(--transition);
-        border-radius: 0;
+        border-radius: var(--radius-sm);
     }
     .tree-file:hover {
         background: var(--accent-subtle);

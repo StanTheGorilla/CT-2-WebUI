@@ -1435,19 +1435,27 @@
        ================================================================ */
     .computer-panel {
         top: 56px;
-        background: var(--surface-solid);
-        border-left: var(--bubble-border-light);
+        background: var(--bubble-strong);
+        backdrop-filter: var(--bubble-blur-heavy);
+        -webkit-backdrop-filter: var(--bubble-blur-heavy);
+        border-left: 1px solid var(--border);
     }
     .computer-split {
         display: flex;
         flex-direction: column;
         height: 100%;
+        margin: 8px;
+        border-radius: var(--radius);
+        overflow: hidden;
+        background: var(--surface-solid);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow-sm);
     }
     .computer-files {
-        height: 220px;
-        flex-shrink: 0;
+        flex: 0 0 auto;
+        max-height: 240px;
         overflow: hidden;
-        border-bottom: var(--bubble-border-light);
+        border-bottom: 1px solid var(--border);
     }
     .computer-term {
         flex: 1;
