@@ -57,7 +57,6 @@
 
         // Spinning 3D ASCII donut (based on donut.c by Andy Sloane)
         const R1 = 1, R2 = 2, K2 = 5;
-        // Size to fill the viewport
         const charW = 8.4, charH = 14;
         const screenW = Math.min(180, Math.floor(window.innerWidth / charW));
         const screenH = Math.min(90, Math.floor(window.innerHeight / charH));
@@ -113,7 +112,7 @@
             B += 0.015;
         }
 
-        const id = setInterval(renderFrame, 50);
+        const id = setInterval(renderFrame, 100);
         renderFrame();
 
         return () => clearInterval(id);
@@ -128,9 +127,9 @@
     </div>
 
     <header class="topbar">
-        <button class="sidebar-toggle" onclick={() => sidebarOpen.update(v => !v)}>
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <path d="M2 4.5h14M2 9h14M2 13.5h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <button class="sidebar-toggle" class:active={$sidebarOpen} onclick={() => sidebarOpen.update(v => !v)} aria-label="Toggle sidebar">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
             </svg>
         </button>
         <a href="/" class="logo">
@@ -147,20 +146,15 @@
         </div>
 
         <nav class="nav">
-            <button class="theme-toggle" onclick={toggleTheme} title="Toggle theme ({$preferences.theme})">
+            <button class="theme-toggle" onclick={toggleTheme} title="Toggle theme">
                 {#if $preferences.theme === 'dark'}
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                         <path d="M13.5 8.5a5.5 5.5 0 01-6-6 5.5 5.5 0 106 6z" stroke="currentColor" stroke-width="1.3"/>
                     </svg>
-                {:else if $preferences.theme === 'light'}
+                {:else}
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                         <circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.3"/>
                         <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                    </svg>
-                {:else}
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                        <rect x="1.5" y="2" width="13" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
-                        <path d="M6 14h4M8 11v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                     </svg>
                 {/if}
             </button>
@@ -171,7 +165,7 @@
 
     <Sidebar />
 
-    <main class:sidebar-open={$sidebarOpen}>
+    <main>
         {@render children()}
     </main>
 
@@ -218,13 +212,13 @@
         scrollbar-width: none;
     }
 
-    /* ---- Top bar — frosted glass bubble ---- */
+    /* ---- Top bar — frosted glass ---- */
     .topbar {
         height: 56px;
         display: flex;
         align-items: center;
-        padding: 0 28px;
-        gap: 16px;
+        padding: 0 20px;
+        gap: 14px;
         background: var(--bubble-strong);
         backdrop-filter: blur(48px) saturate(1.4);
         -webkit-backdrop-filter: blur(48px) saturate(1.4);
@@ -242,9 +236,11 @@
         border: none;
         color: var(--text-muted);
         cursor: pointer;
-        padding: 6px;
-        border-radius: var(--radius-sm);
-        transition: color var(--transition), background var(--transition);
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        border-radius: 8px;
+        transition: color 200ms ease, background 200ms ease, transform 300ms var(--spring);
         flex-shrink: 0;
         display: flex;
         align-items: center;
@@ -252,7 +248,11 @@
     }
     .sidebar-toggle:hover {
         color: var(--text);
-        background: rgba(0, 0, 0, 0.04);
+        background: var(--accent-subtle);
+    }
+    .sidebar-toggle.active {
+        color: var(--text);
+        background: var(--surface);
     }
 
     .theme-toggle {
@@ -269,7 +269,7 @@
     }
     .theme-toggle:hover {
         color: var(--text);
-        background: rgba(0, 0, 0, 0.04);
+        background: var(--accent-subtle);
     }
 
     .logo {
@@ -339,12 +339,12 @@
     }
     .nav-link:hover {
         color: var(--text);
-        background: rgba(0, 0, 0, 0.04);
+        background: var(--accent-subtle);
         opacity: 1;
     }
     .nav-link.active {
         color: var(--text);
-        background: rgba(0, 0, 0, 0.05);
+        background: var(--accent-subtle);
     }
 
     main {
@@ -352,9 +352,5 @@
         overflow: hidden;
         position: relative;
         z-index: 1;
-        transition: margin-left var(--transition-slow);
-    }
-    main.sidebar-open {
-        margin-left: 280px;
     }
 </style>
