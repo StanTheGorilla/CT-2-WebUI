@@ -1,14 +1,20 @@
 <script lang="ts">
-    import { chat, setFeedback, regenerate } from '$lib/stores/chat';
+    import { chat, setFeedback, regenerate, undo, setWorkspaceId } from '$lib/stores/chat';
     import { render } from '$lib/markdown';
     import ChatInput from '$lib/components/ChatInput.svelte';
     import SpecialistCard from '$lib/components/SpecialistCard.svelte';
 
     import PlanCard from '$lib/components/PlanCard.svelte';
     import PreviewPanel from '$lib/components/PreviewPanel.svelte';
+    import TerminalPanel from '$lib/components/TerminalPanel.svelte';
+    import FileTree from '$lib/components/FileTree.svelte';
 
+    let isComputerRoute = $derived($chat.route === 'ROUTE_COMPUTER');
     let isCode = $derived(
         $chat.route === 'ROUTE_DESIGN' || $chat.route === 'ROUTE_CODE'
+    );
+    let isComputerMode = $derived(
+        $chat.modeOverride === 'computer' || isComputerRoute
     );
 
     let showPreview = $state(false);
@@ -29,6 +35,58 @@
     let previewWidth = $state(Math.min(Math.round(window.innerWidth * 0.44), 700));
     let resizing = $state(false);
     let previewEntered = $state(false);
+
+    // Computer mode state
+    let activeWorkspaceId = $state<string | null>(null);
+    let showTerminal = $state(false);
+    let fileTreeRef = $state<FileTree>();
+
+    $effect(() => {
+        // Auto-create workspace when entering computer mode
+        if (isComputerMode && !activeWorkspaceId) {
+            createDefaultWorkspace();
+        }
+    });
+
+    async function createDefaultWorkspace() {
+        try {
+            const res = await fetch('/api/workspaces', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'project' }),
+            });
+            const data = await res.json();
+            if (data.id) {
+                activeWorkspaceId = data.id;
+                showTerminal = true;
+                setWorkspaceId(data.id);
+            }
+        } catch (e) {
+            console.error('Workspace create error:', e);
+        }
+    }
+
+    // Refresh file tree when files are saved
+    $effect(() => {
+        const lastEvent = $chat.events[$chat.events.length - 1];
+        if (lastEvent?.event === 'file_saved' && fileTreeRef) {
+            fileTreeRef.refresh();
+        }
+    });
+
+    function onFileSelect(path: string) {
+        // Preview HTML files, otherwise just log for now
+        if (path.endsWith('.html') || path.endsWith('.htm')) {
+            fetch(`/api/workspaces/${activeWorkspaceId}/files/${path}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.content) {
+                        previewOverride = data.content;
+                        showPreview = true;
+                    }
+                });
+        }
+    }
 
     $effect(() => {
         if (!showPreview) previewEntered = false;
@@ -71,12 +129,20 @@
     }
 
     let didGenerate = $state(false);
+    let userClosedPreview = $state(false);
 
     $effect(() => {
         if ($chat.phase === 'generating' || $chat.phase === 'fixing') {
             didGenerate = true;
         }
-        if ($chat.phase === 'done' && isCode && $chat.response && didGenerate) {
+        // Auto-open preview when streaming code reaches enough content (not computer mode)
+        if (($chat.phase === 'generating' || $chat.phase === 'polishing') && isCode && !isComputerRoute && !userClosedPreview) {
+            if ($chat.streamingText.length > 300 && !showPreview) {
+                showPreview = true;
+                previewOverride = null;
+            }
+        }
+        if ($chat.phase === 'done' && isCode && !isComputerRoute && $chat.response && didGenerate) {
             previewOverride = null;
             didGenerate = false;
         }
@@ -87,6 +153,7 @@
             }
             codeExpanded = false;
             didGenerate = false;
+            userClosedPreview = false;
             traceOpen = null;
         }
     });
@@ -125,9 +192,17 @@
 
     let history = $derived(() => {
         const conv = $chat.conversation;
+        // During generation: hide last user msg (it's in the "active turn" section)
         if ($chat.phase !== 'idle' && $chat.phase !== 'done') {
             return conv.slice(0, -1);
         }
+        // Idle = loaded from history or fresh start — show ALL turns
+        // (the "active turn" and "response" sections are inactive)
+        if ($chat.phase === 'idle') {
+            return conv;
+        }
+        // Done = just finished generating — exclude the latest exchange
+        // (it's rendered by the active route/plan/response sections)
         let lastUserIdx = -1;
         for (let i = conv.length - 1; i >= 0; i--) {
             if (conv[i].role === 'user') { lastUserIdx = i; break; }
@@ -139,11 +214,13 @@
         'ROUTE_DESIGN': 'Design',
         'ROUTE_CODE': 'Code',
         'ROUTE_DIRECT': 'Direct',
+        'ROUTE_COMPUTER': 'Computer',
     };
     const routeColors: Record<string, string> = {
         'ROUTE_DESIGN': 'var(--specialist)',
         'ROUTE_CODE': 'var(--text)',
         'ROUTE_DIRECT': 'var(--success)',
+        'ROUTE_COMPUTER': 'var(--brain)',
     };
 
     function extOf(name: string): string {
@@ -172,13 +249,19 @@
             : $chat.plan?.output_type === 'javascript' ? 'js' : 'html';
     }
 
+    /** Parse <!-- FILE: path --> markers from computer mode response */
+    function parseFileList(text: string): string[] {
+        const matches = text.matchAll(/<!--\s*FILE:\s*(.+?)\s*-->/g);
+        return [...matches].map(m => m[1].trim());
+    }
+
     function formatChars(n: number): string {
         return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
     }
 </script>
 
 <div class="page">
-    <div class="chat-panel" class:resizing-layout={resizing} style={previewVisible ? `margin-right: ${previewWidth}px` : ''}>
+    <div class="chat-panel" class:resizing-layout={resizing} style={(previewVisible || (isComputerMode && showTerminal)) ? `margin-right: ${previewWidth}px` : ''}>
         <div class="messages" bind:this={messagesEl} onscroll={onMessagesScroll}>
             <div class="messages-inner">
                 <!-- ==================== HISTORY ==================== -->
@@ -202,7 +285,7 @@
                         <div class="user-bubble" style="animation-delay: {idx * 30}ms">
                             <p>{turn.content}</p>
                         </div>
-                    {:else if turn.isCode}
+                    {:else if turn.isCode && turn.route !== 'ROUTE_COMPUTER'}
                         <div class="bubble-row">
                             {#if turn.route}
                                 <div class="route-row">
@@ -250,7 +333,7 @@
                                     title="Good response"
                                 >
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                        <path d="M4 8l3 3 5-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M2 9.5h2V14H2zM4 9.5l2.5-7A1.5 1.5 0 018 1.5v0a1.5 1.5 0 011.5 1.5V6h3.84a1.5 1.5 0 011.48 1.75l-.93 5.5A1.5 1.5 0 0112.41 14.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
                                 <button
@@ -260,7 +343,7 @@
                                     title="Bad response"
                                 >
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                        <path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
                                 <button class="feedback-btn regen" onclick={regenerate} title="Regenerate response">
@@ -268,6 +351,46 @@
                                         <path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                         <path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
+                                </button>
+                            </div>
+                        </div>
+                    {:else if turn.route === 'ROUTE_COMPUTER'}
+                        {@const hFiles = parseFileList(turn.content)}
+                        <div class="bubble-row">
+                            <div class="route-row">
+                                <span class="route-tag" style="--rc: var(--brain)">Computer</span>
+                            </div>
+                            <div class="computer-files-card" style="animation-delay: {idx * 30}ms">
+                                <div class="computer-files-header">
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                        <rect x="2" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+                                        <path d="M5.5 14h5M8 11v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                    </svg>
+                                    <span>{hFiles.length} file{hFiles.length !== 1 ? 's' : ''} created</span>
+                                </div>
+                                {#if hFiles.length > 0}
+                                    <div class="computer-files-list">
+                                        {#each hFiles as filePath}
+                                            {@const hExt = extOf(filePath)}
+                                            <span class="computer-file-chip">
+                                                <span class="ext-dot" style="background: {extColor(hExt)}"></span>
+                                                {filePath}
+                                            </span>
+                                        {/each}
+                                    </div>
+                                {/if}
+                            </div>
+                            <div class="feedback-row">
+                                <button class="feedback-btn" class:active={turn.feedback === 1}
+                                    onclick={() => setFeedback(idx, turn.feedback === 1 ? 0 : 1)} title="Good response">
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 9.5h2V14H2zM4 9.5l2.5-7A1.5 1.5 0 018 1.5v0a1.5 1.5 0 011.5 1.5V6h3.84a1.5 1.5 0 011.48 1.75l-.93 5.5A1.5 1.5 0 0112.41 14.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                </button>
+                                <button class="feedback-btn bad" class:active={turn.feedback === -1}
+                                    onclick={() => setFeedback(idx, turn.feedback === -1 ? 0 : -1)} title="Bad response">
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                </button>
+                                <button class="feedback-btn regen" onclick={regenerate} title="Regenerate">
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                                 </button>
                             </div>
                         </div>
@@ -284,7 +407,7 @@
                                     title="Good response"
                                 >
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                        <path d="M4 8l3 3 5-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M2 9.5h2V14H2zM4 9.5l2.5-7A1.5 1.5 0 018 1.5v0a1.5 1.5 0 011.5 1.5V6h3.84a1.5 1.5 0 011.48 1.75l-.93 5.5A1.5 1.5 0 0112.41 14.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
                                 <button
@@ -294,7 +417,7 @@
                                     title="Bad response"
                                 >
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                        <path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
                                 <button class="feedback-btn regen" onclick={regenerate} title="Regenerate response">
@@ -383,7 +506,7 @@
                         <div class="gen-bar">
                             <span class="gen-indicator"></span>
                             <span class="gen-title">
-                                {$chat.phase === 'fixing' ? 'Fixing' : $chat.editing ? 'Editing' : isCode ? 'Generating' : 'Writing'}
+                                {$chat.phase === 'fixing' ? 'Fixing' : $chat.editing ? 'Editing' : isComputerRoute ? 'Creating files' : isCode ? 'Generating' : 'Writing'}
                             </span>
                             <span class="gen-meta">
                                 {#if $chat.editing}
@@ -394,13 +517,13 @@
                                     ...
                                 {/if}
                             </span>
-                            {#if isCode && !$chat.editing && $chat.streamingText.length > 200}
+                            {#if isCode && !isComputerRoute && !$chat.editing && $chat.streamingText.length > 200}
                                 <button class="preview-btn" onclick={previewCurrentCode}>
                                     {showPreview ? 'Hide' : 'Preview'}
                                 </button>
                             {/if}
                         </div>
-                        {#if !isCode && $chat.streamingText}
+                        {#if !isCode && !isComputerRoute && $chat.streamingText}
                             <div class="gen-body">
                                 {@html render($chat.streamingText)}
                             </div>
@@ -419,7 +542,7 @@
                     {/if}
                 {/if}
 
-                {#if $chat.phase === 'polishing'}
+                {#if $chat.phase === 'polishing' && !isComputerRoute}
                     <div class="step polish">
                         <span class="step-dot pulse polish"></span>
                         <span class="step-text">Polishing CSS...</span>
@@ -432,14 +555,14 @@
                     </div>
                 {/if}
 
-                {#if $chat.phase === 'validating'}
+                {#if $chat.phase === 'validating' && !isComputerRoute}
                     <div class="step">
                         <span class="step-dot pulse"></span>
                         <span class="step-text">Validating...</span>
                     </div>
                 {/if}
 
-                {#if $chat.validationIssues.length > 0 && ($chat.phase === 'validating' || $chat.phase === 'fixing')}
+                {#if !isComputerRoute && $chat.validationIssues.length > 0 && ($chat.phase === 'validating' || $chat.phase === 'fixing')}
                     <div class="issues-card">
                         <div class="issues-header">
                             <span class="issues-label">Issues found</span>
@@ -456,7 +579,7 @@
                 {/if}
 
                 <!-- ==================== TEXT RESPONSE ==================== -->
-                {#if $chat.response && !isCode}
+                {#if $chat.response && !isCode && !isComputerRoute}
                     <div class="ai-bubble">
                         {@html render($chat.response)}
                     </div>
@@ -464,8 +587,8 @@
 
                 <!-- ==================== POST-RESPONSE ==================== -->
 
-                <!-- Output file card (code responses) -->
-                {#if $chat.response && isCode}
+                <!-- Output file card (code responses — not computer mode) -->
+                {#if $chat.response && isCode && !isComputerRoute}
                     {@const ext = outputExt()}
                     <div class="output-card">
                         <div class="output-bar">
@@ -484,8 +607,44 @@
                                 <button class="act-btn" onclick={downloadCode} title="Download">
                                     <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 2.5v7M5 7.5l2.5 2.5L10 7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11.5h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
                                 </button>
+                                {#if $chat.undoStack.length > 0}
+                                    <button class="act-btn undo" onclick={undo} title="Undo last edit ({$chat.undoStack.length})">
+                                        <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M3 7.5h9M3 7.5l3-3M3 7.5l3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                    </button>
+                                {/if}
                             </div>
                         </div>
+                        {#if codeExpanded}
+                            <pre class="output-source">{$chat.response}</pre>
+                        {/if}
+                    </div>
+                {/if}
+
+                <!-- Computer mode: files-created card -->
+                {#if $chat.response && isComputerRoute}
+                    {@const createdFiles = parseFileList($chat.response)}
+                    <div class="computer-files-card">
+                        <div class="computer-files-header">
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                <rect x="2" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+                                <path d="M5.5 14h5M8 11v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                            </svg>
+                            <span>{createdFiles.length} file{createdFiles.length !== 1 ? 's' : ''} created</span>
+                        </div>
+                        {#if createdFiles.length > 0}
+                            <div class="computer-files-list">
+                                {#each createdFiles as filePath}
+                                    {@const ext = extOf(filePath)}
+                                    <span class="computer-file-chip">
+                                        <span class="ext-dot" style="background: {extColor(ext)}"></span>
+                                        {filePath}
+                                    </span>
+                                {/each}
+                            </div>
+                        {/if}
+                        <button class="act-btn" onclick={() => codeExpanded = !codeExpanded} title="View raw output" class:active={codeExpanded}>
+                            <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><path d="M5.5 3.5L2.5 7.5l3 4M9.5 3.5l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
                         {#if codeExpanded}
                             <pre class="output-source">{$chat.response}</pre>
                         {/if}
@@ -600,8 +759,43 @@
             ></div>
             <PreviewPanel
                 code={previewCode}
-                onClose={() => { showPreview = false; }}
+                onClose={() => { showPreview = false; userClosedPreview = true; }}
             />
+        </div>
+    {/if}
+
+    {#if isComputerMode && activeWorkspaceId && showTerminal}
+        <div
+            class="preview-panel computer-panel"
+            class:entering={!previewEntered}
+            class:resizing
+            style="width: {previewWidth}px"
+            onanimationend={() => { previewEntered = true; }}
+        >
+            <div
+                class="resize-handle"
+                role="separator"
+                aria-label="Resize panel"
+                onpointerdown={onResizeStart}
+                onpointermove={onResizeMove}
+                onpointerup={onResizeEnd}
+            ></div>
+            <div class="computer-split">
+                <div class="computer-files">
+                    <FileTree
+                        bind:this={fileTreeRef}
+                        workspaceId={activeWorkspaceId}
+                        {onFileSelect}
+                    />
+                </div>
+                <div class="computer-term">
+                    <TerminalPanel
+                        workspaceId={activeWorkspaceId}
+                        onClose={() => { showTerminal = false; }}
+                        externalOutput={$chat.terminalOutput}
+                    />
+                </div>
+            </div>
         </div>
     {/if}
 </div>
@@ -666,7 +860,7 @@
        ================================================================ */
     .user-bubble {
         align-self: flex-end;
-        background: var(--text);
+        background: #1A1A1A;
         color: #FAFAF9;
         padding: 11px 20px;
         border-radius: 20px 20px 6px 20px;
@@ -676,6 +870,11 @@
         line-height: 1.55;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.10), 0 1px 2px rgba(0, 0, 0, 0.06);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+    }
+    :global([data-theme="dark"]) .user-bubble {
+        background: rgba(255, 255, 255, 0.14);
+        color: #F0F0F0;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
     }
     .user-bubble p { margin: 0; }
 
@@ -691,17 +890,17 @@
     .att-img {
         max-width: 200px; max-height: 140px;
         border-radius: 12px; object-fit: cover;
-        border: 1px solid rgba(0, 0, 0, 0.06);
+        border: 1px solid var(--border-subtle);
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
     }
 
     .file-chip {
         display: inline-flex; align-items: center; gap: 7px;
         padding: 5px 14px 5px 10px;
-        background: rgba(255, 255, 255, 0.82);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        border: 1px solid rgba(255, 255, 255, 0.7);
+        background: var(--bubble-strong);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
         border-radius: 20px;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
         font-size: 12px;
@@ -754,20 +953,47 @@
     .ai-bubble :global(strong) { font-weight: 600; }
     .ai-bubble :global(pre) {
         margin: 10px 0; overflow-x: auto;
-        background: rgba(0, 0, 0, 0.03);
-        border: 1px solid rgba(0, 0, 0, 0.04);
+        background: var(--code-bg);
+        border: 1px solid var(--border-subtle);
         border-radius: 8px; padding: 11px 14px;
     }
     .ai-bubble :global(code) { font-size: 12.5px; }
     .ai-bubble :global(p code), .ai-bubble :global(li code) {
-        background: rgba(0, 0, 0, 0.045); padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
+        background: var(--code-inline-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
     }
-    .ai-bubble :global(hr) { border: none; border-top: 1px solid rgba(0, 0, 0, 0.06); margin: 14px 0; }
+    .ai-bubble :global(hr) { border: none; border-top: 1px solid var(--border-subtle); margin: 14px 0; }
     .ai-bubble :global(blockquote) {
-        border-left: 3px solid rgba(0, 0, 0, 0.08);
+        border-left: 3px solid var(--border);
         padding-left: 14px; margin: 8px 0;
         color: var(--text-secondary);
     }
+    /* Markdown tables */
+    .ai-bubble :global(table) {
+        width: 100%; border-collapse: collapse; margin: 12px 0;
+        font-size: 13px; line-height: 1.5;
+        display: block; overflow-x: auto;
+    }
+    .ai-bubble :global(thead),
+    .ai-bubble :global(tbody) { display: table; width: 100%; table-layout: fixed; }
+    .ai-bubble :global(thead) {
+        background: var(--accent-subtle);
+    }
+    .ai-bubble :global(th) {
+        font-weight: 600; text-align: left;
+        padding: 8px 12px;
+        border-bottom: 2px solid var(--border);
+        color: var(--text);
+        word-wrap: break-word; overflow-wrap: break-word;
+    }
+    .ai-bubble :global(td) {
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--border-subtle);
+        color: var(--text-secondary);
+        vertical-align: top;
+        word-wrap: break-word; overflow-wrap: break-word;
+    }
+    .ai-bubble :global(tr:last-child td) { border-bottom: none; }
+    .ai-bubble :global(tr:hover td) { background: var(--accent-subtle); }
 
     /* ================================================================
        ROUTE TAG
@@ -798,10 +1024,8 @@
     .step {
         display: flex; align-items: center; gap: 10px;
         padding: 7px 14px;
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-radius: 12px;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
@@ -833,10 +1057,8 @@
        GENERATION CARD
        ================================================================ */
     .gen-card {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-left: 2px solid var(--brain);
         border-radius: var(--radius);
         overflow: hidden;
@@ -869,18 +1091,38 @@
 
     .gen-body {
         padding: 12px 18px;
-        border-top: 1px solid rgba(0, 0, 0, 0.04);
+        border-top: 1px solid var(--border-subtle);
         font-size: 14.5px;
         line-height: 1.65;
         color: var(--text);
-        max-height: 400px; overflow-y: auto;
+        max-height: 600px; overflow-y: auto;
     }
     .gen-body :global(p) { margin-bottom: 8px; }
     .gen-body :global(p:last-child) { margin-bottom: 0; }
     .gen-body :global(ul), .gen-body :global(ol) { margin: 6px 0 10px; padding-left: 20px; }
     .gen-body :global(li) { margin-bottom: 3px; line-height: 1.6; }
     .gen-body :global(strong) { font-weight: 600; }
-    .gen-body :global(code) { font-size: 12.5px; background: rgba(0,0,0,0.04); padding: 1px 4px; border-radius: 3px; }
+    .gen-body :global(code) { font-size: 12.5px; background: var(--code-inline-bg); padding: 1px 4px; border-radius: 3px; }
+    .gen-body :global(pre) {
+        margin: 10px 0; overflow-x: auto;
+        background: var(--code-bg);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px; padding: 11px 14px;
+    }
+    .gen-body :global(table) {
+        width: 100%; border-collapse: collapse; margin: 12px 0;
+        font-size: 13px; line-height: 1.5;
+    }
+    .gen-body :global(th) {
+        font-weight: 600; text-align: left; padding: 8px 12px;
+        border-bottom: 2px solid var(--border); color: var(--text);
+        background: var(--accent-subtle); white-space: nowrap;
+    }
+    .gen-body :global(td) {
+        padding: 6px 12px; border-bottom: 1px solid var(--border-subtle);
+        color: var(--text-secondary); vertical-align: top;
+    }
+    .gen-body :global(tr:last-child td) { border-bottom: none; }
 
     .preview-btn {
         padding: 3px 12px;
@@ -902,10 +1144,8 @@
        THINKING BLOCK
        ================================================================ */
     .think-block {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-left: 2px solid var(--text-muted);
         border-radius: 12px;
         overflow: hidden;
@@ -940,7 +1180,7 @@
         font-family: var(--font-mono); font-size: 11px; line-height: 1.55;
         color: var(--text-muted); white-space: pre-wrap; word-break: break-word;
         margin: 0; padding: 8px 14px 10px;
-        border-top: 1px solid rgba(0, 0, 0, 0.04);
+        border-top: 1px solid var(--border-subtle);
         background: none; border-left: none; border-right: none; border-bottom: none; border-radius: 0;
         max-height: 200px; overflow-y: auto;
     }
@@ -949,10 +1189,8 @@
        ISSUES CARD (validation)
        ================================================================ */
     .issues-card {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-left: 2px solid var(--warning);
         border-radius: 12px;
         padding: 12px 16px;
@@ -991,10 +1229,8 @@
        OUTPUT FILE CARD
        ================================================================ */
     .output-card {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-radius: 14px;
         overflow: hidden;
         box-shadow: var(--bubble-glow);
@@ -1026,20 +1262,20 @@
     .act-btn {
         display: flex; align-items: center; justify-content: center;
         width: 30px; height: 30px;
-        background: rgba(0, 0, 0, 0.03);
-        border: 1px solid rgba(0, 0, 0, 0.04);
+        background: var(--accent-subtle);
+        border: 1px solid var(--border-subtle);
         border-radius: 8px;
         color: var(--text-muted); cursor: pointer;
         transition: all var(--transition);
     }
-    .act-btn:hover { background: rgba(0, 0, 0, 0.06); color: var(--text-secondary); }
-    .act-btn.active { background: rgba(0, 0, 0, 0.06); color: var(--text); }
+    .act-btn:hover { background: var(--surface); color: var(--text-secondary); }
+    .act-btn.active { background: var(--surface); color: var(--text); }
 
     .output-source {
         font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55;
         color: var(--text-secondary);
-        background: rgba(0, 0, 0, 0.02);
-        border-top: 1px solid rgba(0, 0, 0, 0.04);
+        background: var(--code-bg);
+        border-top: 1px solid var(--border-subtle);
         padding: 14px 18px;
         white-space: pre-wrap; word-break: break-all;
         max-height: 300px; overflow-y: auto; margin: 0; border-radius: 0;
@@ -1076,7 +1312,7 @@
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
-        border: 1px solid rgba(255, 255, 255, 0.5);
+        border: var(--bubble-border);
         border-radius: 20px;
         font-family: var(--font-body);
         font-size: 11px; font-weight: 600;
@@ -1087,11 +1323,11 @@
         white-space: nowrap; flex-shrink: 0;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
-    .trace-pill:hover { color: var(--text-secondary); border-color: rgba(0, 0, 0, 0.06); }
+    .trace-pill:hover { color: var(--text-secondary); border-color: var(--border-subtle); }
     .trace-pill.open {
         color: var(--text-secondary);
         background: var(--bubble-strong);
-        border-color: rgba(0, 0, 0, 0.08);
+        border-color: var(--border);
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
     }
     .trace-pill.score {
@@ -1124,7 +1360,7 @@
         max-width: 560px;
     }
     .trace-section { padding: 12px 16px; }
-    .trace-section + .trace-section { border-top: 1px solid rgba(0, 0, 0, 0.04); }
+    .trace-section + .trace-section { border-top: 1px solid var(--border-subtle); }
     .trace-label {
         display: block;
         font-size: 10px; font-weight: 600;
@@ -1186,7 +1422,7 @@
         transition: color var(--transition), background var(--transition);
     }
     .feedback-btn:hover {
-        background: rgba(0, 0, 0, 0.04);
+        background: var(--accent-subtle);
         color: var(--text-secondary);
     }
     .feedback-btn.active {
@@ -1200,5 +1436,81 @@
     .feedback-btn.regen:hover {
         color: var(--brain);
         background: rgba(232, 133, 12, 0.08);
+    }
+
+    /* ================================================================
+       COMPUTER MODE PANEL
+       ================================================================ */
+    .computer-panel {
+        top: 56px;
+        background: var(--surface-solid);
+        border-left: var(--bubble-border-light);
+    }
+    .computer-split {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+    }
+    .computer-files {
+        height: 220px;
+        flex-shrink: 0;
+        overflow: hidden;
+        border-bottom: var(--bubble-border-light);
+    }
+    .computer-term {
+        flex: 1;
+        overflow: hidden;
+    }
+
+    .act-btn.undo {
+        color: var(--brain);
+    }
+    .act-btn.undo:hover {
+        background: rgba(232, 133, 12, 0.08);
+    }
+
+    /* ================================================================
+       COMPUTER MODE FILES CARD (in chat)
+       ================================================================ */
+    .computer-files-card {
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border-light);
+        border-radius: var(--radius-lg);
+        padding: 14px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .computer-files-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: var(--font-body);
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-secondary);
+    }
+    .computer-files-header svg {
+        color: var(--brain);
+        opacity: 0.8;
+    }
+    .computer-files-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .computer-file-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 12px;
+        background: var(--accent-subtle);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-pill);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text);
     }
 </style>
