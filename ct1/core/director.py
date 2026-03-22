@@ -19,15 +19,6 @@ _DESIGN_TOOLKIT = (
     if _DESIGN_TOOLKIT_PATH.exists() else ""
 )
 
-_ROUTER_SYSTEM = (
-    "You are the CT-2 Routing Engine. Read the user request and categorize it.\n"
-    "You may ONLY output one of the following exact strings:\n"
-    '- "ROUTE_DESIGN" (If the user asks for UI/UX, styling, or layouts)\n'
-    '- "ROUTE_CODE" (If the user asks for complex application logic or algorithms)\n'
-    '- "ROUTE_DIRECT" (If it is a simple question or FAQ requiring no planning)\n'
-    "Output nothing else."
-)
-
 _GENERATOR_CODE_SYSTEM = (
     "You are the CT-2 Director, an expert developer.\n"
     "Output ONLY complete, working code. No explanations. No markdown fences.\n"
@@ -79,6 +70,52 @@ _GENERATOR_PATCH_SYSTEM = (
     "- No markdown fences. No explanations. Only SEARCH/REPLACE blocks."
 )
 
+_GENERATOR_COMPUTER_SYSTEM = (
+    "You are the CT-2 Director, an expert full-stack developer.\n"
+    "You create complete project files in ANY programming language.\n\n"
+    "LANGUAGE SELECTION — critical:\n"
+    "- Read the user's request carefully to determine the language.\n"
+    "- Python request → write .py files. C++ request → write .cpp/.h files.\n"
+    "- JavaScript request → write .js files. HTML/website request → write .html files.\n"
+    "- NEVER default to HTML. Only use HTML if the user explicitly asks for a webpage.\n\n"
+    "OUTPUT FORMAT — file markers:\n"
+    "[FILE: path/to/file.ext]\n"
+    "file content here\n"
+    "[FILE: another/file.py]\n"
+    "file content here\n\n"
+    "RULES:\n"
+    "- Every file MUST start with a [FILE: path] marker on its own line\n"
+    "- Use relative paths (e.g. main.py, src/utils.js, include/math.h)\n"
+    "- Write COMPLETE file contents — no placeholders, no TODOs, no stubs\n"
+    "- No markdown fences. No explanations outside file markers.\n"
+    "- For Python: include requirements.txt if external packages are needed\n"
+    "- For C/C++: include a Makefile or CMakeLists.txt if appropriate\n"
+    "- For Node.js: include package.json if npm packages are needed\n\n"
+    "TERMINAL COMMANDS — to run commands after files are saved:\n"
+    "[RUN: command here]\n"
+    "Place RUN markers AFTER all FILE markers. They execute in the workspace directory.\n"
+    "Examples:\n"
+    "  [RUN: pip install -r requirements.txt]\n"
+    "  [RUN: python main.py]\n"
+    "  [RUN: node index.js]\n"
+    "  [RUN: g++ -o main main.cpp && ./main]\n"
+    "  [RUN: npm install && npm start]\n"
+    "Only include RUN commands when the user would expect execution.\n\n"
+    "EXAMPLES:\n\n"
+    "User: \"create a python calculator\"\n"
+    "[FILE: main.py]\n"
+    "def add(a, b): return a + b\n"
+    "...\n\n"
+    "User: \"make a sorting algorithm in C++\"\n"
+    "[FILE: sort.cpp]\n"
+    "#include <iostream>\n"
+    "...\n\n"
+    "User: \"build a todo app website\"\n"
+    "[FILE: index.html]\n"
+    "<!DOCTYPE html>\n"
+    "...\n"
+)
+
 _GENERATOR_TEXT_SYSTEM = (
     "You are the CT-2 Director, an expert assistant.\n"
     "Respond to the user's request comprehensively.\n"
@@ -94,25 +131,21 @@ _GENERATOR_DISCUSS_SYSTEM = (
     "Do NOT output modified code unless the user explicitly asks for changes."
 )
 
-_CODE_KEYWORDS = {
-    "html", "css", "javascript", "js", "website", "web page", "webpage",
-    "script", "program", "function", "code", "app", "application",
-    "component", "api", "endpoint", "server", "database", "sql",
-    "python", "react", "svelte", "vue", "angular", "node",
-}
-
-
 class Director:
     def __init__(self, base_url: str, temperature: float = 0.6,
                  top_p: float = 0.9, top_k: int = 40,
-                 presence_penalty: float = 1.0, max_tokens: int = 100000,
+                 presence_penalty: float = 1.0, frequency_penalty: float = 0.0,
+                 max_tokens: int = 100000,
+                 thinking_budget: int = -1,
                  vision_supported: bool = False):
         self.base_url = base_url
         self.temperature = temperature
         self.top_p = top_p
         self.top_k = top_k
         self.presence_penalty = presence_penalty
+        self.frequency_penalty = frequency_penalty
         self.max_tokens = max_tokens
+        self.thinking_budget = thinking_budget
         self.vision_supported = vision_supported
         self.client = httpx.AsyncClient(timeout=600.0)
         self.lessons: list[str] = []
@@ -151,8 +184,11 @@ class Director:
 
     async def _call(self, messages: list[dict], max_tokens: int = None,
                     presence_penalty: float = None,
+                    temperature: float = None,
+                    top_p: float = None,
                     conversation: list[dict] = None,
-                    enable_thinking: bool = True):
+                    enable_thinking: bool = True,
+                    thinking_budget: int = None):
         """Call the 4B Director. Thinking enabled by default."""
         if conversation:
             system = messages[:1]
@@ -161,17 +197,23 @@ class Director:
 
         messages = self._sanitize_messages(messages)
 
+        chat_kwargs = {"enable_thinking": enable_thinking}
+        budget = thinking_budget if thinking_budget is not None else self.thinking_budget
+        if enable_thinking and budget > 0:
+            chat_kwargs["thinking_budget"] = budget
+
         payload = {
             "model": "qwen",
             "messages": messages,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "top_p": top_p if top_p is not None else self.top_p,
             "top_k": self.top_k,
             "presence_penalty": (presence_penalty if presence_penalty is not None
                                  else self.presence_penalty),
+            "frequency_penalty": self.frequency_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": False,
-            "chat_template_kwargs": {"enable_thinking": enable_thinking},
+            "chat_template_kwargs": chat_kwargs,
         }
 
         r = await self.client.post(
@@ -193,33 +235,6 @@ class Director:
 
         return r.json()["choices"][0]["message"]["content"].strip()
 
-    # ── Router mode ──────────────────────────────────────────────────
-
-    async def route(self, goal: str,
-                    conversation: list[dict] = None) -> str:
-        """Classify the request. Returns ROUTE_DESIGN | ROUTE_CODE | ROUTE_DIRECT."""
-        messages = [
-            {"role": "system", "content": _ROUTER_SYSTEM},
-            {"role": "user", "content": goal},
-        ]
-        raw = await self._call(
-            messages, max_tokens=32,
-            conversation=conversation,
-            enable_thinking=False,
-        )
-        raw_upper = raw.upper().strip().strip('"')
-
-        if "DESIGN" in raw_upper:
-            return "ROUTE_DESIGN"
-        if "CODE" in raw_upper:
-            return "ROUTE_CODE"
-
-        # Keyword fallback
-        goal_lower = goal.lower()
-        if any(kw in goal_lower for kw in _CODE_KEYWORDS):
-            return "ROUTE_CODE"
-
-        return "ROUTE_DIRECT"
 
     # ── Streaming call ────────────────────────────────────────────────
 
@@ -237,8 +252,11 @@ class Director:
     async def _call_stream(self, messages: list[dict], on_token=None,
                            max_tokens: int = None,
                            presence_penalty: float = None,
+                           temperature: float = None,
+                           top_p: float = None,
                            conversation: list[dict] = None,
-                           enable_thinking: bool = True):
+                           enable_thinking: bool = True,
+                           thinking_budget: int = None):
         """Streaming call with token-by-token callback."""
         if conversation:
             system = messages[:1]
@@ -247,17 +265,23 @@ class Director:
 
         messages = self._sanitize_messages(messages)
 
+        chat_kwargs = {"enable_thinking": enable_thinking}
+        budget = thinking_budget if thinking_budget is not None else self.thinking_budget
+        if enable_thinking and budget > 0:
+            chat_kwargs["thinking_budget"] = budget
+
         payload = {
             "model": "qwen",
             "messages": messages,
-            "temperature": self.temperature,
-            "top_p": self.top_p,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "top_p": top_p if top_p is not None else self.top_p,
             "top_k": self.top_k,
             "presence_penalty": (presence_penalty if presence_penalty is not None
                                  else self.presence_penalty),
+            "frequency_penalty": self.frequency_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": True,
-            "chat_template_kwargs": {"enable_thinking": enable_thinking},
+            "chat_template_kwargs": chat_kwargs,
         }
 
         text = ""
@@ -362,15 +386,24 @@ class Director:
                        conversation: list[dict] = None,
                        on_token=None,
                        is_edit: bool = False,
-                       code_context: str = None) -> dict:
+                       code_context: str = None,
+                       task_overrides: dict = None) -> dict:
         """Generate the full response. Returns {"text": str, "thinking": str}.
 
         plan: structured task breakdown from Specialist.plan().
         on_token: if provided, streams tokens via callback(token, kind).
         is_edit: if True, uses edit-aware prompting to modify previous code.
         """
-        is_code = route in ("ROUTE_DESIGN", "ROUTE_CODE")
+        is_code = route in ("ROUTE_DESIGN", "ROUTE_CODE", "ROUTE_COMPUTER")
         is_direct = route == "ROUTE_DIRECT"
+        is_computer = route == "ROUTE_COMPUTER"
+
+        # Unpack per-task overrides (e.g. Nemotron uses different temp per route)
+        ovr = task_overrides or {}
+        ovr_temp = ovr.get("temperature")
+        ovr_top_p = ovr.get("top_p")
+        ovr_thinking = ovr.get("enable_thinking")
+        ovr_budget = ovr.get("thinking_budget")
 
         goal_text = goal if isinstance(goal, str) else " ".join(
             p.get("text", "") for p in goal if p.get("type") == "text"
@@ -391,15 +424,21 @@ class Director:
             if on_token:
                 return await self._call_stream(
                     messages, on_token=on_token,
-                    max_tokens=2048,
+                    max_tokens=8192,
                     presence_penalty=0.0,
+                    temperature=ovr_temp,
+                    top_p=ovr_top_p,
                     conversation=conversation,
-                    enable_thinking=False,
+                    enable_thinking=ovr_thinking if ovr_thinking is not None else False,
+                    thinking_budget=ovr_budget,
                 )
             return await self._call(
-                messages, max_tokens=2048,
+                messages, max_tokens=8192,
+                temperature=ovr_temp,
+                top_p=ovr_top_p,
                 conversation=conversation,
-                enable_thinking=False,
+                enable_thinking=ovr_thinking if ovr_thinking is not None else False,
+                thinking_budget=ovr_budget,
             )
 
         # For complex Python/scripts: use the micro-fill loop instead
@@ -423,6 +462,9 @@ class Director:
         if is_edit and is_code:
             prompt = f"Modify the code from the previous response:\n{goal_text}"
             system = _GENERATOR_EDIT_SYSTEM
+        elif is_computer:
+            prompt = self._build_user_content(goal, f"{plan_ctx}{specialist_ctx}")
+            system = _GENERATOR_COMPUTER_SYSTEM
         elif is_code:
             prompt = self._build_user_content(goal, f"{plan_ctx}{specialist_ctx}")
             system = _GENERATOR_CODE_SYSTEM
@@ -438,21 +480,31 @@ class Director:
             {"role": "user", "content": prompt},
         ]
 
+        # Resolve enable_thinking: override > route default
+        thinking = (ovr_thinking if ovr_thinking is not None
+                    else (not is_direct))
+
         if on_token:
             return await self._call_stream(
                 messages,
                 on_token=on_token,
-                max_tokens=self.max_tokens if not is_direct else 2048,
+                max_tokens=self.max_tokens if not is_direct else 16384,
                 presence_penalty=self.presence_penalty if not is_direct else 0.0,
+                temperature=ovr_temp,
+                top_p=ovr_top_p,
                 conversation=conversation,
-                enable_thinking=not is_direct,
+                enable_thinking=thinking,
+                thinking_budget=ovr_budget,
             )
 
         return await self._call(
             messages,
-            max_tokens=self.max_tokens if not is_direct else 2048,
+            max_tokens=self.max_tokens if not is_direct else 16384,
+            temperature=ovr_temp,
+            top_p=ovr_top_p,
             conversation=conversation,
-            enable_thinking=not is_direct,
+            enable_thinking=thinking,
+            thinking_budget=ovr_budget,
         )
 
     # ── Section-level edit ──────────────────────────────────────────────
@@ -687,7 +739,6 @@ class Director:
         prompt = (reflection_template
                   .replace("{goal}", str(goal))
                   .replace("{complexity}", str(complexity))
-                  .replace("{rounds}", "2")
                   .replace("{outcome}", outcome_for_prompt))
         messages = [
             {"role": "system", "content": self._personality_prompt()},
