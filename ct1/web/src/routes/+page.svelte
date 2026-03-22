@@ -897,10 +897,8 @@
     .file-chip {
         display: inline-flex; align-items: center; gap: 7px;
         padding: 5px 14px 5px 10px;
-        background: var(--bubble-strong);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-radius: 20px;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
         font-size: 12px;
@@ -1290,10 +1288,8 @@
     .summary-chip {
         display: inline-flex; align-items: center; gap: 6px;
         padding: 4px 12px;
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-radius: 20px;
         font-size: 12.5px; font-weight: 600;
         font-variant-numeric: tabular-nums;
@@ -1309,10 +1305,8 @@
     .trace-pill {
         display: inline-flex; align-items: center; gap: 6px;
         padding: 6px 14px;
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-radius: 20px;
         font-family: var(--font-body);
         font-size: 11px; font-weight: 600;
@@ -1349,10 +1343,8 @@
        TRACE CARDS (expanded details)
        ================================================================ */
     .trace-card {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-left: 2px solid var(--tbc, var(--text-muted));
         border-radius: 12px;
         overflow: hidden;
@@ -1473,10 +1465,8 @@
        COMPUTER MODE FILES CARD (in chat)
        ================================================================ */
     .computer-files-card {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border-light);
+        background: var(--surface);
+        border: 1px solid var(--border);
         border-radius: var(--radius-lg);
         padding: 14px 16px;
         display: flex;
