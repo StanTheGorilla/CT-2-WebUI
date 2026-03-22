@@ -249,10 +249,13 @@
             : $chat.plan?.output_type === 'javascript' ? 'js' : 'html';
     }
 
-    /** Parse <!-- FILE: path --> markers from computer mode response */
+    /** Parse [FILE: path] markers from computer mode response (with legacy fallback) */
     function parseFileList(text: string): string[] {
-        const matches = text.matchAll(/<!--\s*FILE:\s*(.+?)\s*-->/g);
-        return [...matches].map(m => m[1].trim());
+        let matches = [...text.matchAll(/\[FILE:\s*(.+?)\]/g)];
+        if (matches.length === 0) {
+            matches = [...text.matchAll(/<!--\s*FILE:\s*(.+?)\s*-->/g)];
+        }
+        return matches.map(m => m[1].trim());
     }
 
     function formatChars(n: number): string {
