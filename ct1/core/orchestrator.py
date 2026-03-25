@@ -135,6 +135,15 @@ class Orchestrator:
         # Per-task parameter overrides (e.g. Nemotron optimized per route)
         self.task_overrides = cfg.get("_task_overrides", {})
 
+        # Detect model tier for adaptive pipeline depth
+        from ct1.core.tier import detect_tier
+        preset_info = cfg.get("_preset_info", {})
+        model_file = preset_info.get("model_file", "")
+        explicit_tier = preset_info.get("tier")
+        self.tier = detect_tier(model_file, explicit_tier)
+        self.context_size = cfg["llama_server"]["context_size"]
+        print(f"[orch] Model tier: {self.tier} (model: {model_file})")
+
         self.journal = Journal(cfg["journal"]["path"])
         self.journal_reader = JournalReader(cfg["journal"]["path"])
         self.verbose = False
@@ -990,6 +999,42 @@ class Orchestrator:
             "spec": spec,
         }
 
+    async def _self_review(self, code: str, goal: str, route: str,
+                           task_overrides: dict = None) -> dict | None:
+        """Large-tier self-review: model checks its own output."""
+        review_prompt = (
+            f"Review this code against the original request.\n\n"
+            f"REQUEST: {goal[:500]}\n\n"
+            f"CODE:\n{code[:3000]}\n\n"
+            f"Check for:\n"
+            f"1. Does it fully address the request?\n"
+            f"2. Any syntax errors or bugs?\n"
+            f"3. Missing functionality?\n\n"
+            f"Output ONLY a JSON object:\n"
+            f'{{"pass": true, "issues": [], "fix_instructions": ""}}\n'
+            f'or\n'
+            f'{{"pass": false, "issues": ["issue1"], "fix_instructions": "fix this"}}'
+        )
+        try:
+            review_ovr = {**(task_overrides or {}),
+                          "temperature": 0.1, "enable_thinking": False}
+            result = await self.engine.generate(
+                review_prompt, route,
+                task_overrides=review_ovr,
+            )
+            import json
+            text = result["text"].strip()
+            # Extract JSON from possible markdown fences
+            if "```" in text:
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+            return json.loads(text)
+        except Exception as e:
+            print(f"[orch] self-review failed: {e}")
+            return None
+
     async def _pipeline(self, goal, on_event=None,
                         conversation: list[dict] = None,
                         mode_override: str | None = None,
@@ -1093,13 +1138,25 @@ class Orchestrator:
                     result["reflection"] = reflection
                 return result
 
-        # ── Phase 2: PLAN (ROUTE_CODE only, skip for edits and design) ──
+        # ── Phase 2: PLAN (tier-aware) ──
         plan = None
-        if is_code and not is_edit and route == "ROUTE_CODE":
-            if len(user_message) > 30:
-                plan = await self._solo_plan(user_message, route)
-                if plan:
-                    emit("planned", plan=plan)
+        is_complex = len(user_message) > 80 or any(
+            kw in user_message.lower()
+            for kw in ("step by step", "multiple", "project", "full", "complete",
+                       "detailed", "comprehensive", "with tests")
+        )
+
+        if self.tier == "large" and is_code and not is_edit:
+            # Large tier: always plan for code tasks
+            plan = await self._solo_plan(user_message, route)
+            if plan:
+                emit("planned", plan=plan)
+        elif self.tier == "medium" and is_code and not is_edit and is_complex:
+            # Medium tier: plan only for complex requests
+            plan = await self._solo_plan(user_message, route)
+            if plan:
+                emit("planned", plan=plan)
+        # Small tier: no planning call (inline in system prompt)
 
         # ── Phase 3: specialist_data (always None — specialist removed) ──
         specialist_data = None
@@ -1351,6 +1408,32 @@ class Orchestrator:
             emit("validated", issues=[], review={"pass": True,
                  "critical_issues": [], "fix_instructions": ""})
 
+        # ── Phase 5.5: SELF-REVIEW (large tier only) ──
+        if self.tier == "large" and is_code and not is_edit and mode != "question":
+            emit("validating")
+            review = await self._self_review(
+                final_response, user_message, route, task_ovr
+            )
+            if review and not review.get("pass", True):
+                emit("fixing")
+                fix_prompt = (
+                    f"Fix these issues:\n"
+                    + "\n".join(f"- {i}" for i in review.get("issues", [])[:5])
+                    + f"\n\n{review.get('fix_instructions', '')}"
+                    + f"\n\nOriginal code:\n{final_response}"
+                )
+                fix_result = await self.engine.generate(
+                    fix_prompt, route,
+                    on_token=on_token,
+                    task_overrides=task_ovr,
+                )
+                fixed = strip_think_tags(fix_result["text"])
+                fixed = extract_code(fixed) or fixed
+                if len(fixed) > 50:
+                    final_response = fixed
+                    final_thinking = fix_result.get("thinking", "")
+                    print(f"[orch] self-review fix applied")
+
         # ── Phase 6: FORMAT ──────────────────────────────────────────
         if route == "ROUTE_COMPUTER":
             # Computer mode: only strip thinking tags — _parse_multi_file
@@ -1437,6 +1520,7 @@ class Orchestrator:
             "specialist_data": specialist_data,
             "plan": plan,
             "reflection": reflection,
+            "tier": self.tier,
         }
 
     async def think(self, goal, on_event=None,
