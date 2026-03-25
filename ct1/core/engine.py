@@ -228,12 +228,42 @@ _INLINE_VERIFY_SUFFIX = (
     "- If any check fails, fix it before responding.\n"
 )
 
-def get_system_prompt(route: str, tier: str = "small") -> str:
+_DESIGN_FEWSHOT = (
+    "\n\nEXAMPLE STRUCTURE (follow this pattern, not content):\n"
+    "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+    "  <meta charset=\"UTF-8\">\n"
+    "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+    "  <script src=\"https://cdn.tailwindcss.com\"></script>\n"
+    "  <style>/* custom animations, gradients, fonts only */</style>\n"
+    "</head>\n<body class=\"bg-gray-50 text-gray-900\">\n"
+    "  <!-- semantic sections with Tailwind classes -->\n"
+    "</body>\n</html>\n"
+)
+
+_CODE_FEWSHOT = (
+    "\n\nEXAMPLE STRUCTURE (follow this pattern, not content):\n"
+    "```python\n"
+    "import sys\n\n"
+    "def process(data: list[str]) -> dict:\n"
+    "    if not data:\n"
+    "        return {}\n"
+    "    result = {}\n"
+    "    for item in data:\n"
+    "        result[item] = len(item)\n"
+    "    return result\n\n"
+    "if __name__ == \"__main__\":\n"
+    "    print(process(sys.argv[1:]))\n"
+    "```\n"
+)
+
+
+def get_system_prompt(route: str, tier: str = "small",
+                      context_size: int = 16384) -> str:
     """Get the system prompt for a route, with tier-appropriate suffix.
 
-    Small tier: append inline planning + verification
-    Medium tier: append verification only (planning is a separate call)
-    Large tier: no suffix (planning and review are separate pipeline steps)
+    Small tier: append few-shot examples (if context allows) + inline planning
+    Medium tier: append verification only
+    Large tier: no suffix
     """
     prompts = {
         "ROUTE_DIRECT": _GENERATOR_TEXT_SYSTEM,
@@ -244,11 +274,58 @@ def get_system_prompt(route: str, tier: str = "small") -> str:
     base = prompts.get(route, _GENERATOR_TEXT_SYSTEM)
 
     if tier == "small":
-        return base + _INLINE_PLANNING_SUFFIX
+        suffix = ""
+        # Add few-shot for code/design if context allows
+        if context_size >= 8192:
+            if route == "ROUTE_DESIGN":
+                suffix += _DESIGN_FEWSHOT
+            elif route == "ROUTE_CODE":
+                suffix += _CODE_FEWSHOT
+        suffix += _INLINE_PLANNING_SUFFIX
+        return base + suffix
     elif tier == "medium":
         return base + _INLINE_VERIFY_SUFFIX
     else:  # large
         return base
+
+
+def truncate_conversation(
+    conversation: list[dict],
+    system_prompt: str,
+    max_context: int,
+    reserve_output: int = 2048,
+    chars_per_token: float = 3.5,
+) -> list[dict]:
+    """Truncate conversation to fit within context budget.
+
+    Keeps newest messages. Removes oldest turns first.
+    Never splits user+assistant pairs.
+    """
+    if not conversation:
+        return conversation
+
+    system_tokens = len(system_prompt) / chars_per_token
+    available = max_context - system_tokens - reserve_output
+
+    if available <= 0:
+        return conversation[-2:]  # Keep at least the last exchange
+
+    result = []
+    total = 0
+
+    # Walk from newest to oldest, keep what fits
+    for msg in reversed(conversation):
+        msg_tokens = len(msg.get("content", "")) / chars_per_token
+        if total + msg_tokens > available:
+            break
+        result.insert(0, msg)
+        total += msg_tokens
+
+    # Ensure we keep at least the most recent message
+    if not result and conversation:
+        result = [conversation[-1]]
+
+    return result
 
 
 class Engine:
