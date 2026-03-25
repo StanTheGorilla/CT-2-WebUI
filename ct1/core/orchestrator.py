@@ -4,25 +4,29 @@
   1. ROUTE    — Deterministic keyword classifier (no AI — instant, predictable)
   2. PLAN     — Specialist produces a structured task breakdown (code routes only)
   3. CONSULT  — Specialist provides design data (ROUTE_DESIGN only)
-  4. GENERATE — Director produces full response (with plan context injected)
+  4. GENERATE — Engine produces full response (with plan context injected)
   5. VALIDATE — Output-type-aware validation (HTML structural / Python AST / JS braces)
   6. FORMAT   — Deterministic Python cleanup
 """
 import yaml
 from pathlib import Path
-from ct1.core.director import Director
+from ct1.core.engine import Engine
 from ct1.core.specialist import Specialist
 from ct1.server.launcher import load_raw_config, resolve_config
 import re
 from ct1.core.formatter import (
-    clean_response, validate_output,
+    clean_response, validate_output, validate_file,
     split_html_sections, reassemble_html_section,
     strip_think_tags, extract_code,
-    detect_broken_sections,
+    detect_broken_sections, detect_output_type,
+    polish_html_css, check_completeness,
 )
 from ct1.memory.journal import Journal
 from ct1.memory.journal_reader import JournalReader
 from ct1.memory.session_store import SessionStore
+from ct1.core.validator import validate_spec, validate_component, validate_page, sanitize_component
+from ct1.core.assembler import assemble_page, patch_component as patch_component_in_page
+from ct1.templates.fallbacks import get_fallback
 
 _CONFIG_PATH = (Path(__file__).parent.parent.parent
                 / "ct1" / "server" / "model_config.yaml")
@@ -40,9 +44,11 @@ def _extract_text(goal) -> str:
 
 
 def _strip_file_context(text: str) -> str:
-    """Strip inlined [File: ...] blocks, keeping only the user's own message.
+    """Strip inlined [File: ...] and [Workspace file: ...] blocks,
+    keeping only the user's own message.
     Used for routing/classification so file content doesn't pollute intent detection."""
-    return re.sub(r'\[File: [^\]]+\]\n.*?\n\n', '', text, flags=re.DOTALL).strip()
+    text = re.sub(r'\[WORKSPACE FILES[^\]]*\].*?\n\n(?=\S)', '', text, count=1, flags=re.DOTALL)
+    return re.sub(r'\[(?:Workspace )?[Ff]ile: [^\]]+\]\n.*?\n\n', '', text, flags=re.DOTALL).strip()
 
 
 # ── Conversation mode detection keywords ──────────────────────────
@@ -117,7 +123,7 @@ class Orchestrator:
         director_url = f"http://localhost:{cfg['llama_server']['port']}"
         dc = cfg["models"]["director"]
 
-        self.director = Director(
+        self.engine = Engine(
             base_url=director_url,
             temperature=dc["temperature"],
             top_p=dc["top_p"],
@@ -130,7 +136,7 @@ class Orchestrator:
         )
 
         # Specialist is optional (solo presets don't have one)
-        if "llama_server_specialist" in cfg:
+        if "llama_server_specialist" in cfg and "specialist" in cfg.get("models", {}):
             specialist_url = f"http://localhost:{cfg['llama_server_specialist']['port']}"
             sc = cfg["models"]["specialist"]
             self.specialist = Specialist(
@@ -151,11 +157,11 @@ class Orchestrator:
         self.journal_reader = JournalReader(cfg["journal"]["path"])
         self.verbose = False
 
-        # Load lessons into Director personality
+        # Load lessons into Engine personality
         lessons = self.journal_reader.get_recent_lessons(
             cfg["journal"]["lessons_on_startup"]
         )
-        self.director.lessons = lessons
+        self.engine.lessons = lessons
         self.component_cache = component_cache
 
         # Load last session for continuity
@@ -163,7 +169,7 @@ class Orchestrator:
             cfg.get("sessions", {}).get("path", "ct1/data/sessions")
         )
         last_session = self.session_store.read_latest()
-        self.director.last_session = last_session or ""
+        self.engine.last_session = last_session or ""
 
     # ── Deterministic pre-routing (runs BEFORE AI routing) ──────────
 
@@ -266,6 +272,30 @@ class Orchestrator:
         return "ROUTE_DIRECT"
 
     # ── Main pipeline ────────────────────────────────────────────────
+
+    @staticmethod
+    def _slim_conversation(conversation: list[dict]) -> list[dict]:
+        """Strip full code from assistant turns to prevent context contamination.
+
+        Keeps user messages intact and replaces long assistant code with a
+        short summary. This frees context for the new generation and stops
+        the model from copying styles/content from prior outputs.
+        """
+        slim = []
+        for msg in conversation:
+            if msg["role"] == "assistant":
+                content = msg.get("content", "")
+                if isinstance(content, str) and len(content) > 300:
+                    # Replace full code with a one-line note
+                    slim.append({
+                        "role": "assistant",
+                        "content": "(Previous code response omitted for brevity.)",
+                    })
+                else:
+                    slim.append(msg)
+            else:
+                slim.append(msg)
+        return slim
 
     @classmethod
     def _detect_conversation_mode(cls, goal_text: str,
@@ -391,6 +421,7 @@ class Orchestrator:
             "ROUTE_DESIGN": "design",
             "ROUTE_DIRECT": "direct",
             "ROUTE_COMPUTER": "computer",
+            "ROUTE_SOLO": "solo",
         }
         key = route_map.get(route, "direct")
         return self.task_overrides.get(key, {})
@@ -417,6 +448,7 @@ class Orchestrator:
         """Parse model output for multi-file markers.
 
         Supports markers like:
+            [FILE: path/to/file.ext]
             <!-- FILE: path/to/file.ext -->
             ```filename.ext
             (content in fenced code blocks with filename)
@@ -426,7 +458,24 @@ class Orchestrator:
         """
         files = []
 
-        # Pattern 1: <!-- FILE: path --> ... <!-- FILE: path2 -->
+        # Strip outer markdown fence if model wrapped entire output
+        stripped = text.strip()
+        if stripped.startswith("```") and stripped.endswith("```"):
+            # Remove opening ```lang\n and closing ```
+            inner = re.sub(r'^```\w*\s*\n?', '', stripped)
+            inner = re.sub(r'\n?```$', '', inner)
+            if '[FILE:' in inner or '<!-- FILE:' in inner:
+                text = inner
+
+        # Strip conversational preamble before first [FILE:]
+        first_file = re.search(r'\[FILE:', text)
+        if first_file and first_file.start() > 0:
+            preamble = text[:first_file.start()]
+            # Only strip if preamble is short text (not code)
+            if len(preamble) < 500 and not preamble.strip().startswith(('import ', 'def ', '#!')):
+                text = text[first_file.start():]
+
+        # Pattern 1: [FILE: path] ... [FILE: path2] ...
         parts = re.split(r'\[FILE:\s*(.+?)\]', text)
         if len(parts) <= 2:
             parts = re.split(r'<!--\s*FILE:\s*(.+?)\s*-->', text)
@@ -459,17 +508,34 @@ class Orchestrator:
         cleaned = strip_think_tags(cleaned)
         cleaned = extract_code(cleaned)
         if cleaned:
-            ext = "html"
             lower = cleaned.strip().lower()
             if lower.startswith(("import ", "from ", "def ", "class ",
                                  "#!", "#!/")):
                 ext = "py"
+                name = "main"
             elif lower.startswith(("const ", "let ", "var ", "function ",
                                    "import {", "import '")):
                 ext = "js"
+                name = "index"
+            elif lower.startswith(("#include", "using namespace", "int main")):
+                ext = "cpp"
+                name = "main"
+            elif lower.startswith(("package ", "func ")):
+                ext = "go"
+                name = "main"
+            elif lower.startswith(("use ", "fn ", "mod ")):
+                ext = "rs"
+                name = "main"
             elif lower.startswith(("{", "[")):
                 ext = "json"
-            files.append({"path": f"index.{ext}", "content": cleaned})
+                name = "data"
+            elif lower.startswith(("<!doctype", "<html")):
+                ext = "html"
+                name = "index"
+            else:
+                ext = "py"
+                name = "main"
+            files.append({"path": f"{name}.{ext}", "content": cleaned})
         return files
 
     # ── Section-based editing ────────────────────────────────────────
@@ -534,7 +600,7 @@ class Orchestrator:
                 if kind == "thinking":
                     on_token(token, kind)
 
-            edit_result = await self.director.generate_section_edit(
+            edit_result = await self.engine.generate_section_edit(
                 goal, section_name, sections, on_token=thinking_only,
             )
 
@@ -589,7 +655,7 @@ class Orchestrator:
         else:
             code_for_prompt = previous_code
 
-        result = await self.director.generate(
+        result = await self.engine.generate(
             f"Modify this code:\n{code_for_prompt}\n\nChange requested: {goal}",
             route,
             specialist_data=specialist_data,
@@ -601,17 +667,387 @@ class Orchestrator:
         )
         return result["text"], result.get("thinking", ""), False
 
+    # ── Solo-mode self-planning (no specialist) ────────────────────────
+
+    _SOLO_PLAN_SYSTEM = (
+        "Analyze this request and output ONLY a JSON object. No other text.\n"
+        '{"output_type":"html_page"|"python_script"|"javascript"|"cpp"|"other",'
+        '"components":[{"id":1,"name":"short name","description":"what it does"}],'
+        '"complexity":"simple"|"moderate"|"complex"}\n'
+        "Max 5 components. Be concise."
+    )
+
+    async def _solo_plan(self, goal: str, route: str) -> dict | None:
+        """Lightweight self-planning when no specialist is available.
+        Uses the director with thinking disabled for speed."""
+        try:
+            import json
+            raw = await self.engine._call(
+                [{"role": "system", "content": self._SOLO_PLAN_SYSTEM},
+                 {"role": "user", "content": goal}],
+                max_tokens=512,
+                enable_thinking=False,
+            )
+            text = raw if isinstance(raw, str) else raw.get("text", "")
+            text = strip_think_tags(text)
+            # Extract JSON
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                plan = json.loads(text[start:end])
+                # Validate and normalize
+                valid_types = ("html_page", "python_script", "javascript",
+                               "cpp", "api", "other")
+                if plan.get("output_type") not in valid_types:
+                    default = "html_page" if route == "ROUTE_DESIGN" else "other"
+                    plan["output_type"] = default
+                if not isinstance(plan.get("components"), list):
+                    plan["components"] = []
+                plan["components"] = plan["components"][:5]
+                return plan
+        except Exception as e:
+            print(f"[orch] solo plan failed: {e}")
+        return None
+
+    @staticmethod
+    def _format_specialist_data(data: dict) -> str:
+        """Format specialist design data as readable CSS guidance.
+        Delegates to Engine._format_specialist_context for consistency."""
+        from ct1.core.engine import Engine
+        return Engine._format_specialist_context(data)
+
     # Mode override → route mapping
     _MODE_ROUTE_MAP = {
         "design": "ROUTE_DESIGN",
         "code": "ROUTE_CODE",
         "chat": "ROUTE_DIRECT",
         "computer": "ROUTE_COMPUTER",
+        "solo": "ROUTE_SOLO",
     }
+
+    # ── Precision-Design pipeline ─────────────────────────────────────
+
+    _VALID_INTERACTIONS = frozenset([
+        "hamburger-toggle", "smooth-scroll", "accordion", "form-validation",
+        "dark-mode-toggle", "carousel", "modal", "scroll-reveal",
+    ])
+
+    @staticmethod
+    def _normalize_spec(spec: dict) -> dict:
+        """Normalize an Engine spec before validation.
+
+        Strips invalid interaction names and fixes common model mistakes
+        so validation doesn't reject otherwise-good specs.
+        """
+        valid = Orchestrator._VALID_INTERACTIONS
+        for comp in spec.get("components", []):
+            if "interactions" in comp:
+                original = comp["interactions"]
+                comp["interactions"] = [i for i in original if i in valid]
+                dropped = set(original) - set(comp["interactions"])
+                if dropped:
+                    print(f"[design] stripped invalid interactions from {comp.get('id')}: {dropped}")
+        return spec
+
+    async def _design_pipeline(
+        self, goal, goal_text: str, conversation: list[dict],
+        emit, on_token, task_ovr: dict,
+    ) -> dict:
+        """Precision-Design pipeline for new ROUTE_DESIGN generation.
+
+        Phase 0:   Engine (4B) generates JSON spec (structured planning)
+        Phase 0.5: Script validates spec mechanically
+        Phase 1:   Engine (4B) generates full HTML page guided by the spec
+        Phase 2:   Mechanical validation + cleanup
+        """
+        import json as _json
+
+        # ── Phase 0: Spec Generation (Engine plans the page) ────
+        emit("spec_generating")
+        print("[design] Phase 0: generating spec")
+
+        try:
+            spec = await self.engine.generate_spec(
+                goal, conversation=conversation,
+                task_overrides=task_ovr,
+            )
+        except (ValueError, _json.JSONDecodeError) as e:
+            print(f"[design] Phase 0 failed: {e}")
+            emit("spec_failed", errors=[str(e)])
+            corrective = (
+                f"{goal_text}\n\n"
+                "Your previous output was invalid JSON. "
+                "Output ONLY the JSON object with no other text."
+            )
+            try:
+                spec = await self.engine.generate_spec(
+                    corrective, conversation=conversation,
+                    task_overrides=task_ovr,
+                )
+            except (ValueError, _json.JSONDecodeError) as e2:
+                print(f"[design] Phase 0 retry failed: {e2}")
+                return {
+                    "response": f"Design generation failed: could not produce valid spec. {e2}",
+                    "thinking": "", "draft": "", "draft_thinking": "",
+                    "route": "ROUTE_DESIGN", "specialist_data": None,
+                    "plan": None,
+                    "reflection": {
+                        "goal": goal_text[:200], "complexity": "failed",
+                        "lesson": "spec generation failed twice",
+                        "self_score": 0.0,
+                    },
+                }
+
+        # ── Phase 0.5: Spec Validation ────────────────────────────
+        spec = self._normalize_spec(spec)
+        passed, errors = validate_spec(spec)
+        if not passed:
+            print(f"[design] Phase 0.5 failed: {errors}")
+            emit("spec_failed", errors=errors)
+            error_str = "; ".join(errors)
+            corrective = (
+                f"{goal_text}\n\n"
+                f"Your previous spec had these errors: {error_str}\n"
+                "Fix the errors and output ONLY the corrected JSON object."
+            )
+            try:
+                spec = await self.engine.generate_spec(
+                    corrective, conversation=conversation,
+                    task_overrides=task_ovr,
+                )
+            except (ValueError, _json.JSONDecodeError) as e:
+                print(f"[design] Phase 0.5 retry failed: {e}")
+                return {
+                    "response": f"Design generation failed: spec invalid after retry. {e}",
+                    "thinking": "", "draft": "", "draft_thinking": "",
+                    "route": "ROUTE_DESIGN", "specialist_data": None,
+                    "plan": None,
+                    "reflection": {
+                        "goal": goal_text[:200], "complexity": "failed",
+                        "lesson": "spec validation failed twice",
+                        "self_score": 0.0,
+                    },
+                }
+
+            spec = self._normalize_spec(spec)
+            passed, errors = validate_spec(spec)
+            if not passed:
+                print(f"[design] Phase 0.5 second failure: {errors}")
+                return {
+                    "response": (
+                        f"Design generation failed: spec invalid after retry.\n"
+                        f"Errors: {'; '.join(errors)}"
+                    ),
+                    "thinking": "", "draft": "", "draft_thinking": "",
+                    "route": "ROUTE_DESIGN", "specialist_data": None,
+                    "plan": None,
+                    "reflection": {
+                        "goal": goal_text[:200], "complexity": "failed",
+                        "lesson": f"spec validation: {errors[0]}",
+                        "self_score": 0.0,
+                    },
+                }
+
+        emit("spec_validated", spec=spec)
+        print(f"[design] Phase 0.5 passed: {len(spec['components'])} components, "
+              f"layout={spec['layout_order']}")
+
+        # ── Phase 1: Engine generates full HTML (single pass, 4B) ──
+        emit("generating", editing=False)
+        print("[design] Phase 1: Engine generating full page HTML")
+
+        # Build spec context for the Engine — a structured blueprint
+        spec_summary = _json.dumps(spec, indent=2)
+        spec_guided_goal = (
+            f"{goal_text}\n\n"
+            f"[PAGE SPECIFICATION — follow this blueprint exactly]\n"
+            f"{spec_summary}\n\n"
+            f"Generate the complete HTML page. Include ALL components from the "
+            f"layout_order in that exact sequence. Use the color_theme values as "
+            f"Tailwind classes. Use the content text from each component's spec verbatim."
+        )
+
+        result = await self.engine.generate(
+            spec_guided_goal, "ROUTE_DESIGN",
+            conversation=conversation,
+            on_token=on_token,
+            task_overrides=task_ovr,
+        )
+        draft = result["text"]
+        draft_thinking = result.get("thinking", "")
+
+        # ── Phase 2: Cleanup ──────────────────────────────────────
+        from ct1.core.formatter import strip_think_tags, extract_code
+        draft = strip_think_tags(draft)
+        draft = extract_code(draft)
+
+        emit("draft", text=draft, thinking=draft_thinking)
+
+        # Persist spec for edit mode
+        spec_json = _json.dumps(spec)
+
+        return {
+            "response": draft,
+            "thinking": draft_thinking,
+            "draft": draft,
+            "draft_thinking": draft_thinking,
+            "route": "ROUTE_DESIGN",
+            "specialist_data": spec_json,
+            "plan": None,
+            "reflection": None,  # Reflection handled by caller
+            "spec": spec,
+        }
+
+    async def _design_edit_pipeline(
+        self, goal_text: str, conversation: list[dict],
+        emit, on_token, task_ovr: dict,
+        previous_code: str,
+    ) -> dict:
+        """Edit mode for Precision-Design.
+
+        1. Retrieve persisted spec from conversation
+        2. Engine identifies which component(s) the edit targets
+        3. Re-run generation + validation for only that component
+        4. Patch into assembled page
+        """
+        import json as _json
+
+        # Retrieve the spec from the last assistant turn's specialist_data
+        spec = None
+        for turn in reversed(conversation):
+            if turn.get("role") == "assistant":
+                sd = turn.get("specialist_data")
+                if sd and isinstance(sd, str):
+                    try:
+                        spec = _json.loads(sd)
+                        if "layout_order" in spec and "components" in spec:
+                            break
+                        spec = None
+                    except (ValueError, _json.JSONDecodeError):
+                        pass
+                elif sd and isinstance(sd, dict):
+                    if "layout_order" in sd and "components" in sd:
+                        spec = sd
+                        break
+
+        if not spec:
+            # No spec found — fall back to full regeneration
+            print("[design-edit] no spec found in conversation, falling back to full pipeline")
+            return await self._design_pipeline(
+                goal_text, goal_text, conversation,
+                emit, on_token, task_ovr,
+            )
+
+        # Use Engine to identify target component(s) from edit request
+        emit("spec_generating")
+        comp_map = {c["id"]: c for c in spec["components"]}
+
+        # Simple heuristic: check if any component id is mentioned in the edit
+        target_ids = []
+        goal_lower = goal_text.lower()
+        for cid in spec["layout_order"]:
+            if cid.lower() in goal_lower or cid.replace("-", " ").lower() in goal_lower:
+                target_ids.append(cid)
+
+        # Also check component types
+        if not target_ids:
+            for comp in spec["components"]:
+                ctype = comp["type"].lower()
+                if ctype in goal_lower:
+                    target_ids.append(comp["id"])
+
+        # If still nothing, regenerate all — the edit is ambiguous
+        if not target_ids:
+            target_ids = list(spec["layout_order"])
+            print(f"[design-edit] ambiguous edit, regenerating all components")
+        else:
+            print(f"[design-edit] targeting components: {target_ids}")
+
+        emit("spec_validated", spec=spec)
+
+        # Regenerate targeted components
+        total = len(target_ids)
+        for i, comp_id in enumerate(target_ids):
+            comp_spec = comp_map.get(comp_id)
+            if not comp_spec:
+                continue
+
+            emit("component_generating",
+                 component_id=comp_id, index=i, total=total)
+
+            # Modify the spec content based on user request
+            # For now, pass the edit intent in the prompt
+            try:
+                html = await self.specialist.generate_component(
+                    comp_spec, spec["color_theme"], None,
+                )
+                html = sanitize_component(html)
+                passed, hard_errors, _ = validate_component(html, comp_spec)
+
+                if not passed:
+                    # One patch attempt
+                    try:
+                        html = await self.specialist.patch_component(
+                            comp_spec, spec["color_theme"], html, hard_errors,
+                        )
+                        html = sanitize_component(html)
+                        passed, _, _ = validate_component(html, comp_spec)
+                    except Exception:
+                        pass
+
+                    if not passed:
+                        html = get_fallback(comp_spec["type"], comp_id)
+                        emit("component_fallback", component_id=comp_id)
+
+            except Exception as e:
+                print(f"[design-edit] regen failed for {comp_id}: {e}")
+                html = get_fallback(comp_spec["type"], comp_id)
+                emit("component_fallback", component_id=comp_id)
+
+            # Patch into previous assembled page
+            if previous_code:
+                previous_code = patch_component_in_page(
+                    previous_code, comp_id, html,
+                )
+
+            emit("component_validated",
+                 component_id=comp_id, index=i, total=total)
+
+        # If no previous assembled page, do full assembly
+        if not previous_code or "<html" not in previous_code.lower():
+            component_html = {}
+            for comp in spec["components"]:
+                cid = comp["id"]
+                if cid in [c for c in target_ids]:
+                    # Already regenerated above — but we only patched into previous_code
+                    # Need to extract or regenerate
+                    component_html[cid] = get_fallback(comp["type"], cid)
+                else:
+                    component_html[cid] = get_fallback(comp["type"], cid)
+            previous_code = assemble_page(
+                spec["page_title"], component_html,
+                spec["layout_order"], spec,
+            )
+
+        emit("draft", text=previous_code, thinking="")
+
+        spec_json = _json.dumps(spec)
+        return {
+            "response": previous_code,
+            "thinking": "",
+            "draft": previous_code,
+            "draft_thinking": "",
+            "route": "ROUTE_DESIGN",
+            "specialist_data": spec_json,
+            "plan": None,
+            "reflection": None,
+            "spec": spec,
+        }
 
     async def _pipeline(self, goal, on_event=None,
                         conversation: list[dict] = None,
-                        mode_override: str | None = None) -> dict:
+                        mode_override: str | None = None,
+                        skip_refinement: bool = False) -> dict:
         if conversation is None:
             conversation = []
 
@@ -623,7 +1059,7 @@ class Orchestrator:
         # Handle images when vision not supported
         has_images = (isinstance(goal, list) and
                       any(p.get("type") == "image_url" for p in goal))
-        no_vision = has_images and not self.director.vision_supported
+        no_vision = has_images and not self.engine.vision_supported
         if no_vision:
             if on_event:
                 on_event("warning", message="Image attached but vision is not available with current model. The image will be ignored.")
@@ -635,6 +1071,12 @@ class Orchestrator:
         # Detect conversation mode (edit / question / new)
         mode, previous_code = self._detect_conversation_mode(user_message, conversation)
         is_edit = mode == "edit"
+
+        # For "new" mode, strip full code from conversation history.
+        # A 4B/16K model gets confused by prior HTML/code in context,
+        # mixing styles and content from previous turns into new output.
+        if mode == "new" and conversation:
+            conversation = self._slim_conversation(conversation)
 
         # ── Phase 1: ROUTE (AI via Specialist, with deterministic fast-paths) ──
         emit("routing")
@@ -669,37 +1111,185 @@ class Orchestrator:
         # Resolve per-task parameter overrides for this route
         task_ovr = self._get_task_overrides(route, user_message)
 
-        # ── Phase 2: PLAN (code routes only, skip for edits, needs specialist) ──
-        plan = None
-        if is_code and not is_edit and self.specialist and route != "ROUTE_COMPUTER":
-            plan = await self.specialist.plan(user_message, route)
-            emit("planned", plan=plan)
+        # ── ROUTE_DESIGN: Precision-Design pipeline (replaces old flow) ──
+        if route == "ROUTE_DESIGN" and self.specialist:
+            def on_token(token, kind):
+                emit("token", text=token, kind=kind)
 
-        # ── Phase 3: CONSULT (ROUTE_DESIGN only, skip for edits, needs specialist) ──
+            if mode == "question":
+                # Questions about design → fall through to normal ROUTE_DIRECT flow
+                pass
+            elif is_edit:
+                result = await self._design_edit_pipeline(
+                    user_message, conversation,
+                    emit, on_token, task_ovr,
+                    previous_code=previous_code,
+                )
+                # Run reflection
+                if result.get("reflection") is None:
+                    reflection = await self.engine.reflect(
+                        goal_text, "moderate", result["response"],
+                        conversation=conversation,
+                    )
+                    self.journal.write(reflection)
+                    result["reflection"] = reflection
+                return result
+            else:
+                result = await self._design_pipeline(
+                    goal, goal_text, conversation,
+                    emit, on_token, task_ovr,
+                )
+                # Run reflection
+                if result.get("reflection") is None:
+                    reflection = await self.engine.reflect(
+                        goal_text, "moderate", result["response"],
+                        conversation=conversation,
+                    )
+                    self.journal.write(reflection)
+                    result["reflection"] = reflection
+                return result
+
+        # ── ROUTE_SOLO: Engine handles everything, skip specialist ──
+        if route == "ROUTE_SOLO":
+            emit("generating", editing=is_edit)
+
+            def on_token(token, kind):
+                emit("token", text=token, kind=kind)
+
+            if is_edit and previous_code:
+                draft, draft_thinking, _ = await self._generate_edit(
+                    user_message, "ROUTE_SOLO", previous_code,
+                    on_token, emit, conversation=conversation,
+                    task_overrides=task_ovr,
+                )
+                emit("token", text=draft, kind="content")
+            else:
+                # Optional self-planning for complex requests
+                plan = None
+                if len(user_message) > 50:
+                    plan = await self._solo_plan(user_message, "ROUTE_SOLO")
+                    if plan:
+                        emit("planned", plan=plan)
+
+                result = await self.engine.generate(
+                    goal, "ROUTE_SOLO",
+                    plan=plan,
+                    conversation=conversation,
+                    on_token=on_token,
+                    task_overrides=task_ovr,
+                )
+                draft = result["text"]
+                draft_thinking = result.get("thinking", "")
+
+            emit("draft", text=draft, thinking=draft_thinking)
+
+            # Lightweight formatting
+            final_response = strip_think_tags(draft)
+            final_response = extract_code(final_response) or final_response
+
+            return {
+                "response": final_response,
+                "thinking": draft_thinking,
+                "draft": draft,
+                "draft_thinking": draft_thinking,
+                "route": route,
+                "specialist_data": None,
+                "plan": plan if not is_edit else None,
+                "reflection": {
+                    "goal": goal_text[:200], "complexity": "moderate",
+                    "lesson": "", "self_score": 0.0,
+                },
+            }
+
+        # ── Phase 2: PLAN (ROUTE_CODE only, skip for edits and design) ──
+        plan = None
+        if is_code and not is_edit and route == "ROUTE_CODE":
+            if self.specialist:
+                plan = await self.specialist.plan(user_message, route)
+                emit("planned", plan=plan)
+            elif len(user_message) > 30:
+                # Solo mode: lightweight self-planning via director
+                plan = await self._solo_plan(user_message, route)
+                if plan:
+                    emit("planned", plan=plan)
+
+        # ── Phase 3: DECOMPOSE (structured requirement extraction) ──────
+        # Skip for DIRECT — Engine handles chat end-to-end, no 2B overhead
         specialist_data = None
-        if route == "ROUTE_DESIGN" and not is_edit and self.specialist:
+        if (not is_edit and mode != "question" and self.specialist
+                and route != "ROUTE_DIRECT"):
             emit("consulting")
-            # Fetch cached references for the specialist
-            references = []
-            if self.component_cache:
-                try:
-                    from ct1.memory.component_cache import ComponentCache
-                    keywords = ComponentCache.extract_tags(user_message)
-                    refs = await self.component_cache.search_similar(keywords, limit=2)
-                    for r in refs:
-                        references.append({
-                            "category": r["category"],
-                            "tags": r["tags"],
-                            "score": r["score"],
-                            "snippet": r["html_snippet"][:500],
-                        })
-                except Exception as e:
-                    print(f"[orch] cache search error: {e}")
-            specialist_data = await self.specialist.consult(
-                user_message, conversation=conversation,
-                references=references if references else None,
+            try:
+                specialist_data = await self.specialist.decompose(
+                    user_message, route, conversation=conversation,
+                )
+                if specialist_data and len(specialist_data) > 1:
+                    emit("consulted", data=specialist_data)
+            except Exception as e:
+                print(f"[orch] decomposition failed: {e}")
+
+        # ── Adaptive thinking budget based on decomposition complexity ──
+        # Only scale when an explicit thinking_budget is configured (> 0).
+        # When budget is -1 (model self-regulates), don't force a budget —
+        # small-context models (16K) need all the room for content tokens.
+        if specialist_data and not is_edit and mode != "question":
+            _items = (
+                specialist_data.get("sections", [])
+                + specialist_data.get("requirements", [])
+                + specialist_data.get("files", [])
+                + specialist_data.get("key_points", [])
             )
-            emit("consulted", data=specialist_data)
+            _specials = specialist_data.get("special", [])
+            n = len(_items) + len(_specials)
+            base = self.engine.thinking_budget
+            if base and base > 0:
+                # Scale relative to the configured budget
+                if n <= 2:
+                    adaptive = max(1024, base // 3)
+                elif n <= 5:
+                    adaptive = base
+                else:
+                    adaptive = min(base * 2, 65536)
+                task_ovr = {**task_ovr, "thinking_budget": adaptive}
+                print(f"[orch] adaptive thinking: {n} items → budget {adaptive}")
+            else:
+                print(f"[orch] adaptive thinking: skipped (no explicit budget, model self-regulates)")
+
+        # ── Phase 3.5: TASK PLANNING (Engine writes its own checklist) ──
+        task_list = []
+        if specialist_data and is_code and not is_edit and mode != "question":
+            try:
+                task_list = await self.engine.plan_tasks(
+                    user_message, specialist_data=specialist_data,
+                    task_overrides=task_ovr,
+                )
+                if task_list:
+                    emit("checklist", items=[
+                        {"item": t, "done": False} for t in task_list
+                    ])
+                    print(f"[orch] task plan: {len(task_list)} tasks")
+            except Exception as e:
+                print(f"[orch] task planning failed: {e}")
+
+        # ── Phase 3.6: Inject cached references into director (#4) ────
+        cache_ctx = ""
+        if (self.component_cache and is_code and not is_edit
+                and route != "ROUTE_COMPUTER"):
+            try:
+                from ct1.memory.component_cache import ComponentCache
+                kw = ComponentCache.extract_tags(user_message, specialist_data)
+                refs = await self.component_cache.search_similar(kw, limit=2)
+                if refs:
+                    snippets = []
+                    for r in refs:
+                        snippet = r["html_snippet"][:2000]
+                        snippets.append(
+                            f"[REFERENCE — approved {r['category']} "
+                            f"(score {r['score']:.0%})]\n{snippet}"
+                        )
+                    cache_ctx = "\n\n".join(snippets)
+            except Exception as e:
+                print(f"[orch] cache reference inject error: {e}")
 
         # ── Phase 4: GENERATE (streamed) ──────────────────────────────
         emit("generating", editing=is_edit)
@@ -719,14 +1309,26 @@ class Orchestrator:
             # Push patched code to streamingText so preview shows it immediately
             emit("token", text=draft, kind="content")
         else:
-            result = await self.director.generate(
-                goal, route,
+            # Single-pass generation — no scaffold, no fragmentation
+            actual_goal = goal
+            if cache_ctx:
+                if isinstance(actual_goal, str):
+                    actual_goal = f"{cache_ctx}\n\n{actual_goal}"
+                elif isinstance(actual_goal, list):
+                    for part in actual_goal:
+                        if part.get("type") == "text":
+                            part["text"] = f"{cache_ctx}\n\n{part['text']}"
+                            break
+
+            result = await self.engine.generate(
+                actual_goal, route,
                 specialist_data=specialist_data,
                 plan=plan,
                 conversation=conversation,
                 on_token=on_token,
                 code_context=previous_code if mode == "question" else None,
                 task_overrides=task_ovr,
+                task_list=task_list if task_list else None,
             )
             draft = result["text"]
             draft_thinking = result.get("thinking", "")
@@ -736,36 +1338,151 @@ class Orchestrator:
         final_response = draft
         final_thinking = draft_thinking
 
-        # ── Phase 4.5: POLISH (CSS refinement for HTML, skip edits) ──────
+        # ── Phase 4.1: CHECKLIST (completeness verification) ────────
+        checklist = []
+        missing_items = []
+        if not is_edit and mode != "question":
+            clean_for_check = strip_think_tags(draft)
+            clean_for_check = extract_code(clean_for_check)
+
+            if task_list:
+                # Verify against model's OWN task list — much more accurate
+                lower = clean_for_check.lower()
+                for task in task_list:
+                    # Extract key terms (5+ chars) from the task
+                    import re
+                    words = [w for w in re.findall(r'[a-zA-Z]{5,}', task.lower())
+                             if w not in {"should", "create", "build", "every",
+                                          "include", "using", "about", "their",
+                                          "which", "these", "those", "based"}]
+                    if words:
+                        matches = sum(1 for w in words if w in lower)
+                        done = matches >= max(1, len(words) // 3)
+                    else:
+                        done = True
+                    checklist.append({"item": task, "done": done})
+            elif specialist_data:
+                # Fallback: generic decomposition check
+                checklist = check_completeness(clean_for_check, specialist_data)
+
+            if checklist:
+                emit("checklist", items=checklist)
+                missing_items = [c["item"] for c in checklist if not c["done"]]
+                if missing_items:
+                    print(f"[orch] checklist: {len(missing_items)} items missing: {missing_items}")
+                else:
+                    print(f"[orch] checklist: all {len(checklist)} items present")
+
+        # ── Phase 4.25: REFINE (design mode, targeted or skipped) ───
+        if (route == "ROUTE_DESIGN" and not is_edit and mode != "question"
+                and not skip_refinement):
+            # Skip refinement if checklist passed completely
+            if checklist and not missing_items:
+                print("[orch] all checklist items present — skipping refinement")
+            else:
+                try:
+                    clean_draft = strip_think_tags(draft)
+                    clean_draft = extract_code(clean_draft)
+                    draft_lower = clean_draft.strip().lower()
+                    if (clean_draft and len(clean_draft) > 100
+                            and (draft_lower.startswith("<!doctype")
+                                 or draft_lower.startswith("<html"))):
+                        emit("refining")
+
+                        # Refinement is a simpler task — cap thinking budget
+                        refine_ovr = {**task_ovr}
+                        if "thinking_budget" in refine_ovr:
+                            refine_ovr["thinking_budget"] = min(
+                                refine_ovr["thinking_budget"], 2048
+                            )
+
+                        refine_result = await self.engine.refine_design(
+                            clean_draft, on_token=None,
+                            task_overrides=refine_ovr,
+                            missing_items=missing_items if missing_items else None,
+                        )
+                        refined = refine_result["text"]
+                        refined = strip_think_tags(refined)
+                        refined = extract_code(refined)
+                        refined_stripped = refined.strip().lower()
+                        if (refined_stripped.startswith("<!doctype") or
+                                refined_stripped.startswith("<html")):
+                            final_response = refined
+                            final_thinking = refine_result.get("thinking", "")
+                            emit("polished", code=final_response)
+
+                            # Re-check after refinement
+                            if missing_items and specialist_data:
+                                checklist = check_completeness(refined, specialist_data)
+                                emit("checklist", items=checklist)
+                        else:
+                            print("[orch] refinement output not valid HTML, keeping original")
+                    else:
+                        print(f"[orch] skipping refinement — draft not valid HTML")
+                except Exception as e:
+                    print(f"[orch] refinement failed, keeping original: {e}")
+
+        # ── Phase 4.5: POLISH (deterministic CSS, no AI) ─────────────
+        # Skip for ROUTE_DESIGN — the self-refinement pass already handles polish
         polish_output_type = plan.get("output_type", "html_page") if plan else "html_page"
-        if is_code and not is_edit and route != "ROUTE_COMPUTER" and polish_output_type == "html_page":
-            sections = split_html_sections(draft)
-            css = sections.get("style", "")
-            if css and len(css) > 50:
-                emit("polishing")
+        if (is_code and not is_edit and route not in ("ROUTE_COMPUTER", "ROUTE_DESIGN")
+                and polish_output_type == "html_page"):
+            emit("polishing")
+            polished = polish_html_css(final_response)
+            if polished != final_response:
+                final_response = polished
+                emit("polished", code=final_response)
 
-                # Don't stream tokens — polish reasoning isn't useful to the user
-                polish_result = await self.director.polish_css(css)
-                polished_css = strip_think_tags(polish_result["text"])
-                polished_css = extract_code(polished_css)
+        # ── Phase 5: VALIDATE ─────────────────────────────────────────
+        if is_code and not is_edit and route == "ROUTE_COMPUTER":
+            # Computer mode: validate each parsed file individually
+            parsed_files = self._parse_multi_file(draft)
+            file_issues = []
+            for f in parsed_files:
+                file_issues.extend(validate_file(f["path"], f["content"]))
+            if file_issues:
+                emit("validating", issues=file_issues,
+                     review={"pass": False, "critical_issues": file_issues,
+                             "fix_instructions": ""})
+                emit("fixing")
 
-                if len(polished_css) > 50:
-                    final_response = reassemble_html_section(
-                        draft, "style", polished_css,
-                    )
-                    emit("polished", code=final_response)
+                fix_prompt = (
+                    f"Fix ALL these issues in the code:\n"
+                    + "\n".join(f"- {i}" for i in file_issues[:5])
+                    + f"\n\nOriginal output:\n{draft}"
+                )
 
-        # ── Phase 5: VALIDATE (skip for edits — base was already valid) ──
-        if is_code and not is_edit and route != "ROUTE_COMPUTER":
-            output_type = plan.get("output_type", "html_page") if plan else "html_page"
+                def on_fix_token_comp(token, kind):
+                    emit("token", text=token, kind=kind)
+
+                fix_ovr = {**task_ovr}
+                if "thinking_budget" in fix_ovr:
+                    fix_ovr["thinking_budget"] = min(fix_ovr["thinking_budget"], 2048)
+                fix_result = await self.engine.generate(
+                    fix_prompt, route,
+                    on_token=on_fix_token_comp,
+                    task_overrides=fix_ovr,
+                )
+                final_response = fix_result["text"]
+                final_thinking = fix_result.get("thinking", "")
+            else:
+                emit("validated", issues=[], review={"pass": True,
+                     "critical_issues": [], "fix_instructions": ""})
+
+        elif is_code and not is_edit:
+            # Non-computer code: auto-detect output type for proper validation
+            output_type = plan.get("output_type", "other") if plan else "other"
+            if output_type in ("other", "html_page"):
+                detected = detect_output_type(draft)
+                if detected != "other":
+                    output_type = detected
 
             # Programmatic validation (real syntax check, no AI)
             issues = validate_output(draft, output_type)
 
-            # Specialist review only if programmatic check found issues
-            # and specialist is available (solo mode skips this)
+            # Specialist review if available and issues found
             review_result = {"pass": True, "critical_issues": [], "fix_instructions": ""}
-            if issues and output_type in ("html_page", "other") and self.specialist:
+            if issues and self.specialist:
                 review_result = await self.specialist.review(
                     goal_text, draft, conversation=conversation
                 )
@@ -789,13 +1506,16 @@ class Orchestrator:
                 def on_fix_token(token, kind):
                     emit("token", text=token, kind=kind)
 
-                fix_result = await self.director.generate(
+                fix_ovr = {**task_ovr}
+                if "thinking_budget" in fix_ovr:
+                    fix_ovr["thinking_budget"] = min(fix_ovr["thinking_budget"], 2048)
+                fix_result = await self.engine.generate(
                     fix_prompt, route,
                     specialist_data=specialist_data,
-                    plan=None,  # don't re-plan for fix pass
+                    plan=None,
                     conversation=conversation,
                     on_token=on_fix_token,
-                    task_overrides=task_ovr,
+                    task_overrides=fix_ovr,
                 )
                 final_response = fix_result["text"]
                 final_thinking = fix_result.get("thinking", "")
@@ -807,12 +1527,15 @@ class Orchestrator:
 
         # ── Phase 6: FORMAT ──────────────────────────────────────────
         if route == "ROUTE_COMPUTER":
-            # Computer mode: only strip thinking, preserve FILE/RUN markers
+            # Computer mode: only strip thinking tags — _parse_multi_file
+            # handles code extraction per-file (extract_code here would
+            # destroy [FILE:] markers)
             final_response = strip_think_tags(final_response)
         elif used_section_edit:
             final_response = strip_think_tags(final_response)
         else:
-            output_type = plan.get("output_type", "html_page") if plan else "html_page"
+            # Auto-detect output type for correct cleanup
+            output_type = plan.get("output_type", "other") if plan else "other"
             final_response = clean_response(
                 final_response, is_code=is_code, output_type=output_type
             )
@@ -835,7 +1558,7 @@ class Orchestrator:
                         def retry_token(token, kind):
                             if kind == "thinking":
                                 emit("token", text=token, kind=kind)
-                        retry_result = await self.director.generate_section_edit(
+                        retry_result = await self.engine.generate_section_edit(
                             f"Regenerate the {section_name} section completely. The current {section_name} is empty or broken. Original request: {goal_text}",
                             section_name, sections, on_token=retry_token,
                         )
@@ -853,7 +1576,7 @@ class Orchestrator:
         # ── Reflection (code routes only — skip for direct text) ─────
         if is_code and route != "ROUTE_COMPUTER":
             complexity = plan.get("complexity", "moderate") if plan else "moderate"
-            reflection = await self.director.reflect(
+            reflection = await self.engine.reflect(
                 goal_text, complexity, final_response,
                 conversation=conversation,
             )
@@ -892,13 +1615,15 @@ class Orchestrator:
 
     async def think(self, goal, on_event=None,
                     conversation: list[dict] = None,
-                    mode_override: str | None = None) -> dict:
+                    mode_override: str | None = None,
+                    skip_refinement: bool = False) -> dict:
         return await self._pipeline(
             goal, on_event=on_event, conversation=conversation or [],
             mode_override=mode_override,
+            skip_refinement=skip_refinement,
         )
 
     async def close(self):
-        await self.director.close()
+        await self.engine.close()
         if self.specialist:
             await self.specialist.close()
