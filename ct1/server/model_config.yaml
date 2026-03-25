@@ -1,41 +1,161 @@
-llama_server:
-  executable: "F:/AI_Workstation/ct/llama-b8292-bin-win-vulkan-x64/llama-server.exe"
-  model: "F:/AI_Workstation/models/Qwen3.5-4B-Q3_K_S.gguf"
-  port: 8080
-  n_gpu_layers: 99
-  parallel_slots: 1
-  context_size: 16384
-  cont_batching: false
+executable: F:/AI_Workstation/ct/llama-b8292-bin-win-vulkan-x64/llama-server.exe
+models_dir: models
+active_preset: qwen4b-q6
 
-llama_server_specialist:
-  executable: "F:/AI_Workstation/ct/llama-b8292-bin-win-vulkan-x64/llama-server.exe"
-  model: "F:/AI_Workstation/models/Qwen3.5-2B.Q4_K_M.gguf"
-  port: 8081
-  n_gpu_layers: 99
-  parallel_slots: 1
-  context_size: 4096
-  cont_batching: false
-
-models:
-  director:
+presets:
+  qwen4b:
+    name: Qwen 3.5 4B
+    model: Qwen3.5-4B-Q3_K_S.gguf
+    port: 8080
+    n_gpu_layers: 99
+    parallel_slots: 1
+    context_size: 16384
     enable_thinking: true
+    tier: null
     temperature: 0.6
     top_p: 0.9
     top_k: 40
     presence_penalty: 1.0
     max_tokens: 100000
     vision_supported: false
+    task_overrides:
+      design:
+        temperature: 0.4
+      code:
+        temperature: 0.25
+        top_p: 0.85
+        presence_penalty: 1.3
+      computer:
+        temperature: 0.25
+        top_p: 0.8
+        presence_penalty: 1.3
+      direct:
+        temperature: 0.5
+        presence_penalty: 0.6
 
-  specialist:
-    enable_thinking: false
-    temperature: 0.1
+  qwen4b-q6:
+    name: Qwen 3.5 4B Q6 Distilled
+    model: Qwen3.5-4B.Q6_Kdistiled.gguf
+    port: 8080
+    n_gpu_layers: 99
+    parallel_slots: 1
+    context_size: 16384
+    enable_thinking: true
+    tier: null
+    temperature: 0.6
     top_p: 0.9
-    top_k: 10
-    max_tokens: 1024
+    top_k: 40
+    presence_penalty: 1.0
+    max_tokens: 100000
+    vision_supported: false
+    task_overrides:
+      design:
+        temperature: 0.4
+      code:
+        temperature: 0.25
+        top_p: 0.85
+        presence_penalty: 1.3
+      computer:
+        temperature: 0.25
+        top_p: 0.8
+        presence_penalty: 1.3
+      direct:
+        temperature: 0.5
+        presence_penalty: 0.6
+
+  nemotron-q8:
+    name: Nemotron 4B Q8
+    model: NVIDIA-Nemotron-3-Nano-4B-Q8_0.gguf
+    port: 8080
+    n_gpu_layers: 99
+    parallel_slots: 1
+    context_size: 65536
+    enable_thinking: true
+    thinking_budget: 36864
+    tier: null
+    temperature: 0.7
+    top_p: 0.95
+    top_k: 40
+    presence_penalty: 1.2
+    frequency_penalty: 0.3
+    max_tokens: 100000
+    vision_supported: false
+    task_overrides:
+      design:
+        temperature: 0.4
+        thinking_budget: 36864
+      code:
+        temperature: 0.25
+        top_p: 0.9
+        thinking_budget: 36864
+      computer:
+        temperature: 0.25
+        top_p: 0.85
+        thinking_budget: 36864
+      direct:
+        temperature: 0.6
+        top_p: 0.95
+
+  nemotron-q4:
+    name: Nemotron 4B Q4
+    model: NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf
+    port: 8080
+    n_gpu_layers: 99
+    parallel_slots: 1
+    context_size: 65536
+    enable_thinking: true
+    thinking_budget: 36864
+    tier: null
+    temperature: 0.7
+    top_p: 0.95
+    top_k: 40
+    presence_penalty: 1.2
+    frequency_penalty: 0.3
+    max_tokens: 100000
+    vision_supported: false
+    task_overrides:
+      design:
+        temperature: 0.4
+        thinking_budget: 36864
+      code:
+        temperature: 0.25
+        top_p: 0.9
+        thinking_budget: 36864
+      computer:
+        temperature: 0.25
+        top_p: 0.85
+        thinking_budget: 36864
+      direct:
+        temperature: 0.6
+        top_p: 0.95
+
+  qwen2b:
+    name: Qwen 3.5 2B
+    model: Qwen3.5-2B.Q4_K_M.gguf
+    port: 8080
+    n_gpu_layers: 99
+    parallel_slots: 1
+    context_size: 4096
+    enable_thinking: false
+    tier: small
+    temperature: 0.5
+    top_p: 0.9
+    top_k: 40
+    presence_penalty: 1.0
+    max_tokens: 4000
+    vision_supported: false
+    task_overrides:
+      design:
+        temperature: 0.4
+      code:
+        temperature: 0.25
+      computer:
+        temperature: 0.25
+      direct:
+        temperature: 0.4
 
 journal:
-  path: "ct1/data/journals"
+  path: ct1/data/journals
   lessons_on_startup: 10
-
 sessions:
-  path: "ct1/data/sessions"
+  path: ct1/data/sessions
