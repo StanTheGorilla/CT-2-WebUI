@@ -184,25 +184,6 @@ _GENERATOR_TEXT_SYSTEM = (
     "Do not repeat yourself. Do not self-correct in circles — state the answer once, correctly.\n"
 )
 
-_GENERATOR_SOLO_SYSTEM = (
-    "You are CT-2 running in solo mode — one model, no specialist.\n"
-    "Adapt your response format to the task:\n\n"
-
-    "CODE REQUESTS: Output complete, working code. No markdown fences. No explanations.\n"
-    "  HTML → full <!DOCTYPE html> to </html>. CSS in <style>, JS in <script>.\n"
-    "  Python → complete .py with imports, functions, main block.\n\n"
-
-    "QUESTIONS: Answer clearly and concisely. Use structure (headings, bullets) for longer answers.\n\n"
-
-    "ANALYSIS: Provide step-by-step reasoning. Show your work.\n\n"
-
-    "THINKING PROCESS — before responding, reason through these in your thinking:\n"
-    "1. What type of task is this? (code, question, analysis, creative)\n"
-    "2. What format and depth fits best?\n"
-    "3. What are the key requirements and constraints?\n"
-    "Then produce a complete, high-quality response.\n"
-)
-
 _GENERATOR_DISCUSS_SYSTEM = (
     "You are CT-2, an expert developer.\n"
     "The user is asking about code you generated previously.\n"
@@ -604,8 +585,6 @@ class Engine:
         is_code = route in ("ROUTE_DESIGN", "ROUTE_CODE", "ROUTE_COMPUTER")
         is_direct = route == "ROUTE_DIRECT"
         is_computer = route == "ROUTE_COMPUTER"
-        is_solo = route == "ROUTE_SOLO"
-
         # Unpack per-task overrides (e.g. Nemotron uses different temp per route)
         ovr = task_overrides or {}
         ovr_temp = ovr.get("temperature")
@@ -690,9 +669,6 @@ class Engine:
         elif is_code:
             prompt = self._build_user_content(goal, f"{plan_ctx}{specialist_ctx}{task_ctx}{length_ctx}")
             system = _GENERATOR_CODE_SYSTEM
-        elif is_solo:
-            prompt = self._build_user_content(goal, f"{plan_ctx}{specialist_ctx}{task_ctx}{length_ctx}")
-            system = _GENERATOR_SOLO_SYSTEM
         elif is_direct:
             prompt = self._build_user_content(goal, f"{specialist_ctx}{task_ctx}")
             system = _GENERATOR_TEXT_SYSTEM

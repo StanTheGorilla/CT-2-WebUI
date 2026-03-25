@@ -688,13 +688,6 @@ class Orchestrator:
             print(f"[orch] solo plan failed: {e}")
         return None
 
-    @staticmethod
-    def _format_specialist_data(data: dict) -> str:
-        """Format specialist design data as readable CSS guidance.
-        Delegates to Engine._format_specialist_context for consistency."""
-        from ct1.core.engine import Engine
-        return Engine._format_specialist_context(data)
-
     # Mode override → route mapping
     _MODE_ROUTE_MAP = {
         "design": "ROUTE_DESIGN",
@@ -1111,48 +1104,7 @@ class Orchestrator:
         # ── Phase 3: specialist_data (always None — specialist removed) ──
         specialist_data = None
 
-        # ── Adaptive thinking budget based on decomposition complexity ──
-        # Only scale when an explicit thinking_budget is configured (> 0).
-        # When budget is -1 (model self-regulates), don't force a budget —
-        # small-context models (16K) need all the room for content tokens.
-        if specialist_data and not is_edit and mode != "question":
-            _items = (
-                specialist_data.get("sections", [])
-                + specialist_data.get("requirements", [])
-                + specialist_data.get("files", [])
-                + specialist_data.get("key_points", [])
-            )
-            _specials = specialist_data.get("special", [])
-            n = len(_items) + len(_specials)
-            base = self.engine.thinking_budget
-            if base and base > 0:
-                # Scale relative to the configured budget
-                if n <= 2:
-                    adaptive = max(1024, base // 3)
-                elif n <= 5:
-                    adaptive = base
-                else:
-                    adaptive = min(base * 2, 65536)
-                task_ovr = {**task_ovr, "thinking_budget": adaptive}
-                print(f"[orch] adaptive thinking: {n} items → budget {adaptive}")
-            else:
-                print(f"[orch] adaptive thinking: skipped (no explicit budget, model self-regulates)")
-
-        # ── Phase 3.5: TASK PLANNING (Engine writes its own checklist) ──
         task_list = []
-        if specialist_data and is_code and not is_edit and mode != "question":
-            try:
-                task_list = await self.engine.plan_tasks(
-                    user_message, specialist_data=specialist_data,
-                    task_overrides=task_ovr,
-                )
-                if task_list:
-                    emit("checklist", items=[
-                        {"item": t, "done": False} for t in task_list
-                    ])
-                    print(f"[orch] task plan: {len(task_list)} tasks")
-            except Exception as e:
-                print(f"[orch] task planning failed: {e}")
 
         # ── Phase 3.6: Inject cached references into director (#4) ────
         cache_ctx = ""
@@ -1244,10 +1196,6 @@ class Orchestrator:
                     else:
                         done = True
                     checklist.append({"item": task, "done": done})
-            elif specialist_data:
-                # Fallback: generic decomposition check
-                checklist = check_completeness(clean_for_check, specialist_data)
-
             if checklist:
                 emit("checklist", items=checklist)
                 missing_items = [c["item"] for c in checklist if not c["done"]]
