@@ -1,6 +1,7 @@
 <script lang="ts">
-    import { chat, setFeedback, regenerate, undo, setWorkspaceId } from '$lib/stores/chat';
+    import { chat, setFeedback, regenerate, undo, setWorkspaceId, stopGeneration } from '$lib/stores/chat';
     import { render } from '$lib/markdown';
+    import hljs from 'highlight.js';
     import ChatInput from '$lib/components/ChatInput.svelte';
     import SpecialistCard from '$lib/components/SpecialistCard.svelte';
 
@@ -29,7 +30,7 @@
     let traceOpen = $state<string | null>(null);
     function toggleTrace(key: string) { traceOpen = traceOpen === key ? null : key; }
     let hasThinking = $derived(!!$chat.thinking || !!$chat.draftThinking);
-    let hasSpecialistTrace = $derived(!!$chat.specialistStream);
+
     let hasValidation = $derived(!!$chat.review || $chat.validationIssues.length > 0);
 
     let previewWidth = $state(Math.min(Math.round(window.innerWidth * 0.44), 700));
@@ -40,6 +41,8 @@
     let activeWorkspaceId = $state<string | null>(null);
     let showTerminal = $state(false);
     let fileTreeRef = $state<FileTree>();
+    let viewingFile = $state<{ path: string; content: string } | null>(null);
+    let computerTab = $state<'files' | 'terminal'>('files');
 
     $effect(() => {
         // Auto-create workspace when entering computer mode
@@ -75,17 +78,13 @@
     });
 
     function onFileSelect(path: string) {
-        // Preview HTML files, otherwise just log for now
-        if (path.endsWith('.html') || path.endsWith('.htm')) {
-            fetch(`/api/workspaces/${activeWorkspaceId}/files/${path}`)
-                .then(r => r.json())
-                .then(data => {
-                    if (data.content) {
-                        previewOverride = data.content;
-                        showPreview = true;
-                    }
-                });
-        }
+        fetch(`/api/workspaces/${activeWorkspaceId}/files/${path}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.content == null) return;
+                viewingFile = { path, content: data.content };
+                computerTab = 'files';
+            });
     }
 
     $effect(() => {
@@ -174,9 +173,12 @@
 
     $effect(() => {
         $chat.streamingText;
-        $chat.specialistStream;
+
         $chat.response;
         $chat.phase;
+        $chat.checklist;
+        $chat.validationIssues;
+        $chat.warning;
         if (messagesEl && userNearBottom) {
             requestAnimationFrame(() => {
                 messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -259,7 +261,27 @@
     }
 
     function formatChars(n: number): string {
-        return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+        return n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`;
+    }
+
+    let copyFeedback = $state<string | null>(null);
+    function copyToClipboard(text: string) {
+        navigator.clipboard.writeText(text).then(() => {
+            copyFeedback = 'Copied!';
+            setTimeout(() => { copyFeedback = null; }, 1500);
+        });
+    }
+
+    function highlightCode(code: string, ext: string): string {
+        const langMap: Record<string, string> = {
+            html: 'xml', htm: 'xml', css: 'css', js: 'javascript',
+            ts: 'typescript', py: 'python', json: 'json', svg: 'xml',
+        };
+        const lang = langMap[ext];
+        if (lang && hljs.getLanguage(lang)) {
+            return hljs.highlight(code, { language: lang }).value;
+        }
+        return hljs.highlightAuto(code).value;
     }
 </script>
 
@@ -312,6 +334,9 @@
                                         <button class="act-btn" onclick={() => previewHistoryCode(turn.content)} title="Preview">
                                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h8A1.5 1.5 0 0113 3.5v8a1.5 1.5 0 01-1.5 1.5h-8A1.5 1.5 0 012 11.5v-8z" stroke="currentColor" stroke-width="1.1"/><path d="M6 6l3 1.5-3 1.5V6z" fill="currentColor" opacity="0.6"/></svg>
                                         </button>
+                                        <button class="act-btn" onclick={() => copyToClipboard(turn.content)} title="Copy code">
+                                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+                                        </button>
                                         <button class="act-btn" onclick={() => downloadBlob(turn.content)} title="Download">
                                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 2.5v7M5 7.5l2.5 2.5L10 7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11.5h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
                                         </button>
@@ -363,21 +388,32 @@
                             <div class="route-row">
                                 <span class="route-tag" style="--rc: var(--brain)">Computer</span>
                             </div>
-                            <div class="computer-files-card" style="animation-delay: {idx * 30}ms">
-                                <div class="computer-files-header">
-                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                        <rect x="2" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-                                        <path d="M5.5 14h5M8 11v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                                    </svg>
-                                    <span>{hFiles.length} file{hFiles.length !== 1 ? 's' : ''} created</span>
+                            <div class="computer-result-card" style="animation-delay: {idx * 30}ms">
+                                <div class="computer-result-header">
+                                    <div class="computer-result-icon">
+                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                            <path d="M4 5.5l3 2.5-3 2.5M8.5 11H12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                                            <rect x="1.5" y="2" width="13" height="12" rx="2" stroke="currentColor" stroke-width="1.1"/>
+                                        </svg>
+                                    </div>
+                                    <div class="computer-result-info">
+                                        <span class="computer-result-title">{hFiles.length} file{hFiles.length !== 1 ? 's' : ''} written</span>
+                                        <span class="computer-result-meta">{formatChars(turn.content.length)}</span>
+                                    </div>
+                                    <div class="computer-result-actions">
+                                        <button class="act-btn" onclick={() => copyToClipboard(turn.content)} title="Copy all">
+                                            <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+                                        </button>
+                                    </div>
                                 </div>
                                 {#if hFiles.length > 0}
-                                    <div class="computer-files-list">
+                                    <div class="computer-file-grid">
                                         {#each hFiles as filePath}
                                             {@const hExt = extOf(filePath)}
-                                            <span class="computer-file-chip">
-                                                <span class="ext-dot" style="background: {extColor(hExt)}"></span>
-                                                {filePath}
+                                            {@const hName = filePath.split('/').pop() || filePath}
+                                            <span class="computer-file-item">
+                                                <span class="computer-file-ext" style="--fc: {extColor(hExt)}">{hExt.toUpperCase().slice(0, 4)}</span>
+                                                <span class="computer-file-name">{hName}</span>
                                             </span>
                                         {/each}
                                     </div>
@@ -469,10 +505,6 @@
                     </div>
                 {/if}
 
-                {#if $chat.warning}
-                    <div class="warning-banner">{$chat.warning}</div>
-                {/if}
-
                 {#if $chat.plan && $chat.plan.components.length > 0}
                     <PlanCard plan={$chat.plan} />
                 {/if}
@@ -492,15 +524,53 @@
                     </div>
                 {/if}
 
-                {#if $chat.phase === 'consulting'}
-                    <div class="step specialist">
-                        <span class="step-dot pulse specialist"></span>
-                        <span class="step-text">Consulting specialist...</span>
+                {#if $chat.specialistData && $chat.route !== 'ROUTE_DESIGN'}
+                    <SpecialistCard data={$chat.specialistData} />
+                {/if}
+
+                <!-- ==================== PRECISION-DESIGN PIPELINE ==================== -->
+                {#if $chat.phase === 'spec_generating'}
+                    <div class="step">
+                        <span class="step-dot pulse"></span>
+                        <span class="step-text">Planning page structure...</span>
                     </div>
                 {/if}
 
-                {#if $chat.specialistData}
-                    <SpecialistCard data={$chat.specialistData} />
+                {#if $chat.phase === 'spec_validated' && $chat.designSpec}
+                    <div class="step">
+                        <span class="step-dot"></span>
+                        <span class="step-text">Spec ready — {$chat.designSpec.components?.length ?? 0} components</span>
+                    </div>
+                {/if}
+
+                {#if $chat.componentProgress.length > 0}
+                    <div class="component-progress">
+                        <div class="comp-header">
+                            <span class="comp-title">Components</span>
+                            <span class="comp-count">
+                                {$chat.componentProgress.filter(c => c.status === 'validated' || c.status === 'fallback').length}/{$chat.componentProgress[0]?.total ?? $chat.componentProgress.length}
+                            </span>
+                        </div>
+                        <div class="comp-items">
+                            {#each $chat.componentProgress as comp}
+                                <div class="comp-item"
+                                     class:done={comp.status === 'validated'}
+                                     class:patching={comp.status === 'patching'}
+                                     class:fallback={comp.status === 'fallback'}>
+                                    <span class="comp-dot" class:pulse={comp.status === 'generating'}></span>
+                                    <span class="comp-name">{comp.id}</span>
+                                    <span class="comp-status">{comp.status}</span>
+                                </div>
+                            {/each}
+                        </div>
+                    </div>
+                {/if}
+
+                {#if $chat.phase === 'assembling'}
+                    <div class="step">
+                        <span class="step-dot pulse"></span>
+                        <span class="step-text">Assembling page...</span>
+                    </div>
                 {/if}
 
                 <!-- ==================== GENERATION ==================== -->
@@ -511,20 +581,28 @@
                             <span class="gen-title">
                                 {$chat.phase === 'fixing' ? 'Fixing' : $chat.editing ? 'Editing' : isComputerRoute ? 'Creating files' : isCode ? 'Generating' : 'Writing'}
                             </span>
-                            <span class="gen-meta">
-                                {#if $chat.editing}
-                                    patching
-                                {:else if $chat.streamingText}
-                                    {formatChars($chat.streamingText.length)}
-                                {:else}
-                                    ...
+                            <div class="gen-stats">
+                                <span class="gen-meta">
+                                    {#if $chat.editing}
+                                        patching
+                                    {:else if $chat.streamingText}
+                                        {formatChars($chat.streamingText.length)}
+                                    {:else}
+                                        ...
+                                    {/if}
+                                </span>
+                                {#if $chat.tokensPerSec > 0}
+                                    <span class="gen-speed">{$chat.tokensPerSec} t/s</span>
                                 {/if}
-                            </span>
+                            </div>
                             {#if isCode && !isComputerRoute && !$chat.editing && $chat.streamingText.length > 200}
                                 <button class="preview-btn" onclick={previewCurrentCode}>
                                     {showPreview ? 'Hide' : 'Preview'}
                                 </button>
                             {/if}
+                            <button class="stop-btn" onclick={stopGeneration} title="Stop generation">
+                                <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor"/></svg>
+                            </button>
                         </div>
                         {#if !isCode && !isComputerRoute && $chat.streamingText}
                             <div class="gen-body">
@@ -543,6 +621,59 @@
                             <pre class="think-body">{$chat.streamingThinking}</pre>
                         </details>
                     {/if}
+                {/if}
+
+                {#if $chat.checklist.length > 0}
+                    {@const done = $chat.checklist.filter(c => c.done).length}
+                    {@const total = $chat.checklist.length}
+                    {@const allDone = done === total}
+                    <div class="checklist-card" class:all-done={allDone}>
+                        <div class="checklist-header">
+                            <span class="checklist-icon">{allDone ? '✓' : '⋯'}</span>
+                            <span class="checklist-title">Checklist</span>
+                            <span class="checklist-count" class:complete={allDone}>{done}/{total}</span>
+                        </div>
+                        <div class="checklist-items">
+                            {#each $chat.checklist as item}
+                                <div class="checklist-row" class:done={item.done}>
+                                    <span class="check-mark">
+                                        {#if item.done}
+                                            <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
+                                                <path d="M3 8.5L6.5 12L13 4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                                            </svg>
+                                        {:else}
+                                            <span class="check-empty"></span>
+                                        {/if}
+                                    </span>
+                                    <span class="check-label">{item.item}</span>
+                                </div>
+                            {/each}
+                        </div>
+                    </div>
+                {/if}
+
+                {#if $chat.warning}
+                    <div class="step warning-step">
+                        <span class="step-dot pulse"></span>
+                        <span class="step-text">{$chat.warning}</span>
+                    </div>
+                {/if}
+
+                {#if $chat.phase === 'refining'}
+                    <div class="refine-card">
+                        <div class="refine-bar">
+                            <span class="refine-icon">
+                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                    <path d="M8 1L10 6L15 6.5L11.5 10L12.5 15L8 12.5L3.5 15L4.5 10L1 6.5L6 6L8 1Z" fill="currentColor" opacity="0.7"/>
+                                </svg>
+                            </span>
+                            <span class="refine-title">Refining design</span>
+                            <span class="refine-sub">Reviewing spacing, colors, polish...</span>
+                        </div>
+                        <div class="refine-progress">
+                            <div class="refine-bar-fill"></div>
+                        </div>
+                    </div>
                 {/if}
 
                 {#if $chat.phase === 'polishing' && !isComputerRoute}
@@ -597,7 +728,9 @@
                         <div class="output-bar">
                             <span class="ext-badge" style="--ec: {extColor(ext)}">{ext.toUpperCase()}</span>
                             <span class="output-name">output.{ext}</span>
-                            <span class="output-meta">{formatChars($chat.response.length)}</span>
+                            <span class="output-meta">
+                                {formatChars($chat.response.length)}{#if $chat.tokenCount > 0}&ensp;·&ensp;{$chat.tokenCount} tok{#if $chat.tokensPerSec > 0} · {$chat.tokensPerSec}/s{/if}{/if}
+                            </span>
                             <div class="output-actions">
                                 <button class="act-btn" onclick={() => codeExpanded = !codeExpanded} title="Source" class:active={codeExpanded}>
                                     <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M5.5 3.5L2.5 7.5l3 4M9.5 3.5l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -607,6 +740,9 @@
                                         <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h8A1.5 1.5 0 0113 3.5v8a1.5 1.5 0 01-1.5 1.5h-8A1.5 1.5 0 012 11.5v-8z" stroke="currentColor" stroke-width="1.1"/><path d="M6 6l3 1.5-3 1.5V6z" fill="currentColor" opacity="0.6"/></svg>
                                     </button>
                                 {/if}
+                                <button class="act-btn" onclick={() => copyToClipboard($chat.response)} title="Copy code">
+                                    <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+                                </button>
                                 <button class="act-btn" onclick={downloadCode} title="Download">
                                     <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 2.5v7M5 7.5l2.5 2.5L10 7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11.5h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
                                 </button>
@@ -618,44 +754,55 @@
                             </div>
                         </div>
                         {#if codeExpanded}
-                            <pre class="output-source">{$chat.response}</pre>
+                            <pre class="output-source"><code class="hljs">{@html highlightCode($chat.response, ext)}</code></pre>
                         {/if}
                     </div>
                 {/if}
 
                 <!-- Computer mode: files-created card -->
                 {#if $chat.response && isComputerRoute}
-                    {@const createdFiles = parseFileList($chat.response)}
-                    <div class="computer-files-card">
-                        <div class="computer-files-header">
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                <rect x="2" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-                                <path d="M5.5 14h5M8 11v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                            </svg>
-                            <span>{createdFiles.length} file{createdFiles.length !== 1 ? 's' : ''} created</span>
+                    {@const createdFiles = $chat.savedFiles.length > 0 ? $chat.savedFiles : parseFileList($chat.response)}
+                    <div class="computer-result-card">
+                        <div class="computer-result-header">
+                            <div class="computer-result-icon">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                    <path d="M4 5.5l3 2.5-3 2.5M8.5 11H12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <rect x="1.5" y="2" width="13" height="12" rx="2" stroke="currentColor" stroke-width="1.1"/>
+                                </svg>
+                            </div>
+                            <div class="computer-result-info">
+                                <span class="computer-result-title">{createdFiles.length} file{createdFiles.length !== 1 ? 's' : ''} written</span>
+                                <span class="computer-result-meta">{formatChars($chat.response.length)}</span>
+                            </div>
+                            <div class="computer-result-actions">
+                                <button class="act-btn" onclick={() => codeExpanded = !codeExpanded} title="View source" class:active={codeExpanded}>
+                                    <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><path d="M5.5 3.5L2.5 7.5l3 4M9.5 3.5l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                </button>
+                                <button class="act-btn" onclick={() => copyToClipboard($chat.response)} title="Copy all">
+                                    <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+                                </button>
+                            </div>
                         </div>
                         {#if createdFiles.length > 0}
-                            <div class="computer-files-list">
+                            <div class="computer-file-grid">
                                 {#each createdFiles as filePath}
                                     {@const ext = extOf(filePath)}
-                                    <span class="computer-file-chip">
-                                        <span class="ext-dot" style="background: {extColor(ext)}"></span>
-                                        {filePath}
-                                    </span>
+                                    {@const name = filePath.split('/').pop() || filePath}
+                                    <button class="computer-file-item" onclick={() => onFileSelect(filePath)}>
+                                        <span class="computer-file-ext" style="--fc: {extColor(ext)}">{ext.toUpperCase().slice(0, 4)}</span>
+                                        <span class="computer-file-name">{name}</span>
+                                    </button>
                                 {/each}
                             </div>
                         {/if}
-                        <button class="act-btn" onclick={() => codeExpanded = !codeExpanded} title="View raw output" class:active={codeExpanded}>
-                            <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><path d="M5.5 3.5L2.5 7.5l3 4M9.5 3.5l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                        </button>
                         {#if codeExpanded}
-                            <pre class="output-source">{$chat.response}</pre>
+                            <pre class="output-source"><code class="hljs">{@html highlightCode($chat.response, 'html')}</code></pre>
                         {/if}
                     </div>
                 {/if}
 
                 <!-- Summary + Trace -->
-                {#if hasSpecialistTrace || hasThinking || hasValidation || ($chat.reflection && $chat.reflection.self_score > 0)}
+                {#if hasThinking || hasValidation || ($chat.reflection && $chat.reflection.self_score > 0)}
                     <div class="trace-row">
                         {#if $chat.reflection && $chat.reflection.self_score > 0}
                             {@const sc = $chat.reflection.self_score ?? 0.5}
@@ -669,12 +816,6 @@
                             <button class="trace-pill" class:open={traceOpen === 'thinking'} onclick={() => toggleTrace('thinking')} style="--tc: var(--brain)">
                                 <span class="trace-dot" style="background: var(--brain)"></span>
                                 Thinking
-                            </button>
-                        {/if}
-                        {#if hasSpecialistTrace}
-                            <button class="trace-pill" class:open={traceOpen === 'specialist'} onclick={() => toggleTrace('specialist')} style="--tc: var(--specialist)">
-                                <span class="trace-dot" style="background: var(--specialist)"></span>
-                                Specialist
                             </button>
                         {/if}
                         {#if hasValidation}
@@ -706,11 +847,6 @@
                     </div>
                 {/if}
 
-                {#if traceOpen === 'specialist' && hasSpecialistTrace}
-                    <div class="trace-card" style="--tbc: var(--specialist)">
-                        <pre class="trace-pre">{$chat.specialistStream}</pre>
-                    </div>
-                {/if}
 
                 {#if traceOpen === 'validation' && hasValidation}
                     <div class="trace-card" style="--tbc: var(--warning)">
@@ -741,7 +877,18 @@
             </div>
         </div>
 
-        <ChatInput />
+        <div class="input-with-terminal">
+            <ChatInput />
+            {#if isComputerMode && activeWorkspaceId && !showTerminal}
+                <button class="reopen-computer" onclick={() => { showTerminal = true; }}>
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                        <path d="M4 5.5l3 2.5-3 2.5M8.5 11H12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                        <rect x="1.5" y="2" width="13" height="12" rx="2" stroke="currentColor" stroke-width="1.1"/>
+                    </svg>
+                    <span>Terminal</span>
+                </button>
+            {/if}
+        </div>
     </div>
 
     {#if previewVisible}
@@ -783,23 +930,69 @@
                 onpointermove={onResizeMove}
                 onpointerup={onResizeEnd}
             ></div>
-            <div class="computer-split">
-                <div class="computer-files">
+
+            <!-- Tab bar -->
+            <div class="computer-tabs">
+                <button class="computer-tab" class:active={computerTab === 'files'} onclick={() => { computerTab = 'files'; viewingFile = null; }}>
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                        <path d="M2 4.5A1.5 1.5 0 013.5 3h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 6v5.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 11.5v-7z" stroke="currentColor" stroke-width="1.1"/>
+                    </svg>
+                    Files
+                </button>
+                <button class="computer-tab" class:active={computerTab === 'terminal'} onclick={() => { computerTab = 'terminal'; }}>
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                        <path d="M4 5.5l3 2.5-3 2.5M8.5 11H12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                        <rect x="1.5" y="2" width="13" height="12" rx="2" stroke="currentColor" stroke-width="1.1"/>
+                    </svg>
+                    Terminal
+                </button>
+                <div class="tab-spacer"></div>
+                <button class="computer-tab-action" onclick={() => { showTerminal = false; }} title="Close panel">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                        <path d="M10 3l-7 5 7 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Panel content -->
+            <div class="computer-content">
+                {#if viewingFile}
+                    <div class="computer-fileview">
+                        <div class="fileview-breadcrumb">
+                            <button class="fileview-back" onclick={() => { viewingFile = null; }} title="Back to files">
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                    <path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                            <span class="fileview-dot" style="background: {extColor(extOf(viewingFile.path))}"></span>
+                            <span class="fileview-crumb">{viewingFile.path}</span>
+                            <button class="fileview-copy" onclick={() => copyToClipboard(viewingFile?.content ?? '')} title="Copy file">
+                                <svg width="12" height="12" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+                            </button>
+                        </div>
+                        <pre class="fileview-code"><code class="hljs">{@html highlightCode(viewingFile.content, extOf(viewingFile.path))}</code></pre>
+                    </div>
+                {:else if computerTab === 'files'}
                     <FileTree
                         bind:this={fileTreeRef}
                         workspaceId={activeWorkspaceId}
                         {onFileSelect}
+                        activeFile={''}
+
                     />
-                </div>
-                <div class="computer-term">
+                {:else}
                     <TerminalPanel
                         workspaceId={activeWorkspaceId}
                         onClose={() => { showTerminal = false; }}
                         externalOutput={$chat.terminalOutput}
                     />
-                </div>
+                {/if}
             </div>
         </div>
+    {/if}
+
+    {#if copyFeedback}
+        <div class="copy-toast">{copyFeedback}</div>
     {/if}
 </div>
 
@@ -875,7 +1068,7 @@
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
     :global([data-theme="dark"]) .user-bubble {
-        background: rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.18);
         color: #F0F0F0;
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
     }
@@ -1042,7 +1235,7 @@
     }
     .step-dot.specialist { background: var(--specialist); }
     .step-dot.polish { background: var(--success); }
-    .step-dot.pulse { animation: pulse 1.4s ease-in-out infinite; }
+    .step-dot.pulse { animation: pulse 6s ease-in-out infinite; }
 
     .step-text {
         font-size: 12.5px; font-weight: 500;
@@ -1052,6 +1245,54 @@
     .step-meta {
         font-size: 11px; font-family: var(--font-mono);
         color: var(--text-muted); margin-left: auto;
+    }
+
+    /* ================================================================
+       COMPONENT PROGRESS (Precision-Design pipeline)
+       ================================================================ */
+    .component-progress {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-left: 2px solid var(--brain);
+        border-radius: var(--radius);
+        padding: 10px 14px;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        max-width: 340px;
+    }
+    .comp-header {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 8px;
+    }
+    .comp-title {
+        font-size: 12px; font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .comp-count {
+        font-size: 11px; font-family: var(--font-mono);
+        color: var(--text-muted);
+    }
+    .comp-items { display: flex; flex-direction: column; gap: 4px; }
+    .comp-item {
+        display: flex; align-items: center; gap: 8px;
+        font-size: 12px; color: var(--text-secondary);
+    }
+    .comp-item.done { color: var(--success, #22c55e); }
+    .comp-item.patching { color: var(--warning, #f59e0b); }
+    .comp-item.fallback { color: var(--text-muted); opacity: 0.7; }
+    .comp-dot {
+        width: 5px; height: 5px; border-radius: 50%;
+        background: var(--text-muted); flex-shrink: 0;
+    }
+    .comp-item.done .comp-dot { background: var(--success, #22c55e); }
+    .comp-item.patching .comp-dot { background: var(--warning, #f59e0b); }
+    .comp-dot.pulse { animation: pulse 6s ease-in-out infinite; background: var(--brain); }
+    .comp-name { font-family: var(--font-mono); }
+    .comp-status {
+        margin-left: auto; font-size: 10px;
+        font-family: var(--font-mono);
+        opacity: 0.6;
     }
 
     /* ================================================================
@@ -1076,8 +1317,8 @@
     .gen-indicator {
         width: 6px; height: 6px; border-radius: 50%;
         background: var(--brain);
-        box-shadow: 0 0 8px rgba(232, 133, 12, 0.35);
-        animation: pulse 1.4s ease-in-out infinite;
+        box-shadow: 0 0 6px rgba(232, 133, 12, 0.25);
+        animation: pulse 6s ease-in-out infinite;
     }
     .gen-title {
         font-size: 12px; font-weight: 600;
@@ -1085,9 +1326,22 @@
         text-transform: uppercase;
         letter-spacing: 0.06em;
     }
+    .gen-stats {
+        display: flex; align-items: center; gap: 8px;
+        margin-left: auto;
+    }
     .gen-meta {
         font-size: 11px; font-family: var(--font-mono);
-        color: var(--text-muted); margin-left: auto;
+        color: var(--text-muted);
+    }
+    .gen-speed {
+        font-size: 10px; font-family: var(--font-mono);
+        color: var(--text-muted);
+        background: var(--accent-subtle);
+        padding: 1px 7px;
+        border-radius: var(--radius-pill);
+        border: 1px solid var(--border-subtle);
+        opacity: 0.7;
     }
 
     .gen-body {
@@ -1141,11 +1395,161 @@
     }
     .preview-btn.sm { font-size: 10px; padding: 2px 10px; }
 
+    .stop-btn {
+        display: flex; align-items: center; justify-content: center;
+        width: 26px; height: 26px;
+        background: rgba(239, 68, 68, 0.08);
+        border: 1px solid rgba(239, 68, 68, 0.15);
+        border-radius: 7px;
+        color: var(--error); cursor: pointer;
+        transition: all var(--transition); flex-shrink: 0;
+    }
+    .stop-btn:hover {
+        background: rgba(239, 68, 68, 0.18);
+        border-color: rgba(239, 68, 68, 0.30);
+    }
+
+    /* ================================================================
+       REFINE CARD
+       ================================================================ */
+    .refine-card {
+        background: var(--surface-solid);
+        border: 1px solid var(--border);
+        border-left: 2px solid var(--brain);
+        border-radius: 12px;
+        overflow: hidden;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        max-width: 360px;
+    }
+    .refine-bar {
+        display: flex; align-items: center; gap: 8px;
+        padding: 10px 14px;
+    }
+    .refine-icon {
+        color: var(--brain);
+        display: flex; align-items: center;
+        animation: refine-spin 4s linear infinite;
+    }
+    .refine-title {
+        font-size: 12px; font-weight: 600;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    .refine-sub {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-left: auto;
+    }
+    .refine-progress {
+        height: 2px;
+        background: var(--border-subtle);
+    }
+    .refine-bar-fill {
+        height: 100%;
+        background: var(--brain);
+        border-radius: 2px;
+        animation: refine-progress 12s ease-out forwards;
+    }
+    @keyframes refine-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+    @keyframes refine-progress {
+        0% { width: 0%; }
+        30% { width: 40%; }
+        60% { width: 70%; }
+        90% { width: 88%; }
+        100% { width: 95%; }
+    }
+
+    /* ================================================================
+       CHECKLIST CARD
+       ================================================================ */
+    .checklist-card {
+        background: var(--surface-solid);
+        border: 1px solid var(--border);
+        border-left: 2px solid var(--warning);
+        border-radius: 14px;
+        overflow: hidden;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        max-width: 480px;
+    }
+    .checklist-card.all-done { border-left-color: var(--success); }
+
+    .checklist-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--border-subtle);
+    }
+    .checklist-icon {
+        font-size: 9px;
+        color: var(--warning);
+    }
+    .checklist-card.all-done .checklist-icon { color: var(--success); }
+    .checklist-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        flex: 1;
+    }
+    .checklist-count {
+        font-size: 11px;
+        font-family: var(--font-mono);
+        font-weight: 600;
+        color: var(--warning);
+    }
+    .checklist-count.complete { color: var(--success); }
+
+    .checklist-items {
+        padding: 8px 14px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+    }
+    .checklist-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 5px 0;
+        border-bottom: 1px solid var(--border-subtle);
+    }
+    .checklist-row:last-child { border-bottom: none; }
+
+    .check-mark {
+        width: 16px; height: 16px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--success);
+    }
+    .check-empty {
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        border: 1.5px solid var(--text-muted);
+        opacity: 0.4;
+    }
+    .check-label {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        line-height: 1.35;
+    }
+    .checklist-row.done .check-label {
+        text-decoration: line-through;
+        color: var(--text-muted);
+    }
+
     /* ================================================================
        THINKING BLOCK
        ================================================================ */
     .think-block {
-        background: var(--surface);
+        background: var(--surface-solid);
         border: 1px solid var(--border);
         border-left: 2px solid var(--text-muted);
         border-radius: 12px;
@@ -1169,9 +1573,9 @@
     .think-block[open] .think-header::after { transform: rotate(180deg); }
 
     .think-dot {
-        width: 5px; height: 5px; border-radius: 50%;
+        width: 6px; height: 6px; border-radius: 50%;
         background: var(--text-muted);
-        animation: pulse 2s ease-in-out infinite;
+        animation: pulse 6s ease-in-out infinite;
     }
     .think-meta {
         font-family: var(--font-mono); font-size: 10px;
@@ -1179,11 +1583,12 @@
     }
     .think-body {
         font-family: var(--font-mono); font-size: 11px; line-height: 1.55;
-        color: var(--text-muted); white-space: pre-wrap; word-break: break-word;
-        margin: 0; padding: 8px 14px 10px;
+        color: var(--text-secondary); white-space: pre-wrap; word-break: break-word;
+        margin: 0; padding: 10px 14px 12px;
         border-top: 1px solid var(--border-subtle);
         background: none; border-left: none; border-right: none; border-bottom: none; border-radius: 0;
-        max-height: 200px; overflow-y: auto;
+        max-height: 320px; overflow-y: auto;
+        scrollbar-width: thin;
     }
 
     /* ================================================================
@@ -1279,7 +1684,11 @@
         border-top: 1px solid var(--border-subtle);
         padding: 14px 18px;
         white-space: pre-wrap; word-break: break-all;
-        max-height: 300px; overflow-y: auto; margin: 0; border-radius: 0;
+        max-height: 400px; overflow-y: auto; margin: 0; border-radius: 0;
+    }
+    .output-source :global(code.hljs) {
+        background: transparent; padding: 0; font-size: inherit;
+        font-family: inherit; line-height: inherit;
     }
 
     /* ================================================================
@@ -1346,8 +1755,8 @@
        TRACE CARDS (expanded details)
        ================================================================ */
     .trace-card {
-        background: var(--surface);
-        border: 1px solid var(--border);
+        background: var(--surface-solid, #0A0A0A);
+        border: 1px solid var(--border-strong);
         border-left: 2px solid var(--tbc, var(--text-muted));
         border-radius: 12px;
         overflow: hidden;
@@ -1434,35 +1843,194 @@
     }
 
     /* ================================================================
+       REOPEN COMPUTER PANEL BUTTON
+       ================================================================ */
+    .input-with-terminal {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        width: 100%;
+    }
+    .input-with-terminal > :global(:first-child) {
+        flex: 1;
+        min-width: 0;
+    }
+    .reopen-computer {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 14px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        color: var(--text-secondary);
+        font-family: var(--font-body);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all var(--transition);
+        white-space: nowrap;
+        flex-shrink: 0;
+        margin-bottom: 8px;
+    }
+    .reopen-computer:hover {
+        background: var(--surface-hover);
+        color: var(--text);
+        border-color: var(--border-strong);
+    }
+
+    /* ================================================================
        COMPUTER MODE PANEL
        ================================================================ */
     .computer-panel {
         top: 56px;
-        background: var(--bubble-strong);
-        backdrop-filter: var(--bubble-blur-heavy);
-        -webkit-backdrop-filter: var(--bubble-blur-heavy);
-        border-left: 1px solid var(--border);
+        background: var(--surface-solid);
+        border-left: none;
+        box-shadow: -8px 0 24px rgba(0, 0, 0, 0.03);
+        display: flex;
+        flex-direction: column;
     }
-    .computer-split {
+    :global([data-theme="dark"]) .computer-panel {
+        background: #0a0a0e;
+        box-shadow: -8px 0 24px rgba(0, 0, 0, 0.3);
+    }
+
+    .computer-tabs {
+        display: flex;
+        align-items: center;
+        height: 40px;
+        padding: 0 8px;
+        gap: 2px;
+        background: transparent;
+        border-bottom: 1px solid var(--border-subtle);
+        flex-shrink: 0;
+        overflow-x: auto;
+    }
+    .computer-tab {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border: none;
+        background: none;
+        cursor: pointer;
+        font-family: var(--font-body);
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--text-muted);
+        border-radius: 8px;
+        transition: all var(--transition);
+        white-space: nowrap;
+        position: relative;
+    }
+    .computer-tab:hover {
+        color: var(--text-secondary);
+        background: var(--accent-subtle);
+    }
+    .computer-tab.active {
+        color: var(--text);
+        background: var(--surface);
+        font-weight: 600;
+    }
+    .tab-spacer { flex: 1; }
+    .computer-tab-action {
+        width: 28px; height: 28px;
+        border: none; background: none;
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        color: var(--text-muted);
+        border-radius: 6px;
+        transition: all var(--transition);
+        flex-shrink: 0;
+    }
+    .computer-tab-action:hover {
+        background: var(--accent-subtle);
+        color: var(--text);
+    }
+
+    .computer-content {
+        flex: 1;
+        overflow: hidden;
+    }
+
+    .computer-fileview {
         display: flex;
         flex-direction: column;
         height: 100%;
-        margin: 8px;
-        border-radius: var(--radius);
         overflow: hidden;
-        background: var(--surface-solid);
-        border: 1px solid var(--border);
-        box-shadow: var(--shadow-sm);
     }
-    .computer-files {
-        flex: 0 0 auto;
-        max-height: 240px;
-        overflow: hidden;
-        border-bottom: 1px solid var(--border);
+    .fileview-breadcrumb {
+        height: 36px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px;
+        background: transparent;
+        border-bottom: 1px solid var(--border-subtle);
+        flex-shrink: 0;
     }
-    .computer-term {
+    .fileview-back {
+        width: 24px; height: 24px;
+        border: none; background: none;
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        color: var(--text-muted);
+        border-radius: 6px;
+        transition: all var(--transition);
+        flex-shrink: 0;
+    }
+    .fileview-back:hover {
+        background: var(--accent-subtle);
+        color: var(--text);
+    }
+    .fileview-dot {
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    .fileview-crumb {
         flex: 1;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--text-secondary);
         overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .fileview-copy {
+        width: 24px; height: 24px;
+        border: none; background: none;
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        color: var(--text-muted);
+        border-radius: 6px;
+        transition: all var(--transition);
+        flex-shrink: 0;
+    }
+    .fileview-copy:hover {
+        background: var(--accent-subtle);
+        color: var(--text);
+    }
+    .fileview-code {
+        flex: 1;
+        overflow: auto;
+        padding: 14px 16px;
+        margin: 0;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.65;
+        color: var(--text);
+        background: transparent;
+        white-space: pre-wrap;
+        word-break: break-all;
+        scrollbar-width: thin;
+        tab-size: 4;
+        border: none; border-radius: 0;
+    }
+    .fileview-code :global(code.hljs) {
+        background: transparent; padding: 0;
+        font-size: inherit; font-family: inherit;
+        line-height: inherit;
     }
 
     .act-btn.undo {
@@ -1473,45 +2041,106 @@
     }
 
     /* ================================================================
-       COMPUTER MODE FILES CARD (in chat)
+       COMPUTER MODE RESULT CARD (in chat)
        ================================================================ */
-    .computer-files-card {
+    .computer-result-card {
         background: var(--surface);
         border: 1px solid var(--border);
-        border-radius: var(--radius-lg);
-        padding: 14px 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
+        border-left: 2px solid var(--brain);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: var(--bubble-glow);
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        max-width: 520px;
     }
-    .computer-files-header {
+    .computer-result-header {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 12px;
+        padding: 12px 16px;
+    }
+    .computer-result-icon {
+        width: 34px; height: 34px;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(232, 133, 12, 0.14);
+        border: 1px solid rgba(232, 133, 12, 0.25);
+        border-radius: 10px;
+        color: var(--brain);
+        flex-shrink: 0;
+    }
+    .computer-result-info {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .computer-result-title {
         font-family: var(--font-body);
         font-size: 13px;
         font-weight: 600;
-        color: var(--text-secondary);
+        color: var(--text);
     }
-    .computer-files-header svg {
-        color: var(--brain);
-        opacity: 0.8;
+    .computer-result-meta {
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        color: var(--text-muted);
     }
-    .computer-files-list {
+    .computer-result-actions {
+        display: flex; gap: 3px;
+    }
+    .computer-file-grid {
         display: flex;
         flex-wrap: wrap;
         gap: 6px;
+        padding: 0 16px 14px;
     }
-    .computer-file-chip {
-        display: inline-flex;
+    .computer-file-item {
+        display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 4px 12px;
+        gap: 7px;
+        padding: 5px 12px 5px 6px;
         background: var(--accent-subtle);
+        border: 1px solid var(--border-subtle);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all var(--transition);
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        color: var(--text);
+    }
+    .computer-file-item:hover {
+        background: var(--surface-hover);
+        border-color: var(--border);
+    }
+    .computer-file-ext {
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--fc);
+        background: color-mix(in srgb, var(--fc) 10%, transparent);
+        padding: 2px 5px;
+        border-radius: 4px;
+        min-width: 22px;
+        text-align: center;
+    }
+    .computer-file-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 160px;
+    }
+
+    .copy-toast {
+        position: fixed; bottom: 80px; left: 50%;
+        transform: translateX(-50%);
+        padding: 6px 18px;
+        background: var(--surface);
         border: 1px solid var(--border);
         border-radius: var(--radius-pill);
-        font-family: var(--font-mono);
-        font-size: 12px;
-        color: var(--text);
+        font-size: 12px; font-weight: 600;
+        color: var(--success);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+        z-index: 1000;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
 </style>

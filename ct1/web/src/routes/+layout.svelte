@@ -2,11 +2,18 @@
     import '../app.css';
     import { chat, connect, disconnect, newConversation } from '$lib/stores/chat';
     import { page } from '$app/stores';
+    import { goto } from '$app/navigation';
     import { onMount, onDestroy } from 'svelte';
     import Sidebar from '$lib/components/Sidebar.svelte';
     import ShortcutOverlay from '$lib/components/ShortcutOverlay.svelte';
     import { sidebarOpen } from '$lib/stores/conversations';
     import { preferences, toggleTheme } from '$lib/stores/preferences';
+
+    function startNewChat() {
+        newConversation();
+        sidebarOpen.set(false);
+        goto('/');
+    }
 
     onMount(() => connect());
     onDestroy(() => disconnect());
@@ -18,8 +25,7 @@
     function handleKeydown(e: KeyboardEvent) {
         if (e.ctrlKey && e.key === 'n') {
             e.preventDefault();
-            newConversation();
-            sidebarOpen.set(false);
+            startNewChat();
         }
         if (e.ctrlKey && e.shiftKey && (e.key === 'S' || e.key === 's')) {
             e.preventDefault();
@@ -31,20 +37,20 @@
         }
         if (e.key === 'Escape') {
             shortcutOverlayOpen = false;
-            sidebarOpen.set(false);
         }
     }
 
     const phaseLabels: Record<string, string> = {
         idle: '',
-        routing: 'Classifying...',
-        planning: 'Planning...',
-        consulting: 'Consulting design...',
-        generating: 'Generating...',
-        polishing: 'Polishing CSS...',
-        validating: 'Validating...',
-        fixing: 'Fixing issues...',
-        done: 'Done',
+        routing: 'Classifying',
+        planning: 'Planning',
+
+        generating: 'Generating',
+        polishing: 'Polishing',
+        refining: 'Refining',
+        validating: 'Validating',
+        fixing: 'Fixing',
+        done: '',
     };
 
     let phaseText = $derived(phaseLabels[$chat.phase] || '');
@@ -55,7 +61,6 @@
     onMount(() => {
         if (!pre) return;
 
-        // Spinning 3D ASCII donut (based on donut.c by Andy Sloane)
         const R1 = 1, R2 = 2, K2 = 5;
         const charW = 8.4, charH = 14;
         const screenW = Math.min(180, Math.floor(window.innerWidth / charW));
@@ -74,23 +79,17 @@
 
             for (let theta = 0; theta < 6.28; theta += 0.07) {
                 const cosTheta = Math.cos(theta), sinTheta = Math.sin(theta);
-
                 for (let phi = 0; phi < 6.28; phi += 0.02) {
                     const cosPhi = Math.cos(phi), sinPhi = Math.sin(phi);
-
                     const circleX = R2 + R1 * cosTheta;
                     const circleY = R1 * sinTheta;
-
                     const x = circleX * (cosB * cosPhi + sinA * sinB * sinPhi) - circleY * cosA * sinB;
                     const y = circleX * (sinB * cosPhi - sinA * cosB * sinPhi) + circleY * cosA * cosB;
                     const z = K2 + cosA * circleX * sinPhi + circleY * sinA;
                     const ooz = 1 / z;
-
                     const xp = Math.floor(screenW / 2 + K1 * ooz * x);
                     const yp = Math.floor(screenH / 2 - K1 * ooz * y * 0.5);
-
                     const L = cosPhi * cosTheta * sinB - cosA * cosTheta * sinPhi - sinA * sinTheta + cosB * (cosA * sinTheta - cosTheta * sinA * sinPhi);
-
                     if (yp >= 0 && yp < screenH && xp >= 0 && xp < screenW && ooz > zbuffer[yp * screenW + xp]) {
                         zbuffer[yp * screenW + xp] = ooz;
                         const lIdx = Math.max(0, Math.floor(L * 8));
@@ -107,14 +106,12 @@
                 frame += '\n';
             }
             pre.textContent = frame;
-
             A += 0.03;
             B += 0.015;
         }
 
         const id = setInterval(renderFrame, 100);
         renderFrame();
-
         return () => clearInterval(id);
     });
 </script>
@@ -127,39 +124,60 @@
     </div>
 
     <header class="topbar">
-        <button class="sidebar-toggle" class:active={$sidebarOpen} onclick={() => sidebarOpen.update(v => !v)} aria-label="Toggle sidebar">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            </svg>
-        </button>
-        <a href="/" class="logo">
-            <span class="logo-mark">CT</span><span class="logo-sep">/</span><span class="logo-ver">2</span>
-        </a>
+        <div class="topbar-left">
+            <button class="tb-btn" class:active={$sidebarOpen} onclick={() => sidebarOpen.update(v => !v)} aria-label="Toggle sidebar" title="History (Ctrl+Shift+S)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                    <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+            </button>
 
-        <div class="phase-area">
-            {#if isActive}
-                <div class="phase-dot"></div>
-            {/if}
-            {#if phaseText}
-                <span class="phase-text" class:active={isActive}>{phaseText}</span>
+            <a href="/" class="logo">
+                <span class="logo-ct">CT</span>
+                <span class="logo-divider"></span>
+                <span class="logo-num">2</span>
+            </a>
+        </div>
+
+        <div class="topbar-center">
+            {#if isActive && phaseText}
+                <div class="phase-pill">
+                    <div class="phase-dot"></div>
+                    <span class="phase-label">{phaseText}</span>
+                </div>
             {/if}
         </div>
 
-        <nav class="nav">
-            <button class="theme-toggle" onclick={toggleTheme} title="Toggle theme">
+        <nav class="topbar-right">
+            <button class="tb-btn" onclick={toggleTheme} title="Toggle theme">
                 {#if $preferences.theme === 'dark'}
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                        <path d="M13.5 8.5a5.5 5.5 0 01-6-6 5.5 5.5 0 106 6z" stroke="currentColor" stroke-width="1.3"/>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                        <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                 {:else}
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                        <circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.3"/>
-                        <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.6"/>
+                        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M17.36 17.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M17.36 6.64l1.42-1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
                     </svg>
                 {/if}
             </button>
-            <a href="/journal" class="nav-link" class:active={$page.url.pathname === '/journal'}>Journal</a>
-            <a href="/settings" class="nav-link" class:active={$page.url.pathname === '/settings'}>Settings</a>
+
+            <div class="tb-sep"></div>
+
+            <a href="/journal" class="tb-text-btn" class:active={$page.url.pathname === '/journal'}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path d="M4 19.5A2.5 2.5 0 016.5 17H20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>Journal</span>
+            </a>
+
+            <a href="/settings" class="tb-text-btn" class:active={$page.url.pathname === '/settings'}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+                <span>Settings</span>
+            </a>
         </nav>
     </header>
 
@@ -212,141 +230,160 @@
         scrollbar-width: none;
     }
 
-    /* ---- Top bar — frosted glass ---- */
+    /* ================================================================
+       TOP BAR — transparent, floating
+       ================================================================ */
     .topbar {
         height: 56px;
         display: flex;
         align-items: center;
+        justify-content: space-between;
         padding: 0 20px;
-        gap: 14px;
-        background: var(--bubble-strong);
-        backdrop-filter: blur(48px) saturate(1.4);
-        -webkit-backdrop-filter: blur(48px) saturate(1.4);
-        border-bottom: var(--bubble-border);
-        box-shadow:
-            0 1px 0 rgba(255, 255, 255, 0.1),
-            0 4px 24px rgba(0, 0, 0, 0.04);
+        background: transparent;
         flex-shrink: 0;
         z-index: 100;
         position: relative;
     }
 
-    .sidebar-toggle {
-        background: none;
-        border: none;
-        color: var(--text-muted);
-        cursor: pointer;
-        width: 34px;
-        height: 34px;
-        padding: 0;
-        border-radius: 8px;
-        transition: color 200ms ease, background 200ms ease, transform 300ms var(--spring);
-        flex-shrink: 0;
+    /* Left / Center / Right layout */
+    .topbar-left,
+    .topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .topbar-left { min-width: 160px; }
+    .topbar-right { min-width: 160px; justify-content: flex-end; }
+
+    .topbar-center {
+        flex: 1;
         display: flex;
         align-items: center;
         justify-content: center;
     }
-    .sidebar-toggle:hover {
-        color: var(--text);
-        background: var(--accent-subtle);
+
+    /* ---- Icon button ---- */
+    .tb-btn {
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+        flex-shrink: 0;
     }
-    .sidebar-toggle.active {
+    .tb-btn:hover {
         color: var(--text);
         background: var(--surface);
+        border-color: var(--border);
+    }
+    .tb-btn.active {
+        color: var(--text);
+        background: var(--surface);
+        border-color: var(--border);
     }
 
-    .theme-toggle {
-        background: none;
-        border: none;
-        color: var(--text-muted);
-        cursor: pointer;
-        padding: 7px;
-        border-radius: var(--radius-pill);
-        transition: color var(--transition), background var(--transition);
+    /* ---- Text button (icon + label) ---- */
+    .tb-text-btn {
         display: flex;
         align-items: center;
-        justify-content: center;
+        gap: 6px;
+        padding: 6px 14px 6px 10px;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-muted);
+        text-decoration: none;
+        transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+        white-space: nowrap;
     }
-    .theme-toggle:hover {
+    .tb-text-btn:hover {
         color: var(--text);
-        background: var(--accent-subtle);
+        background: var(--surface);
+        border-color: var(--border);
+    }
+    .tb-text-btn.active {
+        color: var(--text);
+        background: var(--surface);
+        border-color: var(--border);
     }
 
+    /* ---- Separator ---- */
+    .tb-sep {
+        width: 1px;
+        height: 20px;
+        background: var(--border);
+        margin: 0 6px;
+        opacity: 0.6;
+    }
+
+    /* ---- Logo ---- */
     .logo {
         display: flex;
-        align-items: baseline;
-        gap: 1px;
+        align-items: center;
+        gap: 0;
         text-decoration: none;
+        margin-left: 10px;
     }
     .logo:hover { opacity: 1; }
-    .logo-mark {
+    .logo-ct {
         font-size: 18px;
         font-weight: 700;
         color: var(--text);
-        letter-spacing: -0.04em;
+        letter-spacing: -0.03em;
     }
-    .logo-sep {
-        font-size: 16px;
-        font-weight: 300;
-        color: var(--text-muted);
-        margin: 0 2px;
+    .logo-divider {
+        width: 1px;
+        height: 16px;
+        background: var(--text-muted);
+        margin: 0 6px;
+        opacity: 0.4;
+        transform: rotate(16deg);
     }
-    .logo-ver {
+    .logo-num {
         font-size: 16px;
         font-weight: 500;
         color: var(--text-secondary);
     }
 
-    .phase-area {
-        flex: 1;
+    /* ---- Phase indicator ---- */
+    .phase-pill {
         display: flex;
         align-items: center;
-        justify-content: center;
         gap: 10px;
+        padding: 6px 18px 6px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        animation: phaseIn 250ms var(--spring-soft) both;
     }
-
     .phase-dot {
         width: 7px;
         height: 7px;
         border-radius: 50%;
         background: var(--brain);
-        box-shadow: 0 0 8px rgba(232, 133, 12, 0.4);
-        animation: pulse 2s ease-in-out infinite;
+        box-shadow: 0 0 6px rgba(232, 133, 12, 0.3);
+        animation: pulse 6s ease-in-out infinite;
     }
-
-    .phase-text {
-        font-size: 13px;
+    .phase-label {
+        font-size: 12.5px;
         font-weight: 500;
-        color: var(--text-muted);
-        transition: color var(--transition);
-    }
-    .phase-text.active {
         color: var(--text-secondary);
+        letter-spacing: 0.02em;
     }
 
-    .nav {
-        display: flex;
-        gap: 2px;
+    @keyframes phaseIn {
+        from { opacity: 0; transform: scale(0.9) translateY(-2px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
     }
 
-    .nav-link {
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--text-muted);
-        padding: 7px 16px;
-        border-radius: var(--radius-pill);
-        transition: color var(--transition), background var(--transition);
-    }
-    .nav-link:hover {
-        color: var(--text);
-        background: var(--accent-subtle);
-        opacity: 1;
-    }
-    .nav-link.active {
-        color: var(--text);
-        background: var(--accent-subtle);
-    }
-
+    /* ---- Main content ---- */
     main {
         flex: 1;
         overflow: hidden;
