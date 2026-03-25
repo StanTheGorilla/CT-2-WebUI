@@ -18,6 +18,7 @@ from ct1.core.formatter import (
     strip_think_tags, extract_code,
     detect_broken_sections, detect_output_type,
     polish_html_css, check_completeness,
+    enforce_file_markers,
 )
 from ct1.memory.journal import Journal
 from ct1.memory.journal_reader import JournalReader
@@ -1442,6 +1443,9 @@ class Orchestrator:
             final_response = clean_response(
                 final_response, is_code=is_code, output_type=output_type
             )
+
+        # Enforce file markers for computer mode
+        final_response = enforce_file_markers(final_response, route)
 
         # ── Phase 6.5: AUTO-RETRY broken sections (max 2 attempts) ──
         # Skip for computer mode — multi-file output doesn't use HTML section structure
