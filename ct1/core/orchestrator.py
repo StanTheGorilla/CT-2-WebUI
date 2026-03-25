@@ -1,17 +1,15 @@
-"""CT-2 Orchestrator: Sequential Supervisor-Worker pipeline.
+"""CT-2 Orchestrator: Single-engine pipeline with deterministic routing.
 
 6-phase pipeline:
   1. ROUTE    — Deterministic keyword classifier (no AI — instant, predictable)
-  2. PLAN     — Specialist produces a structured task breakdown (code routes only)
-  3. CONSULT  — Specialist provides design data (ROUTE_DESIGN only)
-  4. GENERATE — Engine produces full response (with plan context injected)
-  5. VALIDATE — Output-type-aware validation (HTML structural / Python AST / JS braces)
-  6. FORMAT   — Deterministic Python cleanup
+  2. PLAN     — Engine self-planning for code routes (lightweight JSON plan)
+  3. GENERATE — Engine produces full response (with plan context injected)
+  4. VALIDATE — Output-type-aware validation (HTML structural / Python AST / JS braces)
+  5. FORMAT   — Deterministic Python cleanup
 """
 import yaml
 from pathlib import Path
 from ct1.core.engine import Engine
-from ct1.core.specialist import Specialist
 from ct1.server.launcher import load_raw_config, resolve_config
 import re
 from ct1.core.formatter import (
@@ -53,8 +51,7 @@ def _strip_file_context(text: str) -> str:
 
 # ── Conversation mode detection keywords ──────────────────────────
 # Used by _detect_conversation_mode() to distinguish edits from questions
-# when there's existing code in the conversation. NOT used for routing
-# (routing is handled by the Specialist AI).
+# when there's existing code in the conversation.
 
 _QUESTION_STARTS = (
     "what is", "what are", "what does", "what was", "what do",
@@ -135,21 +132,6 @@ class Orchestrator:
             vision_supported=dc.get("vision_supported", False),
         )
 
-        # Specialist is optional (solo presets don't have one)
-        if "llama_server_specialist" in cfg and "specialist" in cfg.get("models", {}):
-            specialist_url = f"http://localhost:{cfg['llama_server_specialist']['port']}"
-            sc = cfg["models"]["specialist"]
-            self.specialist = Specialist(
-                base_url=specialist_url,
-                temperature=sc["temperature"],
-                top_p=sc["top_p"],
-                top_k=sc["top_k"],
-                max_tokens=sc["max_tokens"],
-                enable_thinking=sc.get("enable_thinking", False),
-            )
-        else:
-            self.specialist = None
-
         # Per-task parameter overrides (e.g. Nemotron optimized per route)
         self.task_overrides = cfg.get("_task_overrides", {})
 
@@ -203,11 +185,9 @@ class Orchestrator:
     def _pre_route(cls, msg: str) -> str | None:
         """Deterministic pre-routing for obvious non-build requests.
 
-        Catches clear DIRECT cases before the 2B specialist, which
-        misroutes long analytical text containing words like
-        'algorithm', 'design', 'function' as CODE.
+        Catches clear DIRECT cases before keyword routing.
 
-        Returns route string or None to defer to AI/keyword routing.
+        Returns route string or None to defer to keyword routing.
         """
         lower = msg.lower().strip()
 
@@ -249,7 +229,7 @@ class Orchestrator:
 
     @classmethod
     def _keyword_route(cls, msg: str) -> str:
-        """Keyword-based route for solo mode (no specialist available)."""
+        """Keyword-based route — deterministic fallback after _pre_route."""
         lower = msg.lower().strip()
 
         # Questions are always DIRECT, even if they mention "website"
@@ -421,7 +401,6 @@ class Orchestrator:
             "ROUTE_DESIGN": "design",
             "ROUTE_DIRECT": "direct",
             "ROUTE_COMPUTER": "computer",
-            "ROUTE_SOLO": "solo",
         }
         key = route_map.get(route, "direct")
         return self.task_overrides.get(key, {})
@@ -667,7 +646,7 @@ class Orchestrator:
         )
         return result["text"], result.get("thinking", ""), False
 
-    # ── Solo-mode self-planning (no specialist) ────────────────────────
+    # ── Self-planning via Engine ────────────────────────────────────────
 
     _SOLO_PLAN_SYSTEM = (
         "Analyze this request and output ONLY a JSON object. No other text.\n"
@@ -678,8 +657,8 @@ class Orchestrator:
     )
 
     async def _solo_plan(self, goal: str, route: str) -> dict | None:
-        """Lightweight self-planning when no specialist is available.
-        Uses the director with thinking disabled for speed."""
+        """Lightweight self-planning via Engine.
+        Uses the engine with thinking disabled for speed."""
         try:
             import json
             raw = await self.engine._call(
@@ -722,7 +701,6 @@ class Orchestrator:
         "code": "ROUTE_CODE",
         "chat": "ROUTE_DIRECT",
         "computer": "ROUTE_COMPUTER",
-        "solo": "ROUTE_SOLO",
     }
 
     # ── Precision-Design pipeline ─────────────────────────────────────
@@ -975,34 +953,9 @@ class Orchestrator:
             emit("component_generating",
                  component_id=comp_id, index=i, total=total)
 
-            # Modify the spec content based on user request
-            # For now, pass the edit intent in the prompt
-            try:
-                html = await self.specialist.generate_component(
-                    comp_spec, spec["color_theme"], None,
-                )
-                html = sanitize_component(html)
-                passed, hard_errors, _ = validate_component(html, comp_spec)
-
-                if not passed:
-                    # One patch attempt
-                    try:
-                        html = await self.specialist.patch_component(
-                            comp_spec, spec["color_theme"], html, hard_errors,
-                        )
-                        html = sanitize_component(html)
-                        passed, _, _ = validate_component(html, comp_spec)
-                    except Exception:
-                        pass
-
-                    if not passed:
-                        html = get_fallback(comp_spec["type"], comp_id)
-                        emit("component_fallback", component_id=comp_id)
-
-            except Exception as e:
-                print(f"[design-edit] regen failed for {comp_id}: {e}")
-                html = get_fallback(comp_spec["type"], comp_id)
-                emit("component_fallback", component_id=comp_id)
+            # Specialist removed — use fallback for component regeneration
+            html = get_fallback(comp_spec["type"], comp_id)
+            emit("component_fallback", component_id=comp_id)
 
             # Patch into previous assembled page
             if previous_code:
@@ -1078,7 +1031,7 @@ class Orchestrator:
         if mode == "new" and conversation:
             conversation = self._slim_conversation(conversation)
 
-        # ── Phase 1: ROUTE (AI via Specialist, with deterministic fast-paths) ──
+        # ── Phase 1: ROUTE (deterministic — _pre_route then _keyword_route) ──
         emit("routing")
         forced_route = self._MODE_ROUTE_MAP.get(mode_override or "")
         if forced_route:
@@ -1100,8 +1053,6 @@ class Orchestrator:
             route = self._pre_route(user_message)
             if route:
                 print(f"[pre-route] → {route} (deterministic)")
-            elif self.specialist:
-                route = await self.specialist.route(user_message)
             else:
                 route = self._keyword_route(user_message)
         emit("routed", route=route)
@@ -1112,7 +1063,7 @@ class Orchestrator:
         task_ovr = self._get_task_overrides(route, user_message)
 
         # ── ROUTE_DESIGN: Precision-Design pipeline (replaces old flow) ──
-        if route == "ROUTE_DESIGN" and self.specialist:
+        if route == "ROUTE_DESIGN":
             def on_token(token, kind):
                 emit("token", text=token, kind=kind)
 
@@ -1149,84 +1100,16 @@ class Orchestrator:
                     result["reflection"] = reflection
                 return result
 
-        # ── ROUTE_SOLO: Engine handles everything, skip specialist ──
-        if route == "ROUTE_SOLO":
-            emit("generating", editing=is_edit)
-
-            def on_token(token, kind):
-                emit("token", text=token, kind=kind)
-
-            if is_edit and previous_code:
-                draft, draft_thinking, _ = await self._generate_edit(
-                    user_message, "ROUTE_SOLO", previous_code,
-                    on_token, emit, conversation=conversation,
-                    task_overrides=task_ovr,
-                )
-                emit("token", text=draft, kind="content")
-            else:
-                # Optional self-planning for complex requests
-                plan = None
-                if len(user_message) > 50:
-                    plan = await self._solo_plan(user_message, "ROUTE_SOLO")
-                    if plan:
-                        emit("planned", plan=plan)
-
-                result = await self.engine.generate(
-                    goal, "ROUTE_SOLO",
-                    plan=plan,
-                    conversation=conversation,
-                    on_token=on_token,
-                    task_overrides=task_ovr,
-                )
-                draft = result["text"]
-                draft_thinking = result.get("thinking", "")
-
-            emit("draft", text=draft, thinking=draft_thinking)
-
-            # Lightweight formatting
-            final_response = strip_think_tags(draft)
-            final_response = extract_code(final_response) or final_response
-
-            return {
-                "response": final_response,
-                "thinking": draft_thinking,
-                "draft": draft,
-                "draft_thinking": draft_thinking,
-                "route": route,
-                "specialist_data": None,
-                "plan": plan if not is_edit else None,
-                "reflection": {
-                    "goal": goal_text[:200], "complexity": "moderate",
-                    "lesson": "", "self_score": 0.0,
-                },
-            }
-
         # ── Phase 2: PLAN (ROUTE_CODE only, skip for edits and design) ──
         plan = None
         if is_code and not is_edit and route == "ROUTE_CODE":
-            if self.specialist:
-                plan = await self.specialist.plan(user_message, route)
-                emit("planned", plan=plan)
-            elif len(user_message) > 30:
-                # Solo mode: lightweight self-planning via director
+            if len(user_message) > 30:
                 plan = await self._solo_plan(user_message, route)
                 if plan:
                     emit("planned", plan=plan)
 
-        # ── Phase 3: DECOMPOSE (structured requirement extraction) ──────
-        # Skip for DIRECT — Engine handles chat end-to-end, no 2B overhead
+        # ── Phase 3: specialist_data (always None — specialist removed) ──
         specialist_data = None
-        if (not is_edit and mode != "question" and self.specialist
-                and route != "ROUTE_DIRECT"):
-            emit("consulting")
-            try:
-                specialist_data = await self.specialist.decompose(
-                    user_message, route, conversation=conversation,
-                )
-                if specialist_data and len(specialist_data) > 1:
-                    emit("consulted", data=specialist_data)
-            except Exception as e:
-                print(f"[orch] decomposition failed: {e}")
 
         # ── Adaptive thinking budget based on decomposition complexity ──
         # Only scale when an explicit thinking_budget is configured (> 0).
@@ -1480,12 +1363,7 @@ class Orchestrator:
             # Programmatic validation (real syntax check, no AI)
             issues = validate_output(draft, output_type)
 
-            # Specialist review if available and issues found
             review_result = {"pass": True, "critical_issues": [], "fix_instructions": ""}
-            if issues and self.specialist:
-                review_result = await self.specialist.review(
-                    goal_text, draft, conversation=conversation
-                )
 
             all_issues = list(issues)
             if not review_result["pass"]:
@@ -1625,5 +1503,3 @@ class Orchestrator:
 
     async def close(self):
         await self.engine.close()
-        if self.specialist:
-            await self.specialist.close()
