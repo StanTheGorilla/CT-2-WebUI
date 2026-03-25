@@ -190,74 +190,71 @@ class Orchestrator:
         "set up a", "set up an",
     }
 
+    _COMPUTER_PATTERNS = re.compile(
+        r'\b(?:create\s+a?\s*project|build\s+a?\s*(?:website|app|project)|'
+        r'write\s+to\s+file|run\s+command|execute|install\s+|mkdir|'
+        r'save\s+as|multi[- ]?file|full\s+project|make\s+a?\s*folder|'
+        r'set\s+up\s+a?\s*(?:project|repo|directory))\b', re.I
+    )
+
+    _DESIGN_PATTERNS = re.compile(
+        r'\b(?:design|landing\s+page|dashboard|portfolio|webpage|'
+        r'website\s+layout|mockup|wireframe|styled?\s+page|'
+        r'html\s+page|web\s+page|ui\s+design)\b', re.I
+    )
+    _DESIGN_NEGATIVE = re.compile(
+        r'\b(?:explain|how\s+does|what\s+is|what\s+are|why\s+does)\b', re.I
+    )
+
+    _CODE_PATTERNS = re.compile(
+        r'\b(?:write\s+a?\s*(?:function|class|script|program|module)|'
+        r'implement|debug|refactor|fix\s+(?:this|the)\s+(?:code|bug|error)|'
+        r'(?:python|javascript|typescript|java|rust|go|c\+\+|ruby)\s+'
+        r'(?:script|function|class|program|code)|'
+        r'api\s+endpoint|add\s+(?:a\s+)?(?:method|function|test))\b', re.I
+    )
+    _CODE_FENCE = re.compile(r'```\w*\n')
+
     @classmethod
-    def _pre_route(cls, msg: str) -> str | None:
-        """Deterministic pre-routing for obvious non-build requests.
+    def _deterministic_route(cls, msg: str) -> str:
+        """Deterministic routing via keyword/regex. No AI call.
 
-        Catches clear DIRECT cases before keyword routing.
-
-        Returns route string or None to defer to keyword routing.
+        Priority: question > computer > design > code > direct (fallback).
         """
         lower = msg.lower().strip()
 
-        # 1. Questions → always DIRECT
-        if _is_question(lower):
+        # 1. Questions -> always DIRECT
+        if _is_question(msg):
+            # Exception: question + code fence = code context
+            if cls._CODE_FENCE.search(msg):
+                return "ROUTE_CODE"
             return "ROUTE_DIRECT"
 
-        has_build = any(p in lower for p in cls._BUILD_PHRASES)
+        # 2. Computer mode (file operations, project creation)
+        if cls._COMPUTER_PATTERNS.search(msg):
+            return "ROUTE_COMPUTER"
 
-        # 2. Reasoning/analysis signals without build intent → DIRECT
-        if any(s in lower for s in cls._DIRECT_SIGNALS) and not has_build:
-            return "ROUTE_DIRECT"
-
-        # 3. Long text (>300 chars) without build intent → DIRECT
-        #    Real build requests are concise; long text is reasoning/scenarios
-        if len(lower) > 300 and not has_build:
-            return "ROUTE_DIRECT"
-
-        # 4. Ambiguous — defer to AI/keyword routing
-        return None
-
-    # ── Solo-mode keyword router ─────────────────────────────────────
-
-    _SOLO_DESIGN_KW = {
-        "website", "web page", "webpage", "landing page", "portfolio",
-        "homepage", "home page", "dashboard", "web app", "web site",
-        "web design", "ui design", "ux design",
-    }
-    _SOLO_CODE_KW = {
-        "script", "program", "function", "algorithm", "api", "endpoint",
-        "server", "database", "sql", "python", "react", "svelte", "vue",
-        "angular", "node", "component",
-    }
-    # Action verbs that turn a keyword match into a build request
-    _SOLO_BUILD_VERBS = {
-        "build", "create", "make", "generate", "design", "develop",
-        "write", "code", "implement", "set up", "scaffold",
-    }
-
-    @classmethod
-    def _keyword_route(cls, msg: str) -> str:
-        """Keyword-based route — deterministic fallback after _pre_route."""
-        lower = msg.lower().strip()
-
-        # Questions are always DIRECT, even if they mention "website"
-        if _is_question(lower):
-            return "ROUTE_DIRECT"
-
-        has_design_kw = any(kw in lower for kw in cls._SOLO_DESIGN_KW)
-        has_code_kw = any(kw in lower for kw in cls._SOLO_CODE_KW)
-        has_build_verb = any(v in lower for v in cls._SOLO_BUILD_VERBS)
-
-        if has_design_kw and has_build_verb:
+        # 3. Design (single-file visual) — but not questions about design
+        if cls._DESIGN_PATTERNS.search(msg) and not cls._DESIGN_NEGATIVE.search(msg):
             return "ROUTE_DESIGN"
-        if has_design_kw:
-            # Even without explicit verb — "landing page for coffee shop" is a build request
+
+        # 4. Code (generation/discussion)
+        if cls._CODE_PATTERNS.search(msg) or cls._CODE_FENCE.search(msg):
+            return "ROUTE_CODE"
+
+        # 5. Analysis/reasoning signals -> DIRECT
+        if any(kw in lower for kw in cls._DIRECT_SIGNALS):
+            return "ROUTE_DIRECT"
+
+        # 6. Build phrases without specific route -> DESIGN (prefer visual)
+        if any(phrase in lower for phrase in cls._BUILD_PHRASES):
             return "ROUTE_DESIGN"
-        if has_code_kw and has_build_verb:
-            return "ROUTE_CODE"
-        if has_code_kw:
-            return "ROUTE_CODE"
+
+        # 7. Long text without build intent -> DIRECT
+        if len(msg) > 300:
+            return "ROUTE_DIRECT"
+
+        # 8. Default fallback
         return "ROUTE_DIRECT"
 
     # ── Main pipeline ────────────────────────────────────────────────
@@ -1069,7 +1066,7 @@ class Orchestrator:
         if mode == "new" and conversation:
             conversation = self._slim_conversation(conversation)
 
-        # ── Phase 1: ROUTE (deterministic — _pre_route then _keyword_route) ──
+        # ── Phase 1: ROUTE (deterministic — _deterministic_route) ──
         emit("routing")
         forced_route = self._MODE_ROUTE_MAP.get(mode_override or "")
         if forced_route:
@@ -1088,11 +1085,8 @@ class Orchestrator:
         elif mode == "question":
             route = "ROUTE_DIRECT"
         else:
-            route = self._pre_route(user_message)
-            if route:
-                print(f"[pre-route] → {route} (deterministic)")
-            else:
-                route = self._keyword_route(user_message)
+            route = self._deterministic_route(user_message)
+            print(f"[route] → {route} (deterministic)")
         emit("routed", route=route)
 
         is_code = route in ("ROUTE_DESIGN", "ROUTE_CODE", "ROUTE_COMPUTER")
