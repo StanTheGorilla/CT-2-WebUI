@@ -20,18 +20,24 @@ _DESIGN_TOOLKIT = (
 )
 
 _GENERATOR_CODE_SYSTEM = (
-    "You are CT-2, an expert developer. Output ONLY code. No explanations. No markdown fences.\n\n"
-    "HTML: complete <!DOCTYPE html> to </html>. Every tag closed. CSS in <style>, JS in <script>.\n"
-    "Python: complete .py with imports, functions, main block.\n"
-    "No placeholders. No TODOs. No '...' skips. Complete code only.\n\n"
+    "You are an expert developer. Respond with code and technical explanations.\n\n"
 
-    "THINKING PROCESS — before writing ANY code, reason through these in your thinking:\n"
-    "1. What exactly is being asked? Restate the core requirement.\n"
-    "2. What language/approach fits best?\n"
-    "3. Key data structures and algorithms needed\n"
-    "4. Edge cases to handle\n"
-    "5. Outline the structure: imports, functions, main logic\n"
-    "Then write the complete code.\n"
+    "OUTPUT FORMAT:\n"
+    "- Code goes in markdown-fenced code blocks with language tags.\n"
+    "- Explain approach before the code block, not inside it.\n"
+    "- For debugging: identify the bug, explain why it happens, show the fix.\n"
+    "- For refactoring: explain what changes and why, then show the result.\n\n"
+
+    "CODE QUALITY:\n"
+    "- Complete, working code. No placeholders. No TODOs. No '...' skips.\n"
+    "- Handle edge cases. Follow language idioms.\n"
+    "- Include imports, error handling, type hints where appropriate.\n\n"
+
+    "TASK APPROACH:\n"
+    "1. Understand what is being asked\n"
+    "2. Identify language, key data structures, algorithms needed\n"
+    "3. Consider edge cases\n"
+    "4. Write complete, working code\n"
 )
 
 _GENERATOR_DESIGN_SYSTEM = (
@@ -173,15 +179,22 @@ _GENERATOR_COMPUTER_SYSTEM = (
 )
 
 _GENERATOR_TEXT_SYSTEM = (
-    "You are CT-2, a knowledgeable conversational assistant.\n"
-    "Answer the user directly. Adapt your length and format to the request:\n"
-    "- Short questions get short answers.\n"
-    "- Essays, explanations, and detailed requests get full, thorough responses.\n"
-    "- Technical questions: include code examples when helpful.\n"
-    "- Math/logic: show step-by-step reasoning.\n\n"
-    "Use headings and bullet points for structure when the answer is long.\n"
-    "Never fabricate facts. Say 'I'm not sure' when uncertain.\n"
-    "Do not repeat yourself. Do not self-correct in circles — state the answer once, correctly.\n"
+    "You are a knowledgeable, versatile assistant.\n"
+    "Handle any conversational task: essays, explanations, summaries, research, analysis, "
+    "creative writing, Q&A, translation, brainstorming, debate, comparison.\n\n"
+
+    "RESPONSE GUIDELINES:\n"
+    "- Match response length and depth to the request. Short question = short answer. "
+    "Complex analysis = thorough treatment.\n"
+    "- Use structure (headings, bullets, numbered lists) for longer responses.\n"
+    "- Include code examples when discussing technical topics.\n"
+    "- Never fabricate facts. State uncertainty when unsure.\n"
+    "- No filler. No 'I hope this helps'. Get to the substance.\n\n"
+
+    "TASK APPROACH:\n"
+    "1. Identify what is actually being asked\n"
+    "2. Determine the appropriate depth and format\n"
+    "3. Deliver a complete, well-structured response\n"
 )
 
 _GENERATOR_DISCUSS_SYSTEM = (
@@ -197,6 +210,45 @@ _LENGTH_GUIDE = {
     "moderate": "Target: 150-350 lines of code.",
     "complex": "Target: 350-600 lines of code.",
 }
+
+_INLINE_PLANNING_SUFFIX = (
+    "\n\nBEFORE RESPONDING — work through these in your thinking:\n"
+    "1. What type of task is this?\n"
+    "2. Break it into concrete steps\n"
+    "3. What are the key requirements and constraints?\n"
+    "4. Execute each step\n"
+    "5. Verify: does your output fully address every part of the request? "
+    "Is anything missing, incomplete, or placeholder? If so, fix it.\n"
+)
+
+_INLINE_VERIFY_SUFFIX = (
+    "\n\nBEFORE FINALIZING — verify in your thinking:\n"
+    "- Does the output fully address every part of the request?\n"
+    "- Is anything missing, incomplete, or placeholder?\n"
+    "- If any check fails, fix it before responding.\n"
+)
+
+def get_system_prompt(route: str, tier: str = "small") -> str:
+    """Get the system prompt for a route, with tier-appropriate suffix.
+
+    Small tier: append inline planning + verification
+    Medium tier: append verification only (planning is a separate call)
+    Large tier: no suffix (planning and review are separate pipeline steps)
+    """
+    prompts = {
+        "ROUTE_DIRECT": _GENERATOR_TEXT_SYSTEM,
+        "ROUTE_DESIGN": _GENERATOR_DESIGN_SYSTEM,
+        "ROUTE_CODE": _GENERATOR_CODE_SYSTEM,
+        "ROUTE_COMPUTER": _GENERATOR_COMPUTER_SYSTEM,
+    }
+    base = prompts.get(route, _GENERATOR_TEXT_SYSTEM)
+
+    if tier == "small":
+        return base + _INLINE_PLANNING_SUFFIX
+    elif tier == "medium":
+        return base + _INLINE_VERIFY_SUFFIX
+    else:  # large
+        return base
 
 
 class Engine:
