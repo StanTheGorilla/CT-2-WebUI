@@ -169,8 +169,10 @@ async def switch_preset(body: PresetSwitch):
     if same_preset and body.context_size is None:
         return {"status": "already_active", "preset": preset_name}
 
-    # Update config file
+    # Update config file — persist preset and context_size override
     _raw_cfg["active_preset"] = preset_name
+    if body.context_size is not None:
+        _raw_cfg["presets"][preset_name]["context_size"] = body.context_size
     _CONFIG_PATH.write_text(
         yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
