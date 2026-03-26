@@ -103,6 +103,7 @@ async def get_config():
         "tier": preset_info.get("tier"),
         "model": Path(server.get("model", "")).name,
         "context_size": server.get("context_size"),
+        "gguf_context_length": _cfg.get("_gguf_context_length"),
         "port": server.get("port"),
         "gpu_layers": server.get("n_gpu_layers"),
         "enable_thinking": model_params.get("enable_thinking", True),
@@ -120,16 +121,26 @@ async def get_config():
 @app.get("/api/presets")
 async def get_presets():
     """List available presets and the active one."""
+    from ct1.core.gguf_reader import read_context_length
+
+    # Resolve models_dir once
+    models_dir_rel = _raw_cfg.get("models_dir", "models")
+    project_root = _CONFIG_PATH.resolve().parent.parent.parent
+    models_dir = project_root / models_dir_rel
+
     presets = {}
     for name, preset in _raw_cfg.get("presets", {}).items():
-        # Support both flat format (model at root) and legacy nested (under "director")
         model_src = preset if "model" in preset else preset.get("director", {})
+        model_file = model_src.get("model", "")
+        gguf_ctx = read_context_length(models_dir / model_file) if model_file else None
+        yaml_ctx = model_src.get("context_size")
         presets[name] = {
             "id": name,
             "name": preset.get("name", name),
-            "model": model_src.get("model", ""),
+            "model": model_file,
             "tier": preset.get("tier") or model_src.get("tier"),
-            "context_size": model_src.get("context_size", 0),
+            "context_size": yaml_ctx or gguf_ctx or 0,
+            "gguf_context_length": gguf_ctx,
         }
     return {
         "active": _raw_cfg.get("active_preset", ""),
@@ -139,18 +150,23 @@ async def get_presets():
 
 class PresetSwitch(BaseModel):
     preset: str
+    context_size: int | None = None
 
 
 @app.post("/api/preset")
 async def switch_preset(body: PresetSwitch):
-    """Switch to a different model preset. Restarts the llama-server process."""
+    """Switch to a different model preset. Restarts the llama-server process.
+
+    If context_size is provided, it overrides the preset's default (capped at GGUF max).
+    """
     global _raw_cfg, _cfg, _orch, _server_procs
 
     preset_name = body.preset
     if preset_name not in _raw_cfg.get("presets", {}):
         return {"error": f"Unknown preset: {preset_name}"}, 400
 
-    if preset_name == _raw_cfg.get("active_preset"):
+    same_preset = preset_name == _raw_cfg.get("active_preset")
+    if same_preset and body.context_size is None:
         return {"status": "already_active", "preset": preset_name}
 
     # Update config file
@@ -160,8 +176,9 @@ async def switch_preset(body: PresetSwitch):
         encoding="utf-8",
     )
 
-    # Resolve new config
-    _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH))
+    # Resolve new config with optional context_size override
+    _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
+                          context_size_override=body.context_size)
 
     # Teardown old orchestrator
     if _orch:
@@ -170,12 +187,14 @@ async def switch_preset(body: PresetSwitch):
     # Kill and restart the llama-server process
     kill_existing_llama_servers()
     try:
-        _server_procs = await start_server(str(_CONFIG_PATH))
+        _server_procs = await start_server(str(_CONFIG_PATH),
+                                           context_size_override=body.context_size)
     except Exception as e:
         return {"error": f"Failed to start server: {e}"}
 
     # Create new orchestrator
-    _orch = Orchestrator(str(_CONFIG_PATH))
+    _orch = Orchestrator(str(_CONFIG_PATH),
+                         context_size_override=body.context_size)
 
     return {
         "status": "switched",
@@ -342,6 +361,68 @@ async def ws_think(websocket: WebSocket):
                                             break
                         except Exception as e:
                             print(f"[api] workspace context inject error: {e}")
+
+                    # ── URL content fetching ──
+                    from ct1.core.web_fetcher import extract_urls, fetch_url as _fetch_url
+
+                    goal_text_for_urls = actual_goal if isinstance(actual_goal, str) else " ".join(
+                        p.get("text", "") for p in actual_goal if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                    detected_urls = extract_urls(goal_text_for_urls)
+
+                    if detected_urls:
+                        ctx_size = _cfg.get("llama_server", {}).get("context_size", 16384)
+                        budget_chars = int((ctx_size * 3.5 - 2000) / 2 / len(detected_urls))
+                        budget_chars = max(budget_chars, 500)
+
+                        fetched_blocks = []
+                        fetched_meta = []
+
+                        for u in detected_urls:
+                            queue.put_nowait({"event": "url_fetching", "url": u})
+                            try:
+                                fr = await _fetch_url(u, max_chars=budget_chars)
+                                if fr.error:
+                                    queue.put_nowait({
+                                        "event": "url_failed",
+                                        "url": u, "error": fr.error,
+                                    })
+                                else:
+                                    fetched_blocks.append(
+                                        f'[FETCHED CONTENT FROM: {fr.url} — "{fr.title}"]\n'
+                                        f'{fr.content}\n'
+                                        f'[END FETCHED CONTENT]'
+                                    )
+                                    fetched_meta.append({
+                                        "url": fr.url,
+                                        "title": fr.title,
+                                        "content": fr.content[:500],
+                                        "content_length": fr.content_length,
+                                        "truncated": fr.truncated,
+                                    })
+                                    queue.put_nowait({
+                                        "event": "url_fetched",
+                                        "url": fr.url,
+                                        "title": fr.title,
+                                        "content_length": fr.content_length,
+                                        "truncated": fr.truncated,
+                                        "preview": fr.content[:500],
+                                    })
+                            except Exception as e:
+                                queue.put_nowait({
+                                    "event": "url_failed",
+                                    "url": u, "error": str(e),
+                                })
+
+                        if fetched_blocks:
+                            ctx = "\n\n".join(fetched_blocks)
+                            if isinstance(actual_goal, str):
+                                actual_goal = f"{ctx}\n\n{actual_goal}"
+                            elif isinstance(actual_goal, list):
+                                for part in actual_goal:
+                                    if part.get("type") == "text":
+                                        part["text"] = f"{ctx}\n\n{part['text']}"
+                                        break
 
                     result = await _orch.think(
                         actual_goal, on_event=on_event, conversation=conversation,

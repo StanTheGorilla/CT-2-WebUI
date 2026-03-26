@@ -47,6 +47,10 @@ def _strip_file_context(text: str) -> str:
     keeping only the user's own message.
     Used for routing/classification so file content doesn't pollute intent detection."""
     text = re.sub(r'\[WORKSPACE FILES[^\]]*\].*?\n\n(?=\S)', '', text, count=1, flags=re.DOTALL)
+    text = re.sub(
+        r'\[FETCHED CONTENT FROM:[^\]]*\].*?\[END FETCHED CONTENT\]\s*',
+        '', text, flags=re.DOTALL,
+    )
     return re.sub(r'\[(?:Workspace )?[Ff]ile: [^\]]+\]\n.*?\n\n', '', text, flags=re.DOTALL).strip()
 
 
@@ -111,12 +115,14 @@ _EDIT_INTENT = {
 
 
 class Orchestrator:
-    def __init__(self, config_path: str = None, component_cache=None):
+    def __init__(self, config_path: str = None, component_cache=None,
+                 context_size_override: int = None):
         if config_path is None:
             config_path = str(_CONFIG_PATH)
 
         raw_cfg = load_raw_config(config_path)
-        cfg = resolve_config(raw_cfg, config_path)
+        cfg = resolve_config(raw_cfg, config_path,
+                             context_size_override=context_size_override)
 
         director_url = f"http://localhost:{cfg['llama_server']['port']}"
         dc = cfg["models"]["director"]
