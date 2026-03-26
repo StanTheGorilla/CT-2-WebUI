@@ -578,7 +578,20 @@
                     <div class="step">
                         <span class="step-dot pulse"></span>
                         <span class="step-text">Planning page structure...</span>
+                        {#if $chat.tokensPerSec > 0}
+                            <span class="gen-speed" style="margin-left: 8px">{$chat.tokensPerSec} t/s</span>
+                        {/if}
                     </div>
+                    {#if $chat.streamingThinking}
+                        <div class="spec-stream">
+                            <pre class="spec-stream-pre">{$chat.streamingThinking}</pre>
+                        </div>
+                    {/if}
+                    {#if $chat.streamingText}
+                        <div class="spec-stream">
+                            <pre class="spec-stream-pre">{$chat.streamingText}</pre>
+                        </div>
+                    {/if}
                 {/if}
 
                 {#if $chat.phase === 'spec_validated' && $chat.designSpec}
@@ -1327,6 +1340,14 @@
     .step-meta {
         font-size: 11px; font-family: var(--font-mono);
         color: var(--text-muted); margin-left: auto;
+    }
+    .spec-stream {
+        background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+        margin: 4px 0; max-height: 200px; overflow-y: auto;
+    }
+    .spec-stream-pre {
+        padding: 10px 12px; margin: 0; font-size: 0.75rem; color: var(--text-2);
+        white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono);
     }
 
     /* ================================================================

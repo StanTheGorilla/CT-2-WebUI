@@ -951,6 +951,7 @@ class Engine:
     async def generate_spec(
         self, goal, conversation: list[dict] = None,
         task_overrides: dict = None,
+        on_token=None,
     ) -> dict:
         """Phase 0: Generate JSON spec from user prompt.
 
@@ -971,15 +972,27 @@ class Engine:
             {"role": "user", "content": goal_text},
         ]
 
-        result = await self._call(
-            messages,
-            max_tokens=self.max_tokens,
-            temperature=ovr.get("temperature", 0.35),
-            top_p=ovr.get("top_p", 0.9),
-            conversation=conversation,
-            enable_thinking=True,
-            thinking_budget=ovr.get("thinking_budget"),
-        )
+        if on_token:
+            result = await self._call_stream(
+                messages,
+                on_token=on_token,
+                max_tokens=self.max_tokens,
+                temperature=ovr.get("temperature", 0.35),
+                top_p=ovr.get("top_p", 0.9),
+                conversation=conversation,
+                enable_thinking=True,
+                thinking_budget=ovr.get("thinking_budget"),
+            )
+        else:
+            result = await self._call(
+                messages,
+                max_tokens=self.max_tokens,
+                temperature=ovr.get("temperature", 0.35),
+                top_p=ovr.get("top_p", 0.9),
+                conversation=conversation,
+                enable_thinking=True,
+                thinking_budget=ovr.get("thinking_budget"),
+            )
 
         # Extract text from result
         text = result if isinstance(result, str) else result.get("text", "")

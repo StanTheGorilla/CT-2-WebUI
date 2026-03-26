@@ -753,6 +753,7 @@ class Orchestrator:
             spec = await self.engine.generate_spec(
                 goal, conversation=conversation,
                 task_overrides=task_ovr,
+                on_token=on_token,
             )
         except (ValueError, _json.JSONDecodeError) as e:
             print(f"[design] Phase 0 failed: {e}")
@@ -766,6 +767,7 @@ class Orchestrator:
                 spec = await self.engine.generate_spec(
                     corrective, conversation=conversation,
                     task_overrides=task_ovr,
+                    on_token=on_token,
                 )
             except (ValueError, _json.JSONDecodeError) as e2:
                 print(f"[design] Phase 0 retry failed: {e2}")
