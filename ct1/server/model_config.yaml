@@ -15,7 +15,6 @@ presets:
     top_p: 0.9
     top_k: 40
     presence_penalty: 1.0
-    max_tokens: 100000
     vision_supported: false
     task_overrides:
       design:
@@ -44,7 +43,6 @@ presets:
     top_p: 0.9
     top_k: 40
     presence_penalty: 1.0
-    max_tokens: 100000
     vision_supported: false
     task_overrides:
       design:
@@ -75,7 +73,6 @@ presets:
     top_k: 40
     presence_penalty: 1.2
     frequency_penalty: 0.3
-    max_tokens: 100000
     vision_supported: false
     task_overrides:
       design:
@@ -107,7 +104,6 @@ presets:
     top_k: 40
     presence_penalty: 1.2
     frequency_penalty: 0.3
-    max_tokens: 100000
     vision_supported: false
     task_overrides:
       design:
@@ -137,7 +133,6 @@ presets:
     top_p: 0.9
     top_k: 40
     presence_penalty: 1.0
-    max_tokens: 100000
     vision_supported: false
     task_overrides:
       design:

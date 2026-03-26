@@ -133,7 +133,7 @@ class Orchestrator:
             top_k=dc["top_k"],
             presence_penalty=dc["presence_penalty"],
             frequency_penalty=dc.get("frequency_penalty", 0),
-            max_tokens=dc["max_tokens"],
+            max_tokens=dc.get("max_tokens", 100000),
             thinking_budget=dc.get("thinking_budget", -1),
             vision_supported=dc.get("vision_supported", False),
         )
