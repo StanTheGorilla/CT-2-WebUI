@@ -588,6 +588,7 @@ export function stopGeneration() {
                     specialistData: s.specialistData,
                     thinking: s.thinking,
                     draftThinking: s.draftThinking,
+                    fetchedContent: s.fetchedContent.length > 0 ? s.fetchedContent : undefined,
                 },
             ];
             s.response = partial;

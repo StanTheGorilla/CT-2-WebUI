@@ -332,6 +332,9 @@
                                             <span class="fetch-card-icon">W</span>
                                             <span class="fetch-card-title">{fc.title || fc.url}</span>
                                             <span class="fetch-card-meta">{formatChars(fc.contentLength)}</span>
+                                            {#if fc.truncated}
+                                                <span class="fetch-card-trunc">truncated</span>
+                                            {/if}
                                         </summary>
                                         <pre class="fetch-card-body">{fc.content}</pre>
                                     </details>
@@ -407,6 +410,9 @@
                                             <span class="fetch-card-icon">W</span>
                                             <span class="fetch-card-title">{fc.title || fc.url}</span>
                                             <span class="fetch-card-meta">{formatChars(fc.contentLength)}</span>
+                                            {#if fc.truncated}
+                                                <span class="fetch-card-trunc">truncated</span>
+                                            {/if}
                                         </summary>
                                         <pre class="fetch-card-body">{fc.content}</pre>
                                     </details>
@@ -466,6 +472,9 @@
                                             <span class="fetch-card-icon">W</span>
                                             <span class="fetch-card-title">{fc.title || fc.url}</span>
                                             <span class="fetch-card-meta">{formatChars(fc.contentLength)}</span>
+                                            {#if fc.truncated}
+                                                <span class="fetch-card-trunc">truncated</span>
+                                            {/if}
                                         </summary>
                                         <pre class="fetch-card-body">{fc.content}</pre>
                                     </details>

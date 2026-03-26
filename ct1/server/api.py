@@ -363,18 +363,32 @@ async def ws_think(websocket: WebSocket):
                             print(f"[api] workspace context inject error: {e}")
 
                     # ── URL content fetching ──
-                    from ct1.core.web_fetcher import extract_urls, fetch_url as _fetch_url
+                    from ct1.core.web_fetcher import extract_urls, fetch_url as _fetch_url, URL_PATTERN, MAX_URLS_PER_MESSAGE
 
                     goal_text_for_urls = actual_goal if isinstance(actual_goal, str) else " ".join(
                         p.get("text", "") for p in actual_goal if isinstance(p, dict) and p.get("type") == "text"
                     )
+                    all_found = set(URL_PATTERN.findall(goal_text_for_urls))
                     detected_urls = extract_urls(goal_text_for_urls)
+
+                    if len(all_found) > MAX_URLS_PER_MESSAGE:
+                        queue.put_nowait({
+                            "event": "warning",
+                            "message": f"Found {len(all_found)} URLs; only the first {MAX_URLS_PER_MESSAGE} will be fetched.",
+                        })
 
                     if detected_urls:
                         ctx_size = _cfg.get("llama_server", {}).get("context_size", 16384)
                         budget_chars = int((ctx_size * 3.5 - 2000) / 2 / len(detected_urls))
-                        budget_chars = max(budget_chars, 500)
 
+                        if budget_chars < 500:
+                            queue.put_nowait({
+                                "event": "warning",
+                                "message": "Context too small to fetch URL content; skipping web fetch.",
+                            })
+                            detected_urls = []
+
+                    if detected_urls:
                         fetched_blocks = []
                         fetched_meta = []
 
