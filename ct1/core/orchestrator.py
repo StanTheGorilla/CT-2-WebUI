@@ -23,7 +23,6 @@ from ct1.core.formatter import (
 from ct1.memory.journal import Journal
 from ct1.memory.journal_reader import JournalReader
 from ct1.memory.session_store import SessionStore
-from ct1.core.validator import validate_spec, validate_component, validate_page, sanitize_component
 from ct1.core.assembler import assemble_page, patch_component as patch_component_in_page
 from ct1.templates.fallbacks import get_fallback
 
@@ -782,59 +781,33 @@ class Orchestrator:
                     },
                 }
 
-        # ── Phase 0.5: Spec Validation ────────────────────────────
+        # ── Phase 0.5: Normalize spec ──────────────────────────────
         spec = self._normalize_spec(spec)
-        passed, errors = validate_spec(spec)
-        if not passed:
-            print(f"[design] Phase 0.5 failed: {errors}")
-            emit("spec_failed", errors=errors)
-            error_str = "; ".join(errors)
-            corrective = (
-                f"{goal_text}\n\n"
-                f"Your previous spec had these errors: {error_str}\n"
-                "Fix the errors and output ONLY the corrected JSON object."
-            )
-            try:
-                spec = await self.engine.generate_spec(
-                    corrective, conversation=conversation,
-                    task_overrides=task_ovr,
-                )
-            except (ValueError, _json.JSONDecodeError) as e:
-                print(f"[design] Phase 0.5 retry failed: {e}")
-                return {
-                    "response": f"Design generation failed: spec invalid after retry. {e}",
-                    "thinking": "", "draft": "", "draft_thinking": "",
-                    "route": "ROUTE_DESIGN", "specialist_data": None,
-                    "plan": None,
-                    "reflection": {
-                        "goal": goal_text[:200], "complexity": "failed",
-                        "lesson": "spec validation failed twice",
-                        "self_score": 0.0,
-                    },
-                }
 
-            spec = self._normalize_spec(spec)
-            passed, errors = validate_spec(spec)
-            if not passed:
-                print(f"[design] Phase 0.5 second failure: {errors}")
-                return {
-                    "response": (
-                        f"Design generation failed: spec invalid after retry.\n"
-                        f"Errors: {'; '.join(errors)}"
-                    ),
-                    "thinking": "", "draft": "", "draft_thinking": "",
-                    "route": "ROUTE_DESIGN", "specialist_data": None,
-                    "plan": None,
-                    "reflection": {
-                        "goal": goal_text[:200], "complexity": "failed",
-                        "lesson": f"spec validation: {errors[0]}",
-                        "self_score": 0.0,
-                    },
-                }
+        # Ensure layout_order is consistent with component ids
+        comp_ids = [c["id"] for c in spec.get("components", [])]
+        if spec.get("layout_order"):
+            # Keep only ids that exist in components
+            spec["layout_order"] = [cid for cid in spec["layout_order"] if cid in comp_ids]
+            # Append any components missing from layout_order
+            for cid in comp_ids:
+                if cid not in spec["layout_order"]:
+                    spec["layout_order"].append(cid)
+        else:
+            spec["layout_order"] = comp_ids
+
+        # Normalize component types — map unknowns to "custom"
+        valid_types = {"navbar", "hero", "features", "testimonials", "cta",
+                       "pricing", "contact", "footer", "gallery", "stats",
+                       "team", "faq", "custom"}
+        for comp in spec.get("components", []):
+            if comp.get("type") not in valid_types:
+                print(f"[design] remapped component type '{comp.get('type')}' → 'custom' for '{comp.get('id')}'")
+                comp["type"] = "custom"
 
         emit("spec_validated", spec=spec)
-        print(f"[design] Phase 0.5 passed: {len(spec['components'])} components, "
-              f"layout={spec['layout_order']}")
+        print(f"[design] Phase 0.5: {len(spec.get('components', []))} components, "
+              f"layout={spec.get('layout_order')}")
 
         # ── Phase 1: Engine generates full HTML (single pass, 4B) ──
         emit("generating", editing=False)

@@ -334,34 +334,6 @@ async def ws_think(websocket: WebSocket):
                     skip_refinement = msg.get("skip_refinement", False)
                     actual_goal = goal
 
-                    # Inject workspace file context for non-computer modes
-                    # so users can ask questions about their computer mode code
-                    ws_id = msg.get("workspace_id")
-                    if ws_id and mode_override != "computer" and _workspace:
-                        try:
-                            tree = _workspace.get_file_tree(ws_id)
-                            file_parts = []
-                            for entry in tree:
-                                if entry["is_dir"] or entry["size"] > 50000:
-                                    continue
-                                try:
-                                    content = _workspace.read_file(ws_id, entry["path"])
-                                    file_parts.append(f"[Workspace file: {entry['path']}]\n{content}")
-                                except Exception:
-                                    pass
-                            if file_parts:
-                                ctx = "\n\n".join(file_parts[:10])  # cap at 10 files
-                                if isinstance(actual_goal, str):
-                                    actual_goal = f"[WORKSPACE FILES — the user has these files from computer mode]\n{ctx}\n\n{actual_goal}"
-                                elif isinstance(actual_goal, list):
-                                    # Multimodal: prepend to the text part
-                                    for part in actual_goal:
-                                        if part.get("type") == "text":
-                                            part["text"] = f"[WORKSPACE FILES — the user has these files from computer mode]\n{ctx}\n\n{part['text']}"
-                                            break
-                        except Exception as e:
-                            print(f"[api] workspace context inject error: {e}")
-
                     # ── URL content fetching ──
                     from ct1.core.web_fetcher import extract_urls, fetch_url as _fetch_url, URL_PATTERN, MAX_URLS_PER_MESSAGE
 
