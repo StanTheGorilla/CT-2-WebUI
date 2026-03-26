@@ -29,6 +29,8 @@ export interface Turn {
     draftThinking?: string;
     messageId?: string;
     feedback?: number;
+    fetchedContent?: { url: string; title: string; content: string;
+                       contentLength: number; truncated: boolean }[];
 }
 
 export interface Reflection {
@@ -128,6 +130,9 @@ interface ChatState {
     genStartTime: number;
     tokensPerSec: number;
     savedFiles: string[];
+    fetchingUrls: { url: string; status: 'fetching' | 'done' | 'failed'; error?: string }[];
+    fetchedContent: { url: string; title: string; content: string;
+                      contentLength: number; truncated: boolean }[];
 }
 
 const initial: ChatState = {
@@ -161,6 +166,8 @@ const initial: ChatState = {
     genStartTime: 0,
     tokensPerSec: 0,
     savedFiles: [],
+    fetchingUrls: [],
+    fetchedContent: [],
 };
 
 export const chat = writable<ChatState>({ ...initial });
@@ -262,6 +269,8 @@ function handleEvent(data: Record<string, any>) {
                 s.phase = 'done';
                 s.response = data.response || s.streamingText || '';
                 s.thinking = data.thinking || s.streamingThinking || '';
+                s.streamingThinking = '';
+                s.streamingText = '';
                 if (s.genStartTime && s.tokenCount > 0) {
                     const elapsed = (Date.now() - s.genStartTime) / 1000;
                     s.tokensPerSec = elapsed > 0 ? Math.round(s.tokenCount / elapsed) : 0;
@@ -285,6 +294,7 @@ function handleEvent(data: Record<string, any>) {
                         review: s.review,
                         thinking: s.thinking,
                         draftThinking: s.draftThinking,
+                        fetchedContent: s.fetchedContent.length > 0 ? s.fetchedContent : undefined,
                     },
                 ];
                 break;
@@ -363,6 +373,27 @@ function handleEvent(data: Record<string, any>) {
             case 'terminal_output':
                 // Computer mode: command execution output
                 s.terminalOutput += data.text || '';
+                break;
+            case 'url_fetching':
+                s.fetchingUrls = [...s.fetchingUrls, { url: data.url, status: 'fetching' }];
+                break;
+            case 'url_fetched': {
+                s.fetchingUrls = s.fetchingUrls.map(f =>
+                    f.url === data.url ? { ...f, status: 'done' as const } : f
+                );
+                s.fetchedContent = [...s.fetchedContent, {
+                    url: data.url,
+                    title: data.title || '',
+                    content: data.preview || '',
+                    contentLength: data.content_length || 0,
+                    truncated: data.truncated || false,
+                }];
+                break;
+            }
+            case 'url_failed':
+                s.fetchingUrls = s.fetchingUrls.map(f =>
+                    f.url === data.url ? { ...f, status: 'failed' as const, error: data.error } : f
+                );
                 break;
             case 'warning':
                 s.warning = data.message || '';
@@ -609,6 +640,8 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         s.genStartTime = 0;
         s.tokensPerSec = 0;
         s.savedFiles = [];
+        s.fetchingUrls = [];
+        s.fetchedContent = [];
         return s;
     });
 

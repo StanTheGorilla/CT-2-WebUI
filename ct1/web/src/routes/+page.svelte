@@ -325,6 +325,18 @@
                             {#if turn.specialistData}
                                 <SpecialistCard data={turn.specialistData} />
                             {/if}
+                            {#if turn.fetchedContent?.length}
+                                {#each turn.fetchedContent as fc}
+                                    <details class="fetch-card">
+                                        <summary class="fetch-card-header">
+                                            <span class="fetch-card-icon">W</span>
+                                            <span class="fetch-card-title">{fc.title || fc.url}</span>
+                                            <span class="fetch-card-meta">{formatChars(fc.contentLength)}</span>
+                                        </summary>
+                                        <pre class="fetch-card-body">{fc.content}</pre>
+                                    </details>
+                                {/each}
+                            {/if}
                             <div class="output-card" style="animation-delay: {idx * 30}ms">
                                 <div class="output-bar">
                                     <span class="ext-badge" style="--ec: {extColor('html')}">HTML</span>
@@ -388,6 +400,18 @@
                             <div class="route-row">
                                 <span class="route-tag" style="--rc: var(--brain)">Computer</span>
                             </div>
+                            {#if turn.fetchedContent?.length}
+                                {#each turn.fetchedContent as fc}
+                                    <details class="fetch-card">
+                                        <summary class="fetch-card-header">
+                                            <span class="fetch-card-icon">W</span>
+                                            <span class="fetch-card-title">{fc.title || fc.url}</span>
+                                            <span class="fetch-card-meta">{formatChars(fc.contentLength)}</span>
+                                        </summary>
+                                        <pre class="fetch-card-body">{fc.content}</pre>
+                                    </details>
+                                {/each}
+                            {/if}
                             <div class="computer-result-card" style="animation-delay: {idx * 30}ms">
                                 <div class="computer-result-header">
                                     <div class="computer-result-icon">
@@ -435,6 +459,18 @@
                         </div>
                     {:else}
                         <div class="bubble-row">
+                            {#if turn.fetchedContent?.length}
+                                {#each turn.fetchedContent as fc}
+                                    <details class="fetch-card">
+                                        <summary class="fetch-card-header">
+                                            <span class="fetch-card-icon">W</span>
+                                            <span class="fetch-card-title">{fc.title || fc.url}</span>
+                                            <span class="fetch-card-meta">{formatChars(fc.contentLength)}</span>
+                                        </summary>
+                                        <pre class="fetch-card-body">{fc.content}</pre>
+                                    </details>
+                                {/each}
+                            {/if}
                             <div class="ai-bubble" style="animation-delay: {idx * 30}ms">
                                 {@html render(turn.content)}
                             </div>
@@ -571,6 +607,39 @@
                         <span class="step-dot pulse"></span>
                         <span class="step-text">Assembling page...</span>
                     </div>
+                {/if}
+
+                {#if $chat.fetchingUrls.length > 0}
+                    <div class="fetch-status">
+                        {#each $chat.fetchingUrls as fu}
+                            <div class="fetch-row" class:done={fu.status === 'done'} class:failed={fu.status === 'failed'}>
+                                <span class="fetch-dot" class:pulse={fu.status === 'fetching'}></span>
+                                <span class="fetch-label">
+                                    {fu.status === 'fetching' ? 'Fetching' : fu.status === 'done' ? 'Fetched' : 'Failed'}
+                                </span>
+                                <span class="fetch-url">{fu.url.length > 60 ? fu.url.slice(0, 57) + '...' : fu.url}</span>
+                                {#if fu.status === 'failed' && fu.error}
+                                    <span class="fetch-error">— {fu.error}</span>
+                                {/if}
+                            </div>
+                        {/each}
+                    </div>
+                {/if}
+
+                {#if $chat.fetchedContent.length > 0}
+                    {#each $chat.fetchedContent as fc}
+                        <details class="fetch-card">
+                            <summary class="fetch-card-header">
+                                <span class="fetch-card-icon">W</span>
+                                <span class="fetch-card-title">{fc.title || fc.url}</span>
+                                <span class="fetch-card-meta">{formatChars(fc.contentLength)}</span>
+                                {#if fc.truncated}
+                                    <span class="fetch-card-trunc">truncated</span>
+                                {/if}
+                            </summary>
+                            <pre class="fetch-card-body">{fc.content}</pre>
+                        </details>
+                    {/each}
                 {/if}
 
                 <!-- ==================== GENERATION ==================== -->
@@ -831,17 +900,21 @@
                 {/if}
 
                 {#if traceOpen === 'thinking' && hasThinking}
+                    {@const hasBothDistinct = !!$chat.draftThinking && !!$chat.thinking && $chat.draftThinking !== $chat.thinking}
                     <div class="trace-card" style="--tbc: var(--brain)">
-                        {#if $chat.draftThinking}
+                        {#if hasBothDistinct}
                             <div class="trace-section">
                                 <span class="trace-label">Draft reasoning</span>
                                 <pre class="trace-pre">{$chat.draftThinking}</pre>
                             </div>
-                        {/if}
-                        {#if $chat.thinking}
                             <div class="trace-section">
                                 <span class="trace-label">Final reasoning</span>
                                 <pre class="trace-pre">{$chat.thinking}</pre>
+                            </div>
+                        {:else}
+                            <div class="trace-section">
+                                <span class="trace-label">Thinking</span>
+                                <pre class="trace-pre">{$chat.thinking || $chat.draftThinking}</pre>
                             </div>
                         {/if}
                     </div>
@@ -2143,4 +2216,23 @@
         z-index: 1000;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
+
+    .fetch-status { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+    .fetch-row { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; color: var(--text-2); }
+    .fetch-row.done { color: var(--text-2); }
+    .fetch-row.failed { color: var(--warning); }
+    .fetch-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+    .fetch-dot.pulse { animation: pulse 1s infinite; }
+    .fetch-url { opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
+    .fetch-error { opacity: 0.8; font-style: italic; }
+    .fetch-label { font-weight: 500; min-width: 52px; }
+
+    .fetch-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; margin: 4px 0; overflow: hidden; }
+    .fetch-card-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: 0.8rem; color: var(--text-2); }
+    .fetch-card-header::-webkit-details-marker { display: none; }
+    .fetch-card-icon { font-weight: 700; font-size: 0.7rem; background: var(--accent); color: var(--bg); width: 18px; height: 18px; border-radius: 4px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .fetch-card-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fetch-card-meta { margin-left: auto; opacity: 0.6; flex-shrink: 0; }
+    .fetch-card-trunc { font-size: 0.7rem; opacity: 0.5; font-style: italic; }
+    .fetch-card-body { padding: 8px 12px; font-size: 0.75rem; color: var(--text-2); max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; border-top: 1px solid var(--border); margin: 0; }
 </style>
