@@ -813,15 +813,29 @@ class Orchestrator:
         emit("generating", editing=False)
         print("[design] Phase 1: Engine generating full page HTML")
 
-        # Build spec context for the Engine — a structured blueprint
-        spec_summary = _json.dumps(spec, indent=2)
+        # Build compact spec summary — strip required_elements and verbose
+        # fields to save context tokens for actual HTML generation
+        compact = {
+            "page_title": spec.get("page_title", ""),
+            "color_theme": spec.get("color_theme", {}),
+            "layout_order": spec.get("layout_order", []),
+            "components": [],
+        }
+        for comp in spec.get("components", []):
+            c = {"id": comp["id"], "type": comp.get("type", "custom")}
+            if comp.get("content"):
+                c["content"] = comp["content"]
+            if comp.get("style_hints"):
+                c["style_hints"] = comp["style_hints"]
+            compact["components"].append(c)
+
+        spec_summary = _json.dumps(compact, separators=(",", ":"))
         spec_guided_goal = (
             f"{goal_text}\n\n"
-            f"[PAGE SPECIFICATION — follow this blueprint exactly]\n"
-            f"{spec_summary}\n\n"
-            f"Generate the complete HTML page. Include ALL components from the "
-            f"layout_order in that exact sequence. Use the color_theme values as "
-            f"Tailwind classes. Use the content text from each component's spec verbatim."
+            f"[PAGE SPEC]\n{spec_summary}\n\n"
+            f"Generate a COMPLETE single-file HTML page with all sections. "
+            f"Use Tailwind CSS via CDN. Follow the layout_order. "
+            f"Use the color_theme and content from the spec."
         )
 
         result = await self.engine.generate(
