@@ -1,7 +1,6 @@
 executable: F:/AI_Workstation/ct/llama-b8292-bin-win-vulkan-x64/llama-server.exe
 models_dir: models
-active_preset: qwen4b-q6
-
+active_preset: qwen2b
 presets:
   qwen4b:
     name: Qwen 3.5 4B
@@ -32,7 +31,6 @@ presets:
       direct:
         temperature: 0.5
         presence_penalty: 0.6
-
   qwen4b-q6:
     name: Qwen 3.5 4B Q6 Distilled
     model: Qwen3.5-4B.Q6_Kdistiled.gguf
@@ -62,7 +60,6 @@ presets:
       direct:
         temperature: 0.5
         presence_penalty: 0.6
-
   nemotron-q8:
     name: Nemotron 4B Q8
     model: NVIDIA-Nemotron-3-Nano-4B-Q8_0.gguf
@@ -95,7 +92,6 @@ presets:
       direct:
         temperature: 0.6
         top_p: 0.95
-
   nemotron-q4:
     name: Nemotron 4B Q4
     model: NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf
@@ -128,7 +124,6 @@ presets:
       direct:
         temperature: 0.6
         top_p: 0.95
-
   qwen2b:
     name: Qwen 3.5 2B
     model: Qwen3.5-2B.Q4_K_M.gguf
@@ -142,7 +137,7 @@ presets:
     top_p: 0.9
     top_k: 40
     presence_penalty: 1.0
-    max_tokens: 4000
+    max_tokens: 100000
     vision_supported: false
     task_overrides:
       design:
@@ -153,7 +148,6 @@ presets:
         temperature: 0.25
       direct:
         temperature: 0.4
-
 journal:
   path: ct1/data/journals
   lessons_on_startup: 10

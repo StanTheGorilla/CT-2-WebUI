@@ -821,7 +821,7 @@ class Engine:
             return await self._call_stream(
                 messages,
                 on_token=on_token,
-                max_tokens=-1,
+                max_tokens=self.max_tokens,
                 presence_penalty=pp,
                 temperature=ovr_temp,
                 top_p=ovr_top_p,
@@ -832,7 +832,7 @@ class Engine:
 
         return await self._call(
             messages,
-            max_tokens=-1,
+            max_tokens=self.max_tokens,
             presence_penalty=pp,
             temperature=ovr_temp,
             top_p=ovr_top_p,
@@ -973,7 +973,7 @@ class Engine:
 
         result = await self._call(
             messages,
-            max_tokens=-1,
+            max_tokens=self.max_tokens,
             temperature=ovr.get("temperature", 0.35),
             top_p=ovr.get("top_p", 0.9),
             conversation=conversation,
