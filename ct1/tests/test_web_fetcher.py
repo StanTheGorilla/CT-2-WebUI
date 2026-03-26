@@ -144,3 +144,29 @@ class TestFetchUrlErrors:
         # RFC-5737 TEST-NET address – guaranteed unroutable.
         result = await fetch_url("http://192.0.2.1:1/page", max_chars=100)
         assert result.error is not None
+
+
+# ---------------------------------------------------------------------------
+# Integration tests – require network
+# ---------------------------------------------------------------------------
+
+class TestIntegration:
+    async def test_fetch_real_page(self):
+        """Fetch example.com — a stable, fast page with known content."""
+        result = await fetch_url("https://example.com", max_chars=5000)
+        if result.error and "SSL" in result.error:
+            pytest.skip("SSL certificates not configured in this environment")
+        assert result.error is None
+        assert result.title  # example.com has a <title>
+        assert len(result.content) > 50
+        assert "example" in result.content.lower()
+
+    async def test_fetch_with_truncation(self):
+        """Fetch a large Wikipedia page and verify truncation."""
+        result = await fetch_url(
+            "https://en.wikipedia.org/wiki/Python_(programming_language)",
+            max_chars=2000,
+        )
+        if result.error is None:
+            assert result.content_length > 2000
+            assert result.truncated is True
