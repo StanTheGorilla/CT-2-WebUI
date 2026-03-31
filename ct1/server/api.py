@@ -36,9 +36,34 @@ _cache: ComponentCache | None = None
 _workspace: WorkspaceManager | None = None
 
 
+def _ensure_frontend_built() -> None:
+    """Run `npm run build` in ct1/web/ if the build output doesn't exist yet."""
+    import subprocess
+    web_dir = Path(__file__).parent.parent / "web"
+    build_dir = web_dir / "build"
+    index = build_dir / "index.html"
+    if index.exists():
+        return
+    print("[api] Frontend build not found — running npm run build...")
+    try:
+        result = subprocess.run(
+            ["npm", "run", "build"],
+            cwd=str(web_dir),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"[api] WARNING: npm build failed:\n{result.stderr[-1000:]}")
+        else:
+            print("[api] Frontend built successfully.")
+    except FileNotFoundError:
+        print("[api] WARNING: npm not found — install Node.js to build the frontend.")
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global _orch, _server_procs, _db, _cache, _workspace
+    _ensure_frontend_built()
     try:
         _server_procs = await start_server(str(_CONFIG_PATH))
     except Exception as e:

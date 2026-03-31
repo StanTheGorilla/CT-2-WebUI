@@ -52,6 +52,13 @@ def _find_llama_executable(project_root: Path, configured: str = "auto",
     if bin_path.exists():
         return str(bin_path)
 
+    # Fallback: if requested backend failed, try vulkan (always downloaded)
+    if backend != "vulkan":
+        vulkan_path = project_root / "bin" / "vulkan" / f"llama-server{ext}"
+        if vulkan_path.exists():
+            print(f"[launcher] {backend} not available, falling back to vulkan")
+            return str(vulkan_path)
+
     raise FileNotFoundError(
         "llama-server executable not found and auto-download failed.\n"
         f"  • Add llama-server{ext} to your PATH, or\n"

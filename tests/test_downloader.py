@@ -45,9 +45,29 @@ def test_find_asset_returns_none_when_not_found():
     assert _find_asset(assets, "bin-win-vulkan-x64") is None
 
 
-def test_find_asset_ignores_non_zip():
+def test_find_asset_accepts_tar_gz():
     from ct1.server.downloader import _find_asset
     assets = [
-        {"name": "llama-b9000-bin-win-vulkan-x64.tar.gz", "browser_download_url": "x"},
+        {"name": "llama-b9000-bin-ubuntu-vulkan-x64.tar.gz", "browser_download_url": "https://example.com/linux.tar.gz"},
+    ]
+    result = _find_asset(assets, "bin-ubuntu-vulkan-x64")
+    assert result is not None
+    assert result["name"] == "llama-b9000-bin-ubuntu-vulkan-x64.tar.gz"
+
+
+def test_find_asset_ignores_unknown_extensions():
+    from ct1.server.downloader import _find_asset
+    assets = [
+        {"name": "llama-b9000-bin-win-vulkan-x64.exe", "browser_download_url": "x"},
+        {"name": "llama-b9000-SHA256SUMS", "browser_download_url": "x"},
     ]
     assert _find_asset(assets, "bin-win-vulkan-x64") is None
+
+
+def test_get_platform_info_windows_cuda_pattern():
+    from ct1.server.downloader import _get_platform_info
+    if sys.platform != "win32":
+        pytest.skip("Windows only")
+    info = _get_platform_info()
+    # Must match cudart-llama-bin-win-cuda-12.4-x64 naming
+    assert "cudart-llama-bin-win-cuda-12.4-x64" == info["cuda"]

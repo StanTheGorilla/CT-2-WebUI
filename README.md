@@ -42,12 +42,12 @@ CT-2 wraps a single local GGUF model in a multi-phase pipeline: deterministic ro
 
 ```bash
 git clone https://github.com/StanTheGorilla/CT-2.git
-cd ct2
+cd CT-2
 
 # Python backend
 pip install -r ct1/requirements.txt
 
-# Web frontend
+# Web frontend (install dependencies — the build runs automatically on first start)
 cd ct1/web && npm install && cd ../..
 ```
 
@@ -69,14 +69,12 @@ huggingface-cli download Qwen/Qwen3.5-4B-GGUF --local-dir models/
 ### 4. Run
 
 ```bash
-# Terminal 1 — backend
 python -m ct1.server.api
-
-# Terminal 2 — web UI
-cd ct1/web && npm run dev
 ```
 
-Open **http://localhost:5173** — go to **Settings** and select your model.
+Open **http://localhost:8000** — go to **Settings** and select your model.
+
+> On first start: the frontend is built automatically, and llama-server is downloaded (Vulkan + CUDA). This takes a minute — subsequent starts are instant.
 
 ---
 

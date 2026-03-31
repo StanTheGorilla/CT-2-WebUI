@@ -10,32 +10,45 @@ from pathlib import Path
 
 
 def _get_platform_info() -> dict:
-    """Return platform-specific asset name fragments and executable name."""
+    """Return platform-specific asset name fragments and executable name.
+
+    Asset naming in ggml-org/llama.cpp releases:
+      Windows Vulkan : llama-b{N}-bin-win-vulkan-x64.zip
+      Windows CUDA12 : cudart-llama-bin-win-cuda-12.4-x64.zip
+      Linux Vulkan   : llama-b{N}-bin-ubuntu-vulkan-x64.tar.gz
+      Linux CUDA12   : llama-b{N}-bin-ubuntu-x64-cuda-cu12.4.tar.gz
+      macOS arm64    : llama-b{N}-bin-macos-arm64.tar.gz
+    """
     if sys.platform == "win32":
         return {
             "vulkan": "bin-win-vulkan-x64",
-            "cuda":   "bin-win-cuda-cu12.4-x64",
+            "cuda":   "cudart-llama-bin-win-cuda-12.4-x64",
             "exe":    "llama-server.exe",
         }
     elif sys.platform == "darwin":
+        import platform
+        arch = "arm64" if platform.machine() == "arm64" else "x64"
         return {
-            "vulkan": "bin-macos-arm64",
-            "cuda":   None,
+            "vulkan": f"bin-macos-{arch}",
+            "cuda":   None,            # Metal is built into the macOS binary
             "exe":    "llama-server",
         }
     else:  # Linux
         return {
-            "vulkan": "bin-ubuntu-x64",
+            "vulkan": "bin-ubuntu-vulkan-x64",
             "cuda":   "bin-ubuntu-x64-cuda-cu12.4",
             "exe":    "llama-server",
         }
 
 
 def _find_asset(assets: list, pattern: str) -> dict | None:
-    """Return the first release asset whose name contains pattern and ends with .zip."""
+    """Return the first release asset whose name contains pattern.
+
+    Accepts both .zip and .tar.gz archives.
+    """
     for asset in assets:
         name = asset.get("name", "")
-        if pattern in name and name.endswith(".zip"):
+        if pattern in name and (name.endswith(".zip") or name.endswith(".tar.gz")):
             return asset
     return None
 
@@ -74,6 +87,26 @@ def _extract_zip(zip_path: Path, dest_dir: Path) -> None:
     zip_path.unlink()
 
 
+def _extract_tar(tar_path: Path, dest_dir: Path) -> None:
+    """Extract .tar.gz into dest_dir, stripping the top-level directory."""
+    import tarfile
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(tar_path, "r:gz") as tf:
+        for member in tf.getmembers():
+            parts = Path(member.name).parts
+            if len(parts) <= 1:
+                continue  # skip top-level directory entry itself
+            target = dest_dir / Path(*parts[1:])
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tf.extractfile(member) as src, open(target, "wb") as dst:
+                    dst.write(src.read())
+    tar_path.unlink()
+
+
 def download_llama_server(project_root: Path) -> None:
     """Download both llama-server backends from the latest llama.cpp GitHub release.
 
@@ -89,7 +122,7 @@ def download_llama_server(project_root: Path) -> None:
 
     print("[download] Fetching latest llama.cpp release info from GitHub...")
     req = urllib.request.Request(
-        "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest",
+        "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest",
         headers={"Accept": "application/vnd.github+json", "User-Agent": "ct2-downloader"},
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
@@ -119,12 +152,15 @@ def download_llama_server(project_root: Path) -> None:
             print(f"[download] WARNING: no {backend} asset found (pattern: '{pattern}')")
             continue
 
-        zip_path = bin_dir / asset["name"]
+        archive_path = bin_dir / asset["name"]
         bin_dir.mkdir(parents=True, exist_ok=True)
 
-        _download_file(asset["browser_download_url"], zip_path, f"llama-server ({backend})")
+        _download_file(asset["browser_download_url"], archive_path, f"llama-server ({backend})")
         print(f"[download] Extracting {backend}...")
-        _extract_zip(zip_path, dest_dir)
+        if asset["name"].endswith(".tar.gz"):
+            _extract_tar(archive_path, dest_dir)
+        else:
+            _extract_zip(archive_path, dest_dir)
 
         # Make executable on Unix
         if os.name != "nt" and exe.exists():
