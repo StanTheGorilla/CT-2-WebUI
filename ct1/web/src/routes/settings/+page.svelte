@@ -989,4 +989,5 @@
     }
     .backend-btn:disabled { cursor: wait; opacity: 0.3; }
     .switching-text { font-size: 0.8rem; opacity: 0.6; margin: 0.25rem 0 0; }
+    .error-text { font-size: 0.8rem; color: #e06c75; margin: 0.25rem 0 0; }
 </style>
