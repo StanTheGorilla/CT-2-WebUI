@@ -36,40 +36,53 @@ _cache: ComponentCache | None = None
 _workspace: WorkspaceManager | None = None
 
 
+def _find_npm() -> str | None:
+    """Locate the npm executable on any platform.
+
+    On Windows the official Node.js installer puts npm.cmd on PATH.
+    Some Windows package managers (scoop, chocolatey, nvm-windows) expose
+    a plain 'npm' shim instead.  On Linux/macOS it is always 'npm'.
+    shutil.which() handles PATH lookup and PATHEXT resolution on every OS.
+    """
+    import shutil
+    for candidate in ("npm", "npm.cmd"):
+        if shutil.which(candidate):
+            return candidate
+    return None
+
+
 def _ensure_frontend_built() -> None:
     """Run npm install (if needed) then npm run build on every startup."""
     import subprocess
-    import sys as _sys
-    # On Windows, npm is a .cmd script — subprocess needs the explicit extension
-    npm = "npm.cmd" if _sys.platform == "win32" else "npm"
+    npm = _find_npm()
+    if npm is None:
+        print("[api] WARNING: npm not found — install Node.js to build the frontend.")
+        return
     web_dir = Path(__file__).parent.parent / "web"
-    try:
-        # Install dependencies if node_modules is missing
-        if not (web_dir / "node_modules").exists():
-            print("[api] Installing frontend dependencies (npm install)...")
-            result = subprocess.run(
-                [npm, "install"],
-                cwd=str(web_dir),
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                print(f"[api] WARNING: npm install failed:\n{result.stderr[-1000:]}")
-                return
-
-        print("[api] Building frontend...")
+    # Install dependencies if node_modules is missing
+    if not (web_dir / "node_modules").exists():
+        print("[api] Installing frontend dependencies (npm install)...")
         result = subprocess.run(
-            [npm, "run", "build"],
+            [npm, "install"],
             cwd=str(web_dir),
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            print(f"[api] WARNING: npm build failed:\n{result.stderr[-1000:]}")
-        else:
-            print("[api] Frontend ready.")
-    except FileNotFoundError:
-        print("[api] WARNING: npm not found — install Node.js to build the frontend.")
+            print(f"[api] WARNING: npm install failed:\n{result.stderr[-1000:]}")
+            return
+
+    print("[api] Building frontend...")
+    result = subprocess.run(
+        [npm, "run", "build"],
+        cwd=str(web_dir),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"[api] WARNING: npm build failed:\n{result.stderr[-1000:]}")
+    else:
+        print("[api] Frontend ready.")
 
 
 @asynccontextmanager
