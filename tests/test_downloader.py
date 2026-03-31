@@ -69,5 +69,7 @@ def test_get_platform_info_windows_cuda_pattern():
     if sys.platform != "win32":
         pytest.skip("Windows only")
     info = _get_platform_info()
-    # Must match cudart-llama-bin-win-cuda-12.4-x64 naming
-    assert "cudart-llama-bin-win-cuda-12.4-x64" == info["cuda"]
+    # Main CUDA binary (contains llama-server.exe)
+    assert "bin-win-cuda-cu12.4-x64" == info["cuda"]
+    # Separate cudart DLL package required alongside the binary
+    assert "cudart-llama-bin-win-cuda-12.4-x64" == info["cuda_runtime"]

@@ -21,9 +21,12 @@ def _get_platform_info() -> dict:
     """
     if sys.platform == "win32":
         return {
-            "vulkan": "bin-win-vulkan-x64",
-            "cuda":   "cudart-llama-bin-win-cuda-12.4-x64",
-            "exe":    "llama-server.exe",
+            "vulkan":       "bin-win-vulkan-x64",
+            # Main CUDA binary (contains llama-server.exe)
+            "cuda":         "bin-win-cuda-cu12.4-x64",
+            # Separate cudart DLL package — must be extracted to the same dir
+            "cuda_runtime": "cudart-llama-bin-win-cuda-12.4-x64",
+            "exe":          "llama-server.exe",
         }
     elif sys.platform == "darwin":
         import platform
@@ -161,6 +164,18 @@ def download_llama_server(project_root: Path) -> None:
             _extract_tar(archive_path, dest_dir)
         else:
             _extract_zip(archive_path, dest_dir)
+
+        # Windows CUDA also needs the cudart DLLs package in the same directory
+        cuda_runtime_pattern = platform.get("cuda_runtime")
+        if backend == "cuda" and cuda_runtime_pattern:
+            rt_asset = _find_asset(assets, cuda_runtime_pattern)
+            if rt_asset:
+                rt_archive = bin_dir / rt_asset["name"]
+                _download_file(rt_asset["browser_download_url"], rt_archive, "CUDA runtime DLLs")
+                print("[download] Extracting CUDA runtime DLLs...")
+                _extract_zip(rt_archive, dest_dir)
+            else:
+                print(f"[download] WARNING: CUDA runtime DLLs not found (pattern: '{cuda_runtime_pattern}')")
 
         # Make executable on Unix
         if os.name != "nt" and exe.exists():
