@@ -127,6 +127,12 @@ def detect_output_type(text: str) -> str:
     if "function " in lower and ("const " in lower or "let " in lower):
         return "javascript"
 
+    # Simple Python heuristics: scripts that start with print() or use
+    # the standard __main__ guard but have no leading import/def
+    if ("<html" not in lower and "<!doctype" not in lower
+            and ("print(" in lower or "if __name__" in lower)):
+        return "python_script"
+
     return "other"
 
 

@@ -1443,12 +1443,25 @@ class Orchestrator:
                 final_response, is_code=is_code, output_type=output_type
             )
 
+            # For ROUTE_CODE: detect actual language from formatted content and
+            # propagate to plan so the frontend shows the right file extension/badge.
+            if route == "ROUTE_CODE":
+                actual_type = detect_output_type(final_response)
+                if plan is None:
+                    plan = {"output_type": actual_type,
+                            "components": [], "complexity": "simple"}
+                elif plan.get("output_type") in ("other", None):
+                    plan["output_type"] = actual_type
+
         # Enforce file markers for computer mode
         final_response = enforce_file_markers(final_response, route)
 
         # ── Phase 6.5: AUTO-RETRY broken sections (max 2 attempts) ──
-        # Skip for computer mode — multi-file output doesn't use HTML section structure
-        if is_code and not is_edit and route != "ROUTE_COMPUTER":
+        # Only runs for HTML output — non-HTML code has no sections to retry.
+        # Skip for computer mode — multi-file output doesn't use HTML section structure.
+        _retry_output_type = plan.get("output_type", "other") if plan else "other"
+        if (is_code and not is_edit and route != "ROUTE_COMPUTER"
+                and _retry_output_type in ("html_page", "other")):
             for retry_num in range(2):
                 broken = detect_broken_sections(final_response)
                 if not broken:

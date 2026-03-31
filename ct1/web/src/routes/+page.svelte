@@ -251,9 +251,20 @@
         return map[ext] || '#9E9E96';
     }
 
+    function planTypeToExt(type: string | undefined | null): string {
+        switch (type) {
+            case 'html_page':     return 'html';
+            case 'python_script': return 'py';
+            case 'javascript':    return 'js';
+            case 'cpp':           return 'cpp';
+            case 'go':            return 'go';
+            case 'rust':          return 'rs';
+            default:              return 'txt';
+        }
+    }
+
     function outputExt(): string {
-        return $chat.plan?.output_type === 'python_script' ? 'py'
-            : $chat.plan?.output_type === 'javascript' ? 'js' : 'html';
+        return planTypeToExt($chat.plan?.output_type);
     }
 
     /** Parse [FILE: path] markers from computer mode response (with legacy fallback) */
@@ -345,19 +356,22 @@
                                     </details>
                                 {/each}
                             {/if}
+                            {@const hExt = planTypeToExt(turn.plan?.output_type)}
                             <div class="output-card" style="animation-delay: {idx * 30}ms">
                                 <div class="output-bar">
-                                    <span class="ext-badge" style="--ec: {extColor('html')}">HTML</span>
-                                    <span class="output-name">output.html</span>
+                                    <span class="ext-badge" style="--ec: {extColor(hExt)}">{hExt.toUpperCase()}</span>
+                                    <span class="output-name">output.{hExt}</span>
                                     <span class="output-meta">{formatChars(turn.content.length)}</span>
                                     <div class="output-actions">
+                                        {#if hExt === 'html'}
                                         <button class="act-btn" onclick={() => previewHistoryCode(turn.content)} title="Preview">
                                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h8A1.5 1.5 0 0113 3.5v8a1.5 1.5 0 01-1.5 1.5h-8A1.5 1.5 0 012 11.5v-8z" stroke="currentColor" stroke-width="1.1"/><path d="M6 6l3 1.5-3 1.5V6z" fill="currentColor" opacity="0.6"/></svg>
                                         </button>
+                                        {/if}
                                         <button class="act-btn" onclick={() => copyToClipboard(turn.content)} title="Copy code">
                                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
                                         </button>
-                                        <button class="act-btn" onclick={() => downloadBlob(turn.content)} title="Download">
+                                        <button class="act-btn" onclick={() => downloadBlob(turn.content, hExt)} title="Download">
                                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 2.5v7M5 7.5l2.5 2.5L10 7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11.5h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
                                         </button>
                                     </div>
@@ -837,7 +851,7 @@
                                 <button class="act-btn" onclick={() => codeExpanded = !codeExpanded} title="Source" class:active={codeExpanded}>
                                     <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M5.5 3.5L2.5 7.5l3 4M9.5 3.5l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                                 </button>
-                                {#if ext !== 'py'}
+                                {#if ext === 'html'}
                                     <button class="act-btn" onclick={previewCurrentCode} title={showPreview ? 'Hide preview' : 'Preview'} class:active={showPreview}>
                                         <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h8A1.5 1.5 0 0113 3.5v8a1.5 1.5 0 01-1.5 1.5h-8A1.5 1.5 0 012 11.5v-8z" stroke="currentColor" stroke-width="1.1"/><path d="M6 6l3 1.5-3 1.5V6z" fill="currentColor" opacity="0.6"/></svg>
                                     </button>
