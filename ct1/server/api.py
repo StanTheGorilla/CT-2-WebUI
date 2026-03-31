@@ -72,7 +72,6 @@ def _ensure_frontend_built() -> None:
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global _orch, _server_procs, _db, _cache, _workspace
-    _ensure_frontend_built()
     try:
         _server_procs = await start_server(str(_CONFIG_PATH))
     except Exception as e:
@@ -962,7 +961,14 @@ async def ws_terminal(websocket: WebSocket):
 
 # Serve SvelteKit build with SPA fallback
 _WEB_BUILD = Path(__file__).parent.parent / "web" / "build"
-if _WEB_BUILD.exists():
+
+
+def _mount_frontend_if_built() -> None:
+    """Mount the SvelteKit build as a SPA — safe to call multiple times."""
+    if not _WEB_BUILD.exists():
+        return
+    if any(getattr(r, "name", None) == "static" for r in app.routes):
+        return  # already mounted
     from starlette.responses import FileResponse
 
     class SPAStaticFiles(StaticFiles):
@@ -976,6 +982,12 @@ if _WEB_BUILD.exists():
     app.mount("/", SPAStaticFiles(directory=str(_WEB_BUILD), html=True), name="static")
 
 
+# Mount immediately if the build already exists (external uvicorn / dev reload)
+_mount_frontend_if_built()
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000)
+    _ensure_frontend_built()   # npm install + npm run build
+    _mount_frontend_if_built() # mount now that the build exists
+    uvicorn.run(app, host="0.0.0.0", port=8000)
