@@ -36,49 +36,41 @@ _cache: ComponentCache | None = None
 _workspace: WorkspaceManager | None = None
 
 
-def _find_npm() -> str | None:
-    """Locate the npm executable on any platform.
+def _npm_run(args: list, cwd: str) -> "subprocess.CompletedProcess":
+    """Run an npm command cross-platform.
 
-    On Windows the official Node.js installer puts npm.cmd on PATH.
-    Some Windows package managers (scoop, chocolatey, nvm-windows) expose
-    a plain 'npm' shim instead.  On Linux/macOS it is always 'npm'.
-    shutil.which() handles PATH lookup and PATHEXT resolution on every OS.
+    On Windows, .cmd scripts cannot be executed directly by CreateProcess —
+    they must be dispatched through cmd.exe via shell=True.
+    On Linux/macOS shell=False is fine; npm is a real executable.
     """
-    import shutil
-    for candidate in ("npm", "npm.cmd"):
-        if shutil.which(candidate):
-            return candidate
-    return None
+    import subprocess
+    import sys as _sys
+    return subprocess.run(
+        ["npm"] + args,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        shell=(_sys.platform == "win32"),
+    )
 
 
 def _ensure_frontend_built() -> None:
     """Run npm install (if needed) then npm run build on every startup."""
-    import subprocess
-    npm = _find_npm()
-    if npm is None:
+    import shutil
+    if not shutil.which("npm"):
         print("[api] WARNING: npm not found — install Node.js to build the frontend.")
         return
     web_dir = Path(__file__).parent.parent / "web"
     # Install dependencies if node_modules is missing
     if not (web_dir / "node_modules").exists():
         print("[api] Installing frontend dependencies (npm install)...")
-        result = subprocess.run(
-            [npm, "install"],
-            cwd=str(web_dir),
-            capture_output=True,
-            text=True,
-        )
+        result = _npm_run(["install"], str(web_dir))
         if result.returncode != 0:
             print(f"[api] WARNING: npm install failed:\n{result.stderr[-1000:]}")
             return
 
     print("[api] Building frontend...")
-    result = subprocess.run(
-        [npm, "run", "build"],
-        cwd=str(web_dir),
-        capture_output=True,
-        text=True,
-    )
+    result = _npm_run(["run", "build"], str(web_dir))
     if result.returncode != 0:
         print(f"[api] WARNING: npm build failed:\n{result.stderr[-1000:]}")
     else:
