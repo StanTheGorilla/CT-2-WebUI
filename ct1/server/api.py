@@ -37,14 +37,10 @@ _workspace: WorkspaceManager | None = None
 
 
 def _ensure_frontend_built() -> None:
-    """Run `npm run build` in ct1/web/ if the build output doesn't exist yet."""
+    """Run `npm run build` in ct1/web/ on every startup to keep the frontend current."""
     import subprocess
     web_dir = Path(__file__).parent.parent / "web"
-    build_dir = web_dir / "build"
-    index = build_dir / "index.html"
-    if index.exists():
-        return
-    print("[api] Frontend build not found — running npm run build...")
+    print("[api] Building frontend...")
     try:
         result = subprocess.run(
             ["npm", "run", "build"],
@@ -55,7 +51,7 @@ def _ensure_frontend_built() -> None:
         if result.returncode != 0:
             print(f"[api] WARNING: npm build failed:\n{result.stderr[-1000:]}")
         else:
-            print("[api] Frontend built successfully.")
+            print("[api] Frontend ready.")
     except FileNotFoundError:
         print("[api] WARNING: npm not found — install Node.js to build the frontend.")
 
