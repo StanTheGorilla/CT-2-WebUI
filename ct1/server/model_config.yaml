@@ -1,4 +1,5 @@
 executable: auto
+backend: vulkan
 models_dir: models
 active_model: null
 port: 8080

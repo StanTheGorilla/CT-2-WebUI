@@ -29,6 +29,7 @@ models/*.bin
 # ── llama-server binaries (download separately) ────────────────────
 llama-*-bin-*/
 llama-*-bin-*.zip
+bin/
 
 # ── llama.cpp logs ─────────────────────────────────────────────────
 *.log
