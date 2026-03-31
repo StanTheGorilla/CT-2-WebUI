@@ -1,4 +1,4 @@
-# CT-2 — Consciousness Testbed
+# CT-2 
 
 A local AI assistant powered by [llama.cpp](https://github.com/ggerganov/llama.cpp), with a modern web interface built in SvelteKit. Runs entirely on your machine — no API keys, no cloud, no telemetry.
 
