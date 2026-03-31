@@ -1,7 +1,6 @@
 import { Marked } from 'marked';
 import hljs from 'highlight.js';
 import katex from 'katex';
-import 'highlight.js/styles/github.css';
 import 'katex/dist/katex.min.css';
 
 const marked = new Marked({
