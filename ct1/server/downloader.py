@@ -14,17 +14,20 @@ def _get_platform_info() -> dict:
 
     Asset naming in ggml-org/llama.cpp releases:
       Windows Vulkan : llama-b{N}-bin-win-vulkan-x64.zip
-      Windows CUDA12 : cudart-llama-bin-win-cuda-12.4-x64.zip
+      Windows CUDA12 : llama-b{N}-bin-win-cuda-12.4-x64.zip  (main binary)
+                       cudart-llama-bin-win-cuda-12.4-x64.zip (DLLs, also needed)
       Linux Vulkan   : llama-b{N}-bin-ubuntu-vulkan-x64.tar.gz
-      Linux CUDA12   : llama-b{N}-bin-ubuntu-x64-cuda-cu12.4.tar.gz
       macOS arm64    : llama-b{N}-bin-macos-arm64.tar.gz
     """
     if sys.platform == "win32":
         return {
             "vulkan":       "bin-win-vulkan-x64",
-            # Main CUDA binary (contains llama-server.exe)
+            # Main CUDA binary (contains llama-server.exe).
+            # "cudart" must be excluded because cudart-llama-bin-win-cuda-12.4-x64.zip
+            # also contains the pattern but has only DLLs, no exe.
             "cuda":         "bin-win-cuda-12.4-x64",
-            # Separate cudart DLL package — must be extracted to the same dir
+            "cuda_exclude": "cudart",
+            # Separate cudart DLL package — extracted into the same bin/cuda/ dir
             "cuda_runtime": "cudart-llama-bin-win-cuda-12.4-x64",
             "exe":          "llama-server.exe",
         }
@@ -44,13 +47,16 @@ def _get_platform_info() -> dict:
         }
 
 
-def _find_asset(assets: list, pattern: str) -> dict | None:
+def _find_asset(assets: list, pattern: str, exclude: str = "") -> dict | None:
     """Return the first release asset whose name contains pattern.
 
     Accepts both .zip and .tar.gz archives.
+    If exclude is given, skip any asset whose name contains that string.
     """
     for asset in assets:
         name = asset.get("name", "")
+        if exclude and exclude in name:
+            continue
         if pattern in name and (name.endswith(".zip") or name.endswith(".tar.gz")):
             return asset
     return None
@@ -150,7 +156,9 @@ def download_llama_server(project_root: Path) -> None:
             print(f"[download] {backend}: already installed at {exe}, skipping")
             continue
 
-        asset = _find_asset(assets, pattern)
+        # Some patterns match multiple assets (e.g. cuda matches cudart too) — exclude those
+        exclude = platform.get(f"{backend}_exclude", "")
+        asset = _find_asset(assets, pattern, exclude=exclude)
         if asset is None:
             print(f"[download] WARNING: no {backend} asset found (pattern: '{pattern}')")
             continue

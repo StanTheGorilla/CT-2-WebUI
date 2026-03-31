@@ -73,3 +73,28 @@ def test_get_platform_info_windows_cuda_pattern():
     assert "bin-win-cuda-12.4-x64" == info["cuda"]
     # Separate cudart DLL package required alongside the binary
     assert "cudart-llama-bin-win-cuda-12.4-x64" == info["cuda_runtime"]
+    # Exclusion prevents matching cudart-llama-bin-win-cuda-12.4-x64.zip instead of the binary
+    assert info["cuda_exclude"] == "cudart"
+
+
+def test_find_asset_exclude_skips_matching_names():
+    from ct1.server.downloader import _find_asset
+    # Both assets match the pattern — exclude should skip the cudart one
+    assets = [
+        {"name": "cudart-llama-bin-win-cuda-12.4-x64.zip", "browser_download_url": "https://example.com/cudart.zip"},
+        {"name": "llama-b9000-bin-win-cuda-12.4-x64.zip",  "browser_download_url": "https://example.com/cuda.zip"},
+    ]
+    result = _find_asset(assets, "bin-win-cuda-12.4-x64", exclude="cudart")
+    assert result is not None
+    assert result["name"] == "llama-b9000-bin-win-cuda-12.4-x64.zip"
+
+
+def test_find_asset_exclude_none_returns_first_match():
+    from ct1.server.downloader import _find_asset
+    assets = [
+        {"name": "cudart-llama-bin-win-cuda-12.4-x64.zip", "browser_download_url": "x"},
+        {"name": "llama-b9000-bin-win-cuda-12.4-x64.zip",  "browser_download_url": "y"},
+    ]
+    # Without exclude, returns first match (the cudart one)
+    result = _find_asset(assets, "bin-win-cuda-12.4-x64")
+    assert result["name"] == "cudart-llama-bin-win-cuda-12.4-x64.zip"
