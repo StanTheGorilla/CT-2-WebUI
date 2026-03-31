@@ -23,7 +23,12 @@ from ct1.server.workspace import WorkspaceManager, is_command_safe
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "ct1" / "server" / "model_config.yaml"
 
 _raw_cfg: dict = load_raw_config(str(_CONFIG_PATH))
-_cfg: dict = resolve_config(_raw_cfg, str(_CONFIG_PATH))
+try:
+    _cfg: dict = resolve_config(_raw_cfg, str(_CONFIG_PATH))
+except Exception as _cfg_err:
+    print(f"[api] WARNING: Config not loaded: {_cfg_err}")
+    print("[api]    Open Settings in the web UI to assign a model file to your preset.")
+    _cfg = {}
 _orch: Orchestrator | None = None
 _server_procs: list = []
 _db: ConversationDB | None = None
@@ -34,11 +39,17 @@ _workspace: WorkspaceManager | None = None
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     global _orch, _server_procs, _db, _cache, _workspace
-    # Start llama-server processes, then create orchestrator
-    _server_procs = await start_server(str(_CONFIG_PATH))
+    try:
+        _server_procs = await start_server(str(_CONFIG_PATH))
+    except Exception as e:
+        print(f"[api] WARNING: Model server failed to start: {e}")
+        print("[api]    Open Settings in the web UI to assign a model file to your preset.")
     _cache = ComponentCache()
     await _cache.init()
-    _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
+    try:
+        _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
+    except Exception as e:
+        print(f"[api] WARNING: Orchestrator init failed: {e}")
     _db = ConversationDB()
     await _db.init()
     _workspace = WorkspaceManager()
@@ -65,14 +76,16 @@ app.add_middleware(
 
 @app.get("/api/status")
 async def get_status():
-    model_url = f"http://localhost:{_cfg['llama_server']['port']}"
+    port = _cfg.get("llama_server", {}).get("port", 8080)
+    model_url = f"http://localhost:{port}"
     model = await check_server_health(model_url)
     return {"model": model}
 
 
 @app.get("/api/journal")
 async def get_journal(limit: int = 50):
-    reader = JournalReader(_cfg["journal"]["path"])
+    journal_path = _cfg.get("journal", {}).get("path", "ct1/data/journals")
+    reader = JournalReader(journal_path)
     entries = reader.journal.read_recent(limit)
     stats = reader.get_stats()
     return {"entries": entries, "stats": stats}
@@ -118,91 +131,194 @@ async def get_config():
     }
 
 
-@app.get("/api/presets")
-async def get_presets():
-    """List available presets and the active one."""
+@app.get("/api/model")
+async def get_model_info():
+    """Return current active model info."""
     from ct1.core.gguf_reader import read_context_length
+    from ct1.server.launcher import _detect_thinking_support
 
-    # Resolve models_dir once
     models_dir_rel = _raw_cfg.get("models_dir", "models")
     project_root = _CONFIG_PATH.resolve().parent.parent.parent
     models_dir = project_root / models_dir_rel
 
-    presets = {}
-    for name, preset in _raw_cfg.get("presets", {}).items():
-        model_src = preset if "model" in preset else preset.get("director", {})
-        model_file = model_src.get("model", "")
-        gguf_ctx = read_context_length(models_dir / model_file) if model_file else None
-        yaml_ctx = model_src.get("context_size")
-        presets[name] = {
-            "id": name,
-            "name": preset.get("name", name),
-            "model": model_file,
-            "tier": preset.get("tier") or model_src.get("tier"),
-            "context_size": yaml_ctx or gguf_ctx or 0,
-            "gguf_context_length": gguf_ctx,
-        }
+    model_name = _raw_cfg.get("active_model") or ""
+    model_path = (models_dir / model_name) if model_name else None
+    model_found = bool(model_path and model_path.exists())
+    gguf_ctx = read_context_length(model_path) if model_path and model_found else None
+    yaml_ctx = _raw_cfg.get("context_size")
+    thinking = _detect_thinking_support(model_name) if model_name else False
+
     return {
-        "active": _raw_cfg.get("active_preset", ""),
-        "presets": presets,
+        "active_model": model_name,
+        "model_found": model_found,
+        "enable_thinking": thinking,
+        "context_size": yaml_ctx or gguf_ctx or 0,
+        "gguf_context_length": gguf_ctx,
     }
 
 
-class PresetSwitch(BaseModel):
-    preset: str
+# Legacy endpoint — frontend may still call this
+@app.get("/api/presets")
+async def get_presets():
+    """Return model info in a format compatible with legacy frontend."""
+    from ct1.core.gguf_reader import read_context_length
+    from ct1.server.launcher import _detect_thinking_support
+
+    models_dir_rel = _raw_cfg.get("models_dir", "models")
+    project_root = _CONFIG_PATH.resolve().parent.parent.parent
+    models_dir = project_root / models_dir_rel
+
+    model_name = _raw_cfg.get("active_model") or ""
+    model_path = (models_dir / model_name) if model_name else None
+    model_found = bool(model_path and model_path.exists())
+    gguf_ctx = read_context_length(model_path) if model_path and model_found else None
+    yaml_ctx = _raw_cfg.get("context_size")
+    thinking = _detect_thinking_support(model_name) if model_name else False
+
+    return {
+        "active_model": model_name,
+        "model_found": model_found,
+        "enable_thinking": thinking,
+        "context_size": yaml_ctx or gguf_ctx or 0,
+        "gguf_context_length": gguf_ctx,
+    }
+
+
+@app.get("/api/models")
+async def list_models():
+    """List .gguf files found in the configured models directory, with file sizes and capabilities."""
+    from ct1.server.launcher import _detect_thinking_support
+    from ct1.core.gguf_reader import read_context_length
+
+    models_dir_rel = _raw_cfg.get("models_dir", "models")
+    models_dir = _CONFIG_PATH.resolve().parent.parent.parent / models_dir_rel
+    if not models_dir.exists():
+        return {"models": [], "models_dir": str(models_dir)}
+    files = []
+    for p in sorted(models_dir.glob("*.gguf")):
+        try:
+            size_gb = round(p.stat().st_size / (1024 ** 3), 2)
+        except OSError:
+            size_gb = 0.0
+        gguf_ctx = read_context_length(p)
+        files.append({
+            "name": p.name,
+            "size_gb": size_gb,
+            "thinking": _detect_thinking_support(p.name),
+            "context_length": gguf_ctx,
+        })
+    return {"models": files, "models_dir": str(models_dir)}
+
+
+class ModelSelect(BaseModel):
+    model: str
     context_size: int | None = None
 
 
-@app.post("/api/preset")
-async def switch_preset(body: PresetSwitch):
-    """Switch to a different model preset. Restarts the llama-server process.
-
-    If context_size is provided, it overrides the preset's default (capped at GGUF max).
-    """
+@app.post("/api/model/select")
+async def select_model(body: ModelSelect):
+    """Select a model file and restart the server."""
     global _raw_cfg, _cfg, _orch, _server_procs
 
-    preset_name = body.preset
-    if preset_name not in _raw_cfg.get("presets", {}):
-        return {"error": f"Unknown preset: {preset_name}"}, 400
+    # Validate model exists
+    models_dir_rel = _raw_cfg.get("models_dir", "models")
+    models_dir = _CONFIG_PATH.resolve().parent.parent.parent / models_dir_rel
+    model_path = models_dir / body.model
+    if not model_path.exists():
+        return {"error": f"Model file not found: {body.model}"}
 
-    same_preset = preset_name == _raw_cfg.get("active_preset")
-    if same_preset and body.context_size is None:
-        return {"status": "already_active", "preset": preset_name}
-
-    # Update config file — persist preset and context_size override
-    _raw_cfg["active_preset"] = preset_name
+    # Update config
+    _raw_cfg["active_model"] = body.model
     if body.context_size is not None:
-        _raw_cfg["presets"][preset_name]["context_size"] = body.context_size
+        _raw_cfg["context_size"] = body.context_size
     _CONFIG_PATH.write_text(
         yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
     )
 
-    # Resolve new config with optional context_size override
-    _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
-                          context_size_override=body.context_size)
+    # Resolve config
+    try:
+        _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
+                              context_size_override=body.context_size)
+    except Exception as e:
+        return {"error": str(e)}
 
     # Teardown old orchestrator
     if _orch:
         await _orch.close()
 
-    # Kill and restart the llama-server process
-    kill_existing_llama_servers()
+    # Restart llama-server
+    if _server_procs:
+        stop_server(_server_procs)
+        _server_procs = []
     try:
         _server_procs = await start_server(str(_CONFIG_PATH),
                                            context_size_override=body.context_size)
     except Exception as e:
         return {"error": f"Failed to start server: {e}"}
 
-    # Create new orchestrator
+    # New orchestrator
     _orch = Orchestrator(str(_CONFIG_PATH),
                          context_size_override=body.context_size)
 
     return {
-        "status": "switched",
-        "preset": preset_name,
+        "status": "ok",
+        "model": body.model,
         "info": _cfg.get("_preset_info", {}),
     }
+
+
+class RestartBody(BaseModel):
+    context_size: int | None = None
+
+
+@app.post("/api/restart")
+async def restart_model(body: RestartBody):
+    """Restart the current model with an optional context_size override."""
+    global _raw_cfg, _cfg, _orch, _server_procs
+
+    if body.context_size is not None:
+        _raw_cfg["context_size"] = body.context_size
+        _CONFIG_PATH.write_text(
+            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+    try:
+        _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
+                              context_size_override=body.context_size)
+    except Exception as e:
+        return {"error": str(e)}
+
+    if _orch:
+        await _orch.close()
+
+    if _server_procs:
+        stop_server(_server_procs)
+        _server_procs = []
+    try:
+        _server_procs = await start_server(str(_CONFIG_PATH),
+                                           context_size_override=body.context_size)
+    except Exception as e:
+        return {"error": f"Failed to start server: {e}"}
+
+    _orch = Orchestrator(str(_CONFIG_PATH),
+                         context_size_override=body.context_size)
+
+    return {"status": "ok", "info": _cfg.get("_preset_info", {})}
+
+
+# Legacy endpoint — kept for backward compat
+class PresetSwitch(BaseModel):
+    preset: str = ""
+    context_size: int | None = None
+
+
+@app.post("/api/preset")
+async def switch_preset(body: PresetSwitch):
+    """Legacy: restart model with optional context_size override."""
+    restart = RestartBody(context_size=body.context_size)
+    return await restart_model(restart)
 
 
 @app.get("/api/conversations")
@@ -314,6 +430,13 @@ async def ws_think(websocket: WebSocket):
                 continue
 
             if msg.get("type") == "think":
+                if _orch is None:
+                    await websocket.send_json({
+                        "event": "error",
+                        "message": "No model loaded. Open Settings and assign a .gguf file to your preset, then restart the model."
+                    })
+                    continue
+
                 goal = msg.get("goal", "")
                 conversation = msg.get("conversation", [])
                 queue: asyncio.Queue = asyncio.Queue()
@@ -334,6 +457,7 @@ async def ws_think(websocket: WebSocket):
                 async def run_think():
                     mode_override = msg.get("mode_override")
                     skip_refinement = msg.get("skip_refinement", False)
+                    atlas_settings = msg.get("atlas")
                     actual_goal = goal
 
                     # ── URL content fetching ──
@@ -416,6 +540,7 @@ async def ws_think(websocket: WebSocket):
                         actual_goal, on_event=on_event, conversation=conversation,
                         mode_override=mode_override,
                         skip_refinement=skip_refinement,
+                        atlas_settings=atlas_settings,
                     )
                     # Computer mode: save files → run → inspect → fix loop
                     if result.get("route") == "ROUTE_COMPUTER" and _workspace:

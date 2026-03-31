@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { chat, sendThink, type Attachment } from '$lib/stores/chat';
+    import { chat, sendThink, setMode, type Attachment, type ModeOverride } from '$lib/stores/chat';
 
     let input = $state('');
     let textarea: HTMLTextAreaElement;
@@ -8,6 +8,18 @@
     let dragOver = $state(false);
 
     const disabled = $derived($chat.phase !== 'idle' && $chat.phase !== 'done');
+    const currentMode = $derived($chat.modeOverride);
+    const hasWorkspaceContext = $derived(
+        !!$chat.workspaceId && $chat.modeOverride !== 'computer'
+    );
+
+    const modes: { key: ModeOverride; label: string }[] = [
+        { key: 'auto', label: 'Auto' },
+        { key: 'design', label: 'Design' },
+        { key: 'code', label: 'Code' },
+        { key: 'chat', label: 'Chat' },
+        { key: 'computer', label: 'Computer' },
+    ];
 
     function submit() {
         const text = input.trim();
@@ -153,6 +165,43 @@
         </div>
     {/if}
 
+    <div class="mode-bar">
+        {#each modes as m}
+            <button
+                class="mode-pill"
+                class:active={currentMode === m.key}
+                onclick={() => setMode(m.key)}
+                {disabled}
+            >
+                <svg class="mode-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    {#if m.key === 'auto'}
+                        <path d="M8 2l1.5 3.5L13 7l-3.5 1.5L8 12l-1.5-3.5L3 7l3.5-1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                    {:else if m.key === 'design'}
+                        <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2"/>
+                        <circle cx="8" cy="8" r="2" fill="currentColor" opacity="0.4"/>
+                    {:else if m.key === 'code'}
+                        <path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                    {:else if m.key === 'chat'}
+                        <path d="M3 4.5A1.5 1.5 0 014.5 3h7A1.5 1.5 0 0113 4.5v5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5V11H4.5A1.5 1.5 0 013 9.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                    {:else if m.key === 'computer'}
+                        <rect x="2" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+                        <path d="M5.5 14h5M8 11v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                    {/if}
+                </svg>
+                {m.label}
+            </button>
+        {/each}
+    </div>
+
+    {#if hasWorkspaceContext}
+        <div class="workspace-ctx-badge">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                <path d="M2 5V3a1 1 0 011-1h4l2 2h4a1 1 0 011 1v7a1 1 0 01-1 1H3a1 1 0 01-1-1V5z" stroke="currentColor" stroke-width="1.2"/>
+            </svg>
+            Workspace files attached as context
+        </div>
+    {/if}
+
     <div class="island" class:drag-over={dragOver}>
         <input
             bind:this={fileInput}
@@ -216,13 +265,13 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        background: rgba(255, 255, 255, 0.88);
-        backdrop-filter: blur(24px);
-        -webkit-backdrop-filter: blur(24px);
-        border: 1px solid rgba(0, 0, 0, 0.06);
+        background: var(--bubble-strong);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
         border-radius: 12px;
         padding: 6px 10px 6px 6px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        box-shadow: var(--shadow-sm);
         animation: islandIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both;
     }
 
@@ -253,7 +302,7 @@
         width: 36px;
         height: 36px;
         border-radius: 8px;
-        background: rgba(0, 0, 0, 0.04);
+        background: var(--accent-subtle);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -271,7 +320,7 @@
         width: 20px;
         height: 20px;
         border: none;
-        background: rgba(0, 0, 0, 0.06);
+        background: var(--surface);
         border-radius: 50%;
         cursor: pointer;
         display: flex;
@@ -282,8 +331,77 @@
         transition: background 0.15s, color 0.15s;
     }
     .att-remove:hover {
-        background: rgba(0, 0, 0, 0.12);
+        background: var(--surface-hover);
         color: var(--text);
+    }
+
+    /* ---- Mode selector pills ---- */
+    .mode-bar {
+        display: flex;
+        gap: 2px;
+        max-width: 720px;
+        margin: 0 auto 10px;
+        justify-content: center;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border-light);
+        border-radius: var(--radius-pill);
+        padding: 3px;
+        width: fit-content;
+        box-shadow: var(--shadow-xs);
+    }
+    .mode-pill {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 14px;
+        border: none;
+        border-radius: var(--radius-pill);
+        background: transparent;
+        color: var(--text-muted);
+        font-family: var(--font-body);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all var(--transition);
+        user-select: none;
+        letter-spacing: 0.01em;
+    }
+    .mode-pill:hover:not(:disabled):not(.active) {
+        color: var(--text-secondary);
+        background: var(--accent-subtle);
+    }
+    .mode-pill.active {
+        background: var(--surface-solid);
+        color: var(--text);
+        box-shadow: var(--shadow-sm);
+    }
+    .mode-pill:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+    }
+    .mode-icon {
+        flex-shrink: 0;
+        opacity: 0.6;
+    }
+    .mode-pill.active .mode-icon {
+        opacity: 1;
+    }
+
+    /* ---- Workspace context badge ---- */
+    .workspace-ctx-badge {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        max-width: 720px;
+        margin: 0 auto 6px;
+        padding: 4px 12px;
+        font-family: var(--font-body);
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-muted);
+        opacity: 0.7;
     }
 
     /* ---- Input island ---- */
@@ -293,26 +411,17 @@
         gap: 8px;
         max-width: 720px;
         margin: 0 auto;
-        background: rgba(255, 255, 255, 0.92);
-        backdrop-filter: blur(48px) saturate(1.5);
-        -webkit-backdrop-filter: blur(48px) saturate(1.5);
-        border: 1px solid rgba(255, 255, 255, 0.9);
+        background: var(--bubble-strong);
+        backdrop-filter: var(--bubble-blur-heavy);
+        -webkit-backdrop-filter: var(--bubble-blur-heavy);
+        border: var(--bubble-border);
         border-radius: var(--radius-lg);
         padding: 10px 12px 10px 12px;
-        box-shadow:
-            0 0 0 1px rgba(0, 0, 0, 0.03),
-            0 2px 4px rgba(0, 0, 0, 0.03),
-            0 8px 40px rgba(0, 0, 0, 0.06),
-            inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        box-shadow: var(--bubble-glow);
         transition: box-shadow var(--transition-slow), border-color var(--transition);
     }
     .island:focus-within {
-        border-color: rgba(255, 255, 255, 1);
-        box-shadow:
-            0 0 0 1px rgba(0, 0, 0, 0.04),
-            0 4px 8px rgba(0, 0, 0, 0.04),
-            0 16px 56px rgba(0, 0, 0, 0.08),
-            inset 0 1px 0 rgba(255, 255, 255, 1);
+        box-shadow: var(--bubble-glow-strong);
     }
     .island.drag-over {
         border-color: var(--accent);
@@ -341,7 +450,7 @@
     }
     .attach-btn:hover:not(:disabled) {
         color: var(--text);
-        background: rgba(0, 0, 0, 0.05);
+        background: var(--accent-subtle);
     }
     .attach-btn:disabled {
         opacity: 0.3;
@@ -394,7 +503,7 @@
         border: none;
         border-radius: 50%;
         background: var(--text);
-        color: white;
+        color: var(--bg);
         cursor: pointer;
         display: flex;
         align-items: center;

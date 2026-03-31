@@ -27,6 +27,8 @@
 
 <style>
     .island {
+        flex: 1;
+        min-width: 0;
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
@@ -48,7 +50,7 @@
         font-family: var(--font-body);
         border: none;
     }
-    .bar:hover { background: rgba(0,0,0,0.02); }
+    .bar:hover { background: var(--accent-subtle); }
     .score-group { display: flex; align-items: center; gap: 10px; }
     .score-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
     .score-text {
@@ -73,7 +75,7 @@
     }
     .chevron.open { transform: rotate(90deg); }
     .detail {
-        border-top: 1px solid rgba(255, 255, 255, 0.35);
+        border-top: 1px solid var(--border);
         padding: 12px 18px 14px;
         font-size: 14px;
         color: var(--text-secondary);

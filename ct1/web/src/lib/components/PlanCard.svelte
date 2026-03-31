@@ -2,9 +2,11 @@
     import type { Plan } from '$lib/stores/chat';
     let { plan }: { plan: Plan } = $props();
 
+    let expanded = $state(false);
+
     const typeLabels: Record<string, string> = {
         html_page: 'HTML Page',
-        python_script: 'Python Script',
+        python_script: 'Python',
         javascript: 'JavaScript',
         api: 'API',
         other: 'Code',
@@ -17,26 +19,38 @@
 </script>
 
 <div class="plan-card">
-    <div class="plan-header">
+    <button class="plan-header" onclick={() => expanded = !expanded}>
         <div class="plan-meta">
             <span class="type-badge">{typeLabels[plan.output_type] ?? plan.output_type}</span>
             <span class="complexity-dot" style="background: {complexityColors[plan.complexity] ?? 'var(--text-muted)'}"></span>
             <span class="complexity-label">{plan.complexity}</span>
         </div>
-        <span class="plan-title">Build Plan</span>
-    </div>
+        <div class="plan-right">
+            <span class="plan-title">Build Plan</span>
+            <span class="toggle-icon">{expanded ? '\u25B4' : '\u25BE'}</span>
+        </div>
+    </button>
+    <div class="accent-bar"></div>
 
     {#if plan.components.length > 0}
-        <ol class="components">
+        <div class="components">
             {#each plan.components as c}
-                <li class="component">
+                <div class="component">
+                    <span class="c-num">{c.id}</span>
                     <span class="c-name">{c.name}</span>
                     {#if c.description}
                         <span class="c-desc">{c.description}</span>
                     {/if}
-                </li>
+                </div>
             {/each}
-        </ol>
+        </div>
+    {/if}
+
+    {#if expanded}
+        <div class="raw-section">
+            <span class="raw-label">Raw plan (sent to Director)</span>
+            <pre class="raw-json">{JSON.stringify(plan, null, 2)}</pre>
+        </div>
     {/if}
 </div>
 
@@ -46,18 +60,29 @@
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
-        border-left: 3px solid var(--text-muted);
-        border-radius: var(--radius);
+        border-radius: 14px;
         overflow: hidden;
         box-shadow: var(--bubble-glow);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        max-width: 520px;
     }
     .plan-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
         padding: 10px 16px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.4);
+        width: 100%;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-family: var(--font-body);
+        transition: background var(--transition);
+    }
+    .plan-header:hover { background: var(--accent-subtle); }
+    .accent-bar {
+        height: 1px;
+        background: linear-gradient(90deg, var(--border-subtle) 0%, var(--accent-subtle) 100%);
+        margin: 0;
     }
     .plan-meta {
         display: flex;
@@ -68,8 +93,8 @@
         font-size: 11px;
         font-weight: 600;
         color: var(--text-secondary);
-        background: rgba(0, 0, 0, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.5);
+        background: var(--accent-subtle);
+        border: 1px solid var(--border);
         border-radius: var(--radius-pill);
         padding: 2px 10px;
         text-transform: uppercase;
@@ -85,6 +110,11 @@
         color: var(--text-muted);
         text-transform: capitalize;
     }
+    .plan-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
     .plan-title {
         font-size: 11px;
         font-weight: 600;
@@ -92,28 +122,28 @@
         text-transform: uppercase;
         letter-spacing: 0.06em;
     }
+    .toggle-icon {
+        font-size: 10px;
+        color: var(--text-muted);
+    }
     .components {
-        list-style: none;
         padding: 10px 16px 12px;
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        counter-reset: step;
+        gap: 5px;
     }
     .component {
         display: flex;
         align-items: baseline;
         gap: 8px;
-        counter-increment: step;
         font-size: 13px;
     }
-    .component::before {
-        content: counter(step);
+    .c-num {
         font-size: 11px;
         font-weight: 600;
         color: var(--text-muted);
         font-family: var(--font-mono);
-        min-width: 16px;
+        min-width: 14px;
         text-align: right;
     }
     .c-name {
@@ -124,5 +154,33 @@
     .c-desc {
         color: var(--text-muted);
         font-size: 12px;
+    }
+    .raw-section {
+        border-top: 1px solid var(--border);
+        padding: 10px 16px 14px;
+    }
+    .raw-label {
+        display: block;
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 6px;
+    }
+    .raw-json {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        line-height: 1.5;
+        color: var(--text-secondary);
+        background: var(--accent-subtle);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        margin: 0;
+        max-height: 300px;
+        overflow-y: auto;
     }
 </style>

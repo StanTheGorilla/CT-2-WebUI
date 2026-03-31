@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 # Constants
 # ---------------------------------------------------------------------------
 
-USER_AGENT = "CT-2/1.0"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 TIMEOUT_S = 10
 MAX_URLS_PER_MESSAGE = 3
 
@@ -80,7 +80,7 @@ def extract_urls(text) -> list[str]:
     return unique[:MAX_URLS_PER_MESSAGE]
 
 
-async def fetch_url(url: str, max_chars: int = 24_000) -> FetchResult:
+async def fetch_url(url: str, max_chars: int = 240_000) -> FetchResult:
     """Fetch *url*, extract readable text, and return a FetchResult."""
 
     # 1. Validate scheme ------------------------------------------------

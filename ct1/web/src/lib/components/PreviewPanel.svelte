@@ -34,11 +34,27 @@
         setTimeout(() => { copied = false; }, 2000);
     }
 
+    // Debounce iframe updates during streaming (~2 updates/sec instead of per-token)
+    let debounceTimer: ReturnType<typeof setTimeout>;
+    let lastRendered = '';
+
+    function wrapPartialHtml(html: string): string {
+        const trimmed = html.trimStart().toLowerCase();
+        if (trimmed.startsWith('<!doctype') || trimmed.startsWith('<html')) return html;
+        return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><style>body{font-family:system-ui,sans-serif;padding:16px;color:#1a1a1a}</style></head><body>${html}</body></html>`;
+    }
+
     $effect(() => {
         if (iframe && code && activeTab === 'preview') {
-            // Inject script to prevent link navigation inside the preview
-            const navGuard = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a){e.preventDefault();}});<\/script>`;
-            iframe.srcdoc = navGuard + code;
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                if (code !== lastRendered) {
+                    const navGuard = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a){e.preventDefault();}});<\/script>`;
+                    const safeHtml = wrapPartialHtml(code);
+                    iframe.srcdoc = navGuard + safeHtml;
+                    lastRendered = code;
+                }
+            }, 500);
         }
     });
 </script>
@@ -110,12 +126,12 @@
         align-items: center;
         justify-content: space-between;
         padding: 0 16px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.5);
+        border-bottom: 1px solid var(--border);
         flex-shrink: 0;
     }
     .tab-group {
         display: flex;
-        background: rgba(0, 0, 0, 0.04);
+        background: var(--accent-subtle);
         border-radius: var(--radius-sm);
         padding: 2px;
     }
@@ -132,7 +148,7 @@
         transition: all var(--transition);
     }
     .tab.active {
-        background: rgba(255, 255, 255, 0.8);
+        background: var(--surface-hover);
         color: var(--text);
         box-shadow: var(--shadow-xs);
     }
@@ -142,9 +158,9 @@
         gap: 6px;
         height: 30px;
         padding: 0 12px 0 10px;
-        border: 1px solid rgba(0, 0, 0, 0.08);
+        border: 1px solid var(--border);
         border-radius: var(--radius-pill);
-        background: rgba(0, 0, 0, 0.04);
+        background: var(--accent-subtle);
         color: var(--text-secondary);
         font-family: var(--font-body);
         font-size: 12px;
@@ -153,9 +169,9 @@
         transition: all var(--transition);
     }
     .close:hover {
-        background: rgba(0, 0, 0, 0.08);
+        background: var(--surface);
         color: var(--text);
-        border-color: rgba(0, 0, 0, 0.12);
+        border-color: var(--border-strong);
     }
     .content { flex: 1; overflow: hidden; }
     .preview-frame {
@@ -178,15 +194,15 @@
         font-size: 12px;
         font-weight: 500;
         padding: 5px 16px;
-        border: 1px solid rgba(255, 255, 255, 0.6);
+        border: 1px solid var(--border);
         border-radius: var(--radius-pill);
-        background: rgba(255, 255, 255, 0.7);
+        background: var(--surface);
         color: var(--text-secondary);
         cursor: pointer;
         transition: all var(--transition);
     }
     .copy:hover {
-        background: rgba(255, 255, 255, 0.9);
+        background: var(--surface-hover);
         color: var(--text);
     }
     .copy.copied {

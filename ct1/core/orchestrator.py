@@ -18,13 +18,14 @@ from ct1.core.formatter import (
     strip_think_tags, extract_code,
     detect_broken_sections, detect_output_type,
     polish_html_css, check_completeness,
-    enforce_file_markers,
+    enforce_file_markers, fix_html_structure,
 )
 from ct1.memory.journal import Journal
 from ct1.memory.journal_reader import JournalReader
 from ct1.memory.session_store import SessionStore
 from ct1.core.assembler import assemble_page, patch_component as patch_component_in_page
 from ct1.templates.fallbacks import get_fallback
+from ct1.core.atlas import AtlasController
 
 _CONFIG_PATH = (Path(__file__).parent.parent.parent
                 / "ct1" / "server" / "model_config.yaml")
@@ -136,6 +137,7 @@ class Orchestrator:
             max_tokens=dc.get("max_tokens", 100000),
             thinking_budget=dc.get("thinking_budget", -1),
             vision_supported=dc.get("vision_supported", False),
+            context_size=cfg["llama_server"]["context_size"],
         )
 
         # Per-task parameter overrides (e.g. Nemotron optimized per route)
@@ -167,6 +169,7 @@ class Orchestrator:
         )
         last_session = self.session_store.read_latest()
         self.engine.last_session = last_session or ""
+        self.atlas = AtlasController(self)
 
     # ── Deterministic pre-routing (runs BEFORE AI routing) ──────────
 
@@ -735,6 +738,7 @@ class Orchestrator:
     async def _design_pipeline(
         self, goal, goal_text: str, conversation: list[dict],
         emit, on_token, task_ovr: dict,
+        skip_refinement: bool = False,
     ) -> dict:
         """Precision-Design pipeline for new ROUTE_DESIGN generation.
 
@@ -742,6 +746,7 @@ class Orchestrator:
         Phase 0.5: Script validates spec mechanically
         Phase 1:   Engine (4B) generates full HTML page guided by the spec
         Phase 2:   Mechanical validation + cleanup
+        Phase 3:   Self-refinement pass (AI rewrites for polish)
         """
         import json as _json
 
@@ -856,12 +861,52 @@ class Orchestrator:
 
         emit("draft", text=draft, thinking=draft_thinking)
 
+        final_response = draft
+        final_thinking = draft_thinking
+
+        # ── Phase 3: Self-refinement (AI rewrites for polish) ──────
+        if not skip_refinement:
+            try:
+                draft_lower = draft.strip().lower()
+                if (draft and len(draft) > 100
+                        and (draft_lower.startswith("<!doctype")
+                             or draft_lower.startswith("<html"))):
+                    emit("refining")
+
+                    # Refinement is a simpler task — cap thinking budget
+                    refine_ovr = {**task_ovr}
+                    if "thinking_budget" in refine_ovr:
+                        refine_ovr["thinking_budget"] = min(
+                            refine_ovr["thinking_budget"], 2048
+                        )
+
+                    refine_result = await self.engine.refine_design(
+                        draft, on_token=None,
+                        task_overrides=refine_ovr,
+                    )
+                    refined = refine_result["text"]
+                    refined = strip_think_tags(refined)
+                    refined = extract_code(refined)
+                    refined_stripped = refined.strip().lower()
+                    if (refined_stripped.startswith("<!doctype") or
+                            refined_stripped.startswith("<html")):
+                        final_response = refined
+                        final_thinking = refine_result.get("thinking", "")
+                        emit("polished", code=final_response)
+                        print("[design] Phase 3: refinement applied")
+                    else:
+                        print("[design] Phase 3: refinement output not valid HTML, keeping original")
+                else:
+                    print("[design] Phase 3: skipping — draft not valid HTML")
+            except Exception as e:
+                print(f"[design] Phase 3: refinement failed, keeping original: {e}")
+
         # Persist spec for edit mode
         spec_json = _json.dumps(spec)
 
         return {
-            "response": draft,
-            "thinking": draft_thinking,
+            "response": final_response,
+            "thinking": final_thinking,
             "draft": draft,
             "draft_thinking": draft_thinking,
             "route": "ROUTE_DESIGN",
@@ -1117,6 +1162,7 @@ class Orchestrator:
                 result = await self._design_pipeline(
                     goal, goal_text, conversation,
                     emit, on_token, task_ovr,
+                    skip_refinement=skip_refinement,
                 )
                 # Run reflection
                 if result.get("reflection") is None:
@@ -1251,54 +1297,7 @@ class Orchestrator:
                 else:
                     print(f"[orch] checklist: all {len(checklist)} items present")
 
-        # ── Phase 4.25: REFINE (design mode, targeted or skipped) ───
-        if (route == "ROUTE_DESIGN" and not is_edit and mode != "question"
-                and not skip_refinement):
-            # Skip refinement if checklist passed completely
-            if checklist and not missing_items:
-                print("[orch] all checklist items present — skipping refinement")
-            else:
-                try:
-                    clean_draft = strip_think_tags(draft)
-                    clean_draft = extract_code(clean_draft)
-                    draft_lower = clean_draft.strip().lower()
-                    if (clean_draft and len(clean_draft) > 100
-                            and (draft_lower.startswith("<!doctype")
-                                 or draft_lower.startswith("<html"))):
-                        emit("refining")
-
-                        # Refinement is a simpler task — cap thinking budget
-                        refine_ovr = {**task_ovr}
-                        if "thinking_budget" in refine_ovr:
-                            refine_ovr["thinking_budget"] = min(
-                                refine_ovr["thinking_budget"], 2048
-                            )
-
-                        refine_result = await self.engine.refine_design(
-                            clean_draft, on_token=None,
-                            task_overrides=refine_ovr,
-                            missing_items=missing_items if missing_items else None,
-                        )
-                        refined = refine_result["text"]
-                        refined = strip_think_tags(refined)
-                        refined = extract_code(refined)
-                        refined_stripped = refined.strip().lower()
-                        if (refined_stripped.startswith("<!doctype") or
-                                refined_stripped.startswith("<html")):
-                            final_response = refined
-                            final_thinking = refine_result.get("thinking", "")
-                            emit("polished", code=final_response)
-
-                            # Re-check after refinement
-                            if missing_items and specialist_data:
-                                checklist = check_completeness(refined, specialist_data)
-                                emit("checklist", items=checklist)
-                        else:
-                            print("[orch] refinement output not valid HTML, keeping original")
-                    else:
-                        print(f"[orch] skipping refinement — draft not valid HTML")
-                except Exception as e:
-                    print(f"[orch] refinement failed, keeping original: {e}")
+        # (Phase 4.25 refinement for ROUTE_DESIGN now runs inside _design_pipeline)
 
         # ── Phase 4.5: POLISH (deterministic CSS, no AI) ─────────────
         # Skip for ROUTE_DESIGN — the self-refinement pass already handles polish
@@ -1315,6 +1314,11 @@ class Orchestrator:
         if is_code and not is_edit and route == "ROUTE_COMPUTER":
             # Computer mode: validate each parsed file individually
             parsed_files = self._parse_multi_file(draft)
+            # Fix HTML boilerplate deterministically before validation
+            for f in parsed_files:
+                ext = f["path"].rsplit('.', 1)[-1].lower() if '.' in f["path"] else ''
+                if ext in ('html', 'htm'):
+                    f["content"] = fix_html_structure(f["content"])
             file_issues = []
             for f in parsed_files:
                 file_issues.extend(validate_file(f["path"], f["content"]))
@@ -1355,24 +1359,22 @@ class Orchestrator:
                 if detected != "other":
                     output_type = detected
 
-            # Programmatic validation (real syntax check, no AI)
-            issues = validate_output(draft, output_type)
+            # HTML: fix missing boilerplate deterministically (no AI)
+            if output_type in ("html_page", "other") and detect_output_type(final_response) == "html_page":
+                final_response = fix_html_structure(final_response)
 
-            review_result = {"pass": True, "critical_issues": [], "fix_instructions": ""}
+            # Programmatic validation — only flags critical issues now
+            issues = validate_output(final_response, output_type)
 
-            all_issues = list(issues)
-            if not review_result["pass"]:
-                all_issues.extend(review_result.get("critical_issues", []))
-
-            if all_issues:
-                emit("validating", issues=all_issues, review=review_result)
+            if issues:
+                emit("validating", issues=issues,
+                     review={"pass": False, "critical_issues": issues,
+                             "fix_instructions": ""})
                 emit("fixing")
 
                 fix_prompt = (
                     f"Fix ALL these issues in the code:\n"
-                    + "\n".join(f"- {i}" for i in all_issues)
-                    + (f"\n\n{review_result['fix_instructions']}"
-                       if review_result.get("fix_instructions") else "")
+                    + "\n".join(f"- {i}" for i in issues)
                     + f"\n\nOriginal code:\n{draft}"
                 )
 
@@ -1393,7 +1395,9 @@ class Orchestrator:
                 final_response = fix_result["text"]
                 final_thinking = fix_result.get("thinking", "")
             else:
-                emit("validated", issues=[], review=review_result)
+                emit("validated", issues=[],
+                     review={"pass": True, "critical_issues": [],
+                             "fix_instructions": ""})
         elif is_edit:
             emit("validated", issues=[], review={"pass": True,
                  "critical_issues": [], "fix_instructions": ""})
@@ -1519,7 +1523,16 @@ class Orchestrator:
     async def think(self, goal, on_event=None,
                     conversation: list[dict] = None,
                     mode_override: str | None = None,
-                    skip_refinement: bool = False) -> dict:
+                    skip_refinement: bool = False,
+                    atlas_settings: dict | None = None) -> dict:
+        if atlas_settings and atlas_settings.get("atlasMode"):
+            return await self.atlas.run(
+                goal, conversation=conversation or [],
+                atlas_settings=atlas_settings,
+                on_event=on_event,
+                mode_override=mode_override,
+                skip_refinement=skip_refinement,
+            )
         return await self._pipeline(
             goal, on_event=on_event, conversation=conversation or [],
             mode_override=mode_override,

@@ -3,145 +3,234 @@
     let { data }: { data: SpecialistData } = $props();
 
     let collapsed = $state(false);
+
+    let route = $derived(data._route || '');
+
+    let icon = $derived(
+        route === 'ROUTE_DESIGN' ? '\u2B22' :
+        route === 'ROUTE_CODE' ? '\u276F' :
+        route === 'ROUTE_COMPUTER' ? '\u25A3' :
+        '\u2139'
+    );
+
+    let title = $derived(
+        route === 'ROUTE_DESIGN' ? 'Design Brief' :
+        route === 'ROUTE_CODE' ? 'Code Brief' :
+        route === 'ROUTE_COMPUTER' ? 'Project Brief' :
+        route === 'ROUTE_DIRECT' ? 'Context' :
+        'Brief'
+    );
+
+    /** Key-value pairs */
+    let entries = $derived.by(() => {
+        const items: { label: string; value: string }[] = [];
+        if (route === 'ROUTE_DESIGN') {
+            if (data.project_type) items.push({ label: 'Project', value: data.project_type });
+            if (data.audience) items.push({ label: 'Audience', value: data.audience });
+            if (data.mood?.length) items.push({ label: 'Mood', value: data.mood.join(', ') });
+            if (data.theme) items.push({ label: 'Theme', value: data.theme });
+            if (data.color_hints?.length) {
+                const hints = data.color_hints.filter(Boolean);
+                if (hints.length) items.push({ label: 'Colors', value: hints.join(', ') });
+            }
+            if (data.special?.length) {
+                const sp = data.special.filter(Boolean);
+                if (sp.length) items.push({ label: 'Special', value: sp.join(', ') });
+            }
+        } else if (route === 'ROUTE_CODE') {
+            if (data.language) items.push({ label: 'Language', value: data.language });
+            if (data.type) items.push({ label: 'Type', value: data.type });
+            if (data.output_format) items.push({ label: 'Output', value: data.output_format });
+        } else if (route === 'ROUTE_COMPUTER') {
+            if (data.language) items.push({ label: 'Language', value: data.language });
+            if (data.framework && data.framework !== 'none') items.push({ label: 'Framework', value: data.framework });
+            if (data.run_command) items.push({ label: 'Run', value: data.run_command });
+        } else if (route === 'ROUTE_DIRECT') {
+            if (data.topic) items.push({ label: 'Topic', value: data.topic });
+            if (data.answer_type) items.push({ label: 'Type', value: data.answer_type });
+            if (data.depth) items.push({ label: 'Depth', value: data.depth });
+        }
+        return items;
+    });
+
+    /** List items */
+    let lists = $derived.by(() => {
+        const result: { label: string; items: string[] }[] = [];
+        if (data.sections?.length) result.push({ label: 'Sections', items: data.sections });
+        if (data.requirements?.length) result.push({ label: 'Requirements', items: data.requirements });
+        if (data.files?.length) result.push({ label: 'Files', items: data.files });
+        if (data.key_points?.length) result.push({ label: 'Key points', items: data.key_points });
+        if (data.edge_cases?.length) result.push({ label: 'Edge cases', items: data.edge_cases });
+        return result;
+    });
+
+    let hasContent = $derived(entries.length > 0 || lists.length > 0);
 </script>
 
-<div class="card">
+{#if hasContent}
+<div class="card" class:design={route === 'ROUTE_DESIGN'} class:code={route === 'ROUTE_CODE'} class:computer={route === 'ROUTE_COMPUTER'}>
     <button class="card-header" onclick={() => collapsed = !collapsed}>
-        <div class="accent-line"></div>
-        <span class="card-title">Specialist Brief</span>
-        <span class="toggle">{collapsed ? '+' : '\u2212'}</span>
+        <span class="card-icon">{icon}</span>
+        <span class="card-title">{title}</span>
+        <span class="toggle">{collapsed ? '\u25BE' : '\u25B4'}</span>
     </button>
     {#if !collapsed}
         <div class="card-body">
-            {#if data.palette}
-                <div class="section">
-                    <span class="section-label">Palette</span>
-                    <div class="swatches">
-                        {#each Object.entries(data.palette) as [name, hex]}
-                            <div class="swatch">
-                                <div class="color-chip" style="background: {hex}"></div>
-                                <span class="color-name">{name}</span>
-                                <span class="color-hex">{hex}</span>
-                            </div>
-                        {/each}
-                    </div>
+            {#if entries.length > 0}
+                <div class="entries">
+                    {#each entries as { label, value }}
+                        <div class="entry">
+                            <span class="entry-label">{label}</span>
+                            <span class="entry-value">{value}</span>
+                        </div>
+                    {/each}
                 </div>
             {/if}
 
-            {#if data.typography}
-                <div class="section">
-                    <span class="section-label">Typography</span>
-                    <div class="typo-grid">
-                        {#each Object.entries(data.typography) as [key, val]}
-                            <div class="typo-row">
-                                <span class="typo-key">{key.replace(/_/g, ' ')}</span>
-                                <span class="typo-val">{val}</span>
-                            </div>
+            {#each lists as list}
+                <div class="list-section">
+                    <span class="list-label">{list.label}</span>
+                    <div class="list-items">
+                        {#each list.items as item, i}
+                            <span class="list-pill">
+                                <span class="pill-num">{i + 1}</span>
+                                {item}
+                            </span>
                         {/each}
                     </div>
                 </div>
-            {/if}
-
-            {#if data.sections && data.sections.length > 0}
-                <div class="section">
-                    <span class="section-label">Sections</span>
-                    <div class="pill-row">
-                        {#each data.sections as sec, i}
-                            <span class="pill">{i + 1}. {sec}</span>
-                        {/each}
-                    </div>
-                </div>
-            {/if}
-
-            {#if data.rationale}
-                <div class="section">
-                    <span class="section-label">Rationale</span>
-                    <p class="rationale">{data.rationale}</p>
-                </div>
-            {/if}
+            {/each}
         </div>
     {/if}
 </div>
+{/if}
 
 <style>
     .card {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border-radius: var(--radius);
-        border: var(--bubble-border);
-        box-shadow: var(--bubble-glow);
+        --card-accent: var(--specialist);
+        background: var(--surface-solid);
+        border: 1px solid var(--border);
+        border-left: 2px solid var(--card-accent);
+        border-radius: 14px;
         overflow: hidden;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        max-width: 480px;
     }
+    .card.design { --card-accent: var(--specialist); }
+    .card.code { --card-accent: var(--brain); }
+    .card.computer { --card-accent: var(--success); }
+
     .card-header {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 8px;
         width: 100%;
         background: none;
         border: none;
         cursor: pointer;
-        padding: 12px 18px;
+        padding: 9px 14px;
         transition: background var(--transition);
         font-family: var(--font-body);
     }
-    .card-header:hover { background: rgba(0, 0, 0, 0.02); }
-    .accent-line {
-        width: 3px;
-        height: 18px;
-        border-radius: 2px;
-        background: var(--specialist);
+    .card-header:hover { background: var(--accent-subtle); }
+
+    .card-icon {
+        font-size: 10px;
+        color: var(--card-accent);
+        opacity: 0.8;
     }
     .card-title {
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
-        color: var(--specialist);
+        color: var(--card-accent);
         text-transform: uppercase;
         letter-spacing: 0.05em;
         flex: 1;
         text-align: left;
     }
-    .toggle { color: var(--text-muted); font-size: 18px; font-weight: 300; }
+    .toggle {
+        color: var(--text-muted);
+        font-size: 10px;
+    }
+
     .card-body {
-        padding: 14px 18px;
+        padding: 6px 14px 12px;
         display: flex;
         flex-direction: column;
-        gap: 16px;
-        border-top: 1px solid rgba(255, 255, 255, 0.4);
+        gap: 10px;
+        border-top: 1px solid var(--border-subtle);
     }
-    .section { display: flex; flex-direction: column; gap: 8px; }
-    .section-label {
+
+    /* Key-value entries */
+    .entries {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 6px;
+    }
+    .entry {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 5px;
+        font-size: 12px;
+        padding: 2px 0;
+    }
+    .entry-label {
+        color: var(--text-muted);
         font-size: 11px;
+        font-weight: 500;
+    }
+    .entry-label::after {
+        content: ':';
+    }
+    .entry-value {
+        color: var(--text-secondary);
+        font-weight: 500;
+    }
+    /* Separator between entries */
+    .entry + .entry::before {
+        content: '\00B7';
+        color: var(--text-muted);
+        opacity: 0.4;
+        margin-right: 6px;
+        font-weight: 700;
+    }
+
+    /* List sections */
+    .list-section {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+    }
+    .list-label {
+        font-size: 10px;
         font-weight: 600;
         color: var(--text-muted);
         text-transform: uppercase;
-        letter-spacing: 0.06em;
+        letter-spacing: 0.05em;
     }
-    .swatches { display: flex; flex-wrap: wrap; gap: 10px; }
-    .swatch { display: flex; align-items: center; gap: 8px; }
-    .color-chip {
-        width: 20px;
-        height: 20px;
-        border-radius: 6px;
-        border: 1px solid rgba(255, 255, 255, 0.5);
-        box-shadow: var(--shadow-xs);
+    .list-items {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
     }
-    .color-name { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
-    .color-hex { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
-    .typo-grid { display: flex; flex-direction: column; gap: 4px; }
-    .typo-row { display: flex; gap: 10px; font-size: 14px; }
-    .typo-key { color: var(--text-secondary); text-transform: capitalize; min-width: 120px; }
-    .typo-val { color: var(--text); font-weight: 500; }
-    .pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
-    .pill {
-        background: rgba(0, 0, 0, 0.04);
+    .list-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        background: var(--accent-subtle);
         color: var(--text-secondary);
-        font-size: 13px;
+        font-size: 11px;
         font-weight: 500;
-        padding: 4px 14px;
+        padding: 3px 10px 3px 6px;
         border-radius: var(--radius-pill);
-        border: 1px solid rgba(255, 255, 255, 0.5);
+        border: 1px solid var(--border-subtle);
     }
-    .rationale { font-size: 14px; color: var(--text-secondary); font-style: italic; margin: 0; line-height: 1.6; }
+    .pill-num {
+        font-size: 9px;
+        font-weight: 600;
+        color: var(--card-accent);
+        opacity: 0.6;
+        min-width: 12px;
+        text-align: center;
+    }
 </style>

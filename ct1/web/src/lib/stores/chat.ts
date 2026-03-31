@@ -90,6 +90,20 @@ export interface Plan {
 
 export type ModeOverride = 'auto' | 'design' | 'code' | 'chat' | 'computer';
 
+export interface AtlasCandidate {
+    index: number;
+    score: number | null;
+    testsPassed: number | null;
+    testsTotal: number | null;
+    status: 'pending' | 'generating' | 'scored' | 'selected' | 'failed';
+}
+
+export interface AtlasEffort {
+    k: number;
+    difficulty: number;
+    tier: string;
+}
+
 interface ChatState {
     conversationId: string | null;
     conversation: Turn[];
@@ -133,6 +147,11 @@ interface ChatState {
     fetchingUrls: { url: string; status: 'fetching' | 'done' | 'failed'; error?: string }[];
     fetchedContent: { url: string; title: string; content: string;
                       contentLength: number; truncated: boolean }[];
+    // Atlas state
+    atlasActive: boolean;
+    atlasCandidates: AtlasCandidate[];
+    atlasPhase: 'estimating' | 'generating' | 'testing' | 'selecting' | 'repairing' | null;
+    atlasEffort: AtlasEffort | null;
 }
 
 const initial: ChatState = {
@@ -168,6 +187,10 @@ const initial: ChatState = {
     savedFiles: [],
     fetchingUrls: [],
     fetchedContent: [],
+    atlasActive: false,
+    atlasCandidates: [],
+    atlasPhase: null,
+    atlasEffort: null,
 };
 
 export const chat = writable<ChatState>({ ...initial });
@@ -206,7 +229,7 @@ function handleEvent(data: Record<string, any>) {
                 s.streamingText = '';
                 s.streamingThinking = '';
                 s.tokenCount = 0;
-                s.genStartTime = Date.now();
+                s.genStartTime = 0;
                 s.tokensPerSec = 0;
                 break;
             case 'token':
@@ -216,11 +239,12 @@ function handleEvent(data: Record<string, any>) {
                     s.streamingText += data.text;
                 }
                 s.tokenCount++;
-                if (s.genStartTime) {
-                    const elapsed = (Date.now() - s.genStartTime) / 1000;
-                    if (elapsed > 0.5) {
-                        s.tokensPerSec = Math.round(s.tokenCount / elapsed);
-                    }
+                if (!s.genStartTime) {
+                    s.genStartTime = Date.now();
+                }
+                const elapsed = (Date.now() - s.genStartTime) / 1000;
+                if (elapsed > 0.3) {
+                    s.tokensPerSec = Math.round(s.tokenCount / elapsed);
                 }
                 break;
             case 'draft':
@@ -307,7 +331,7 @@ function handleEvent(data: Record<string, any>) {
                 s.streamingText = '';
                 s.streamingThinking = '';
                 s.tokenCount = 0;
-                s.genStartTime = Date.now();
+                s.genStartTime = 0;
                 s.tokensPerSec = 0;
                 break;
             case 'spec_validated':
@@ -394,6 +418,68 @@ function handleEvent(data: Record<string, any>) {
                 s.fetchingUrls = s.fetchingUrls.map(f =>
                     f.url === data.url ? { ...f, status: 'failed' as const, error: data.error } : f
                 );
+                break;
+            // ── Atlas pipeline events ──
+            case 'atlas_started':
+                s.atlasActive = true;
+                s.atlasPhase = 'estimating';
+                s.atlasEffort = {
+                    k: data.k,
+                    difficulty: data.difficulty,
+                    tier: data.effort_tier,
+                };
+                s.atlasCandidates = Array.from({ length: data.k }, (_, i) => ({
+                    index: i,
+                    score: null,
+                    testsPassed: null,
+                    testsTotal: null,
+                    status: 'pending' as const,
+                }));
+                break;
+            case 'candidate_start':
+                s.atlasPhase = 'generating';
+                if (s.atlasCandidates[data.index]) {
+                    s.atlasCandidates = s.atlasCandidates.map((c, i) =>
+                        i === data.index ? { ...c, status: 'generating' } : c
+                    );
+                }
+                // Only reset streaming state for candidate 0 (which streams live).
+                // Candidates 1+ run silently — keep candidate 0's output visible.
+                if (data.index === 0) {
+                    s.streamingText = '';
+                    s.streamingThinking = '';
+                    s.tokenCount = 0;
+                    s.genStartTime = 0;
+                }
+                break;
+            case 'candidate_scored':
+                if (s.atlasCandidates[data.index]) {
+                    s.atlasCandidates = s.atlasCandidates.map((c, i) =>
+                        i === data.index ? {
+                            ...c,
+                            score: data.score,
+                            testsPassed: data.tests_passed ?? null,
+                            testsTotal: data.tests_total ?? null,
+                            status: 'scored',
+                        } : c
+                    );
+                }
+                break;
+            case 'candidate_selected':
+                s.atlasPhase = 'selecting';
+                if (s.atlasCandidates[data.index]) {
+                    s.atlasCandidates = s.atlasCandidates.map((c, i) =>
+                        i === data.index ? { ...c, status: 'selected' } : c
+                    );
+                }
+                break;
+            case 'atlas_testing':
+                s.atlasPhase = 'testing';
+                break;
+            case 'atlas_repair':
+                s.atlasPhase = 'repairing';
+                break;
+            case 'atlas_repair_result':
                 break;
             case 'warning':
                 s.warning = data.message || '';
@@ -482,6 +568,10 @@ export function loadFromHistory(conv: {
         s.editing = false;
         s.warning = '';
         s.undoStack = [];
+        s.atlasActive = false;
+        s.atlasCandidates = [];
+        s.atlasPhase = null;
+        s.atlasEffort = null;
         return s;
     });
 }
@@ -643,6 +733,10 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         s.savedFiles = [];
         s.fetchingUrls = [];
         s.fetchedContent = [];
+        s.atlasActive = false;
+        s.atlasCandidates = [];
+        s.atlasPhase = null;
+        s.atlasEffort = null;
         return s;
     });
 
@@ -693,6 +787,15 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
     }
 
     const prefs = get(preferences);
+    const atlasSettings = prefs.atlasMode ? {
+        atlasMode: true,
+        effortMode: prefs.atlasEffortMode,
+        effortLevel: prefs.atlasEffortLevel,
+        selfVerification: prefs.atlasSelfVerification,
+        multiPerspective: prefs.atlasMultiPerspective,
+        iterativeRefinement: prefs.atlasIterativeRefinement,
+    } : null;
+
     ws?.send({
         type: 'think',
         goal: goalContent,
@@ -702,5 +805,6 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         ...(mode !== 'auto' ? { mode_override: mode } : {}),
         ...(wsId ? { workspace_id: wsId } : {}),
         ...(!prefs.designRefinement ? { skip_refinement: true } : {}),
+        ...(atlasSettings ? { atlas: atlasSettings } : {}),
     });
 }

@@ -1,23 +1,47 @@
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
 
-export type Theme = 'light' | 'dark' | 'system';
+export type Theme = 'light' | 'dark';
 
 interface Preferences {
     theme: Theme;
     showThinking: boolean;
+    designRefinement: boolean;
+    // Atlas Mode (beta)
+    atlasMode: boolean;
+    atlasEffortMode: 'auto' | 'manual';
+    atlasEffortLevel: number;
+    atlasSelfVerification: boolean;
+    atlasMultiPerspective: boolean;
+    atlasIterativeRefinement: boolean;
 }
 
 const defaults: Preferences = {
-    theme: 'system',
+    theme: 'light',
     showThinking: false,
+    designRefinement: true,
+    // Atlas defaults
+    atlasMode: false,
+    atlasEffortMode: 'auto',
+    atlasEffortLevel: 3,
+    atlasSelfVerification: true,
+    atlasMultiPerspective: true,
+    atlasIterativeRefinement: true,
 };
 
 function loadPrefs(): Preferences {
     if (!browser) return defaults;
     try {
         const raw = localStorage.getItem('ct2-preferences');
-        return raw ? { ...defaults, ...JSON.parse(raw) } : defaults;
+        if (raw) {
+            const parsed = { ...defaults, ...JSON.parse(raw) };
+            // Migrate 'system' to 'light'
+            if (parsed.theme !== 'light' && parsed.theme !== 'dark') {
+                parsed.theme = 'light';
+            }
+            return parsed;
+        }
+        return defaults;
     } catch {
         return defaults;
     }
@@ -40,15 +64,11 @@ export const preferences = createPreferencesStore();
 
 function applyTheme(theme: Theme) {
     if (!browser) return;
-    const isDark =
-        theme === 'dark' ||
-        (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
 }
 
 export function toggleTheme() {
     preferences.update((p) => {
-        const next: Theme = p.theme === 'light' ? 'dark' : p.theme === 'dark' ? 'system' : 'light';
-        return { ...p, theme: next };
+        return { ...p, theme: p.theme === 'light' ? 'dark' : 'light' };
     });
 }

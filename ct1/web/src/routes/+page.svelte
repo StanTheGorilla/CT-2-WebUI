@@ -9,6 +9,7 @@
     import PreviewPanel from '$lib/components/PreviewPanel.svelte';
     import TerminalPanel from '$lib/components/TerminalPanel.svelte';
     import FileTree from '$lib/components/FileTree.svelte';
+    import AtlasProgress from '$lib/components/AtlasProgress.svelte';
 
     let isComputerRoute = $derived($chat.route === 'ROUTE_COMPUTER');
     let isCode = $derived(
@@ -20,9 +21,13 @@
 
     let showPreview = $state(false);
     let previewOverride = $state<string | null>(null);
+    function stripFences(code: string): string {
+        // Strip opening ```html\n and trailing ```
+        return code.replace(/^```\w*\s*\n/, '').replace(/\n?```\s*$/, '');
+    }
     let previewCode = $derived(
         ($chat.phase === 'generating' || $chat.phase === 'fixing' || $chat.phase === 'polishing') && $chat.streamingText
-            ? $chat.streamingText
+            ? stripFences($chat.streamingText)
             : previewOverride || $chat.response || $chat.streamingText || ''
     );
     let codeExpanded = $state(false);
@@ -555,80 +560,83 @@
                 {/if}
 
                 <!-- ==================== PIPELINE STEPS ==================== -->
-                {#if $chat.phase === 'routing'}
-                    <div class="step">
-                        <span class="step-dot pulse"></span>
-                        <span class="step-text">Classifying...</span>
-                    </div>
-                {/if}
+                <!-- During Atlas mode, these are hidden — AtlasProgress handles status -->
+                {#if !$chat.atlasActive}
+                    {#if $chat.phase === 'routing'}
+                        <div class="step">
+                            <span class="step-dot pulse"></span>
+                            <span class="step-text">Classifying...</span>
+                        </div>
+                    {/if}
 
-                {#if $chat.phase === 'planning'}
-                    <div class="step">
-                        <span class="step-dot pulse"></span>
-                        <span class="step-text">Planning...</span>
-                    </div>
-                {/if}
+                    {#if $chat.phase === 'planning'}
+                        <div class="step">
+                            <span class="step-dot pulse"></span>
+                            <span class="step-text">Planning...</span>
+                        </div>
+                    {/if}
 
-                {#if $chat.specialistData && $chat.route !== 'ROUTE_DESIGN'}
-                    <SpecialistCard data={$chat.specialistData} />
-                {/if}
+                    {#if $chat.specialistData && $chat.route !== 'ROUTE_DESIGN'}
+                        <SpecialistCard data={$chat.specialistData} />
+                    {/if}
 
-                <!-- ==================== PRECISION-DESIGN PIPELINE ==================== -->
-                {#if $chat.phase === 'spec_generating'}
-                    <div class="step">
-                        <span class="step-dot pulse"></span>
-                        <span class="step-text">Planning page structure...</span>
-                        {#if $chat.tokensPerSec > 0}
-                            <span class="gen-speed" style="margin-left: 8px">{$chat.tokensPerSec} t/s</span>
+                    <!-- ==================== PRECISION-DESIGN PIPELINE ==================== -->
+                    {#if $chat.phase === 'spec_generating'}
+                        <div class="step">
+                            <span class="step-dot pulse"></span>
+                            <span class="step-text">Planning page structure...</span>
+                            {#if $chat.tokensPerSec > 0}
+                                <span class="gen-speed" style="margin-left: 8px">{$chat.tokensPerSec} t/s</span>
+                            {/if}
+                        </div>
+                        {#if $chat.streamingThinking}
+                            <div class="spec-stream">
+                                <pre class="spec-stream-pre">{$chat.streamingThinking}</pre>
+                            </div>
                         {/if}
-                    </div>
-                    {#if $chat.streamingThinking}
-                        <div class="spec-stream">
-                            <pre class="spec-stream-pre">{$chat.streamingThinking}</pre>
+                        {#if $chat.streamingText}
+                            <div class="spec-stream">
+                                <pre class="spec-stream-pre">{$chat.streamingText}</pre>
+                            </div>
+                        {/if}
+                    {/if}
+
+                    {#if $chat.phase === 'spec_validated' && $chat.designSpec}
+                        <div class="step">
+                            <span class="step-dot"></span>
+                            <span class="step-text">Spec ready — {$chat.designSpec.components?.length ?? 0} components</span>
                         </div>
                     {/if}
-                    {#if $chat.streamingText}
-                        <div class="spec-stream">
-                            <pre class="spec-stream-pre">{$chat.streamingText}</pre>
+
+                    {#if $chat.componentProgress.length > 0}
+                        <div class="component-progress">
+                            <div class="comp-header">
+                                <span class="comp-title">Components</span>
+                                <span class="comp-count">
+                                    {$chat.componentProgress.filter(c => c.status === 'validated' || c.status === 'fallback').length}/{$chat.componentProgress[0]?.total ?? $chat.componentProgress.length}
+                                </span>
+                            </div>
+                            <div class="comp-items">
+                                {#each $chat.componentProgress as comp}
+                                    <div class="comp-item"
+                                         class:done={comp.status === 'validated'}
+                                         class:patching={comp.status === 'patching'}
+                                         class:fallback={comp.status === 'fallback'}>
+                                        <span class="comp-dot" class:pulse={comp.status === 'generating'}></span>
+                                        <span class="comp-name">{comp.id}</span>
+                                        <span class="comp-status">{comp.status}</span>
+                                    </div>
+                                {/each}
+                            </div>
                         </div>
                     {/if}
-                {/if}
 
-                {#if $chat.phase === 'spec_validated' && $chat.designSpec}
-                    <div class="step">
-                        <span class="step-dot"></span>
-                        <span class="step-text">Spec ready — {$chat.designSpec.components?.length ?? 0} components</span>
-                    </div>
-                {/if}
-
-                {#if $chat.componentProgress.length > 0}
-                    <div class="component-progress">
-                        <div class="comp-header">
-                            <span class="comp-title">Components</span>
-                            <span class="comp-count">
-                                {$chat.componentProgress.filter(c => c.status === 'validated' || c.status === 'fallback').length}/{$chat.componentProgress[0]?.total ?? $chat.componentProgress.length}
-                            </span>
+                    {#if $chat.phase === 'assembling'}
+                        <div class="step">
+                            <span class="step-dot pulse"></span>
+                            <span class="step-text">Assembling page...</span>
                         </div>
-                        <div class="comp-items">
-                            {#each $chat.componentProgress as comp}
-                                <div class="comp-item"
-                                     class:done={comp.status === 'validated'}
-                                     class:patching={comp.status === 'patching'}
-                                     class:fallback={comp.status === 'fallback'}>
-                                    <span class="comp-dot" class:pulse={comp.status === 'generating'}></span>
-                                    <span class="comp-name">{comp.id}</span>
-                                    <span class="comp-status">{comp.status}</span>
-                                </div>
-                            {/each}
-                        </div>
-                    </div>
-                {/if}
-
-                {#if $chat.phase === 'assembling'}
-                    <div class="step">
-                        <span class="step-dot pulse"></span>
-                        <span class="step-text">Assembling page...</span>
-                    </div>
+                    {/if}
                 {/if}
 
                 {#if $chat.fetchingUrls.length > 0}
@@ -663,6 +671,9 @@
                         </details>
                     {/each}
                 {/if}
+
+                <!-- ==================== ATLAS PROGRESS ==================== -->
+                <AtlasProgress />
 
                 <!-- ==================== GENERATION ==================== -->
                 {#if $chat.phase === 'generating' || $chat.phase === 'fixing'}

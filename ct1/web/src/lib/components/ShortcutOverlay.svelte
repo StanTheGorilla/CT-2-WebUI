@@ -12,8 +12,10 @@
 </script>
 
 {#if open}
-    <div class="overlay-backdrop" onclick={() => open = false} role="dialog">
-        <div class="overlay-card" onclick={(e) => e.stopPropagation()}>
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div class="overlay-backdrop" onclick={() => open = false} onkeydown={(e) => { if (e.key === 'Escape') open = false; }} role="dialog" tabindex="-1">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="overlay-card" onclick={(e) => e.stopPropagation()} onkeydown={() => {}}>
             <h3 class="overlay-title">Keyboard Shortcuts</h3>
             <div class="shortcut-list">
                 {#each shortcuts as s}
@@ -80,8 +82,8 @@
         font-size: 12px;
         font-weight: 500;
         color: var(--text);
-        background: rgba(0, 0, 0, 0.05);
-        border: 1px solid rgba(0, 0, 0, 0.06);
+        background: var(--accent-subtle);
+        border: 1px solid var(--border-subtle);
         border-radius: 6px;
         padding: 4px 10px;
         white-space: nowrap;

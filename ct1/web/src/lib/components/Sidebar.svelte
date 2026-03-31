@@ -51,7 +51,6 @@
     function startRename(id: string, currentTitle: string) {
         renamingId = id;
         renameValue = currentTitle;
-        // Focus input on next tick
         requestAnimationFrame(() => {
             renameInput?.focus();
             renameInput?.select();
@@ -92,171 +91,163 @@
             downloadText(md, `${safeTitle}.md`, 'text/markdown');
         }
     }
-
-    function closeSidebar() {
-        sidebarOpen.set(false);
-    }
 </script>
 
 <aside class="sidebar" class:open={$sidebarOpen}>
-    <div class="sidebar-header">
-        <button class="new-chat-btn" onclick={startNew}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M8 1v14M1 8h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-            New Chat
-        </button>
-        <button class="close-btn" onclick={closeSidebar}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-        </button>
-    </div>
+    <div class="sidebar-inner">
+        <div class="sidebar-header">
+            <span class="sidebar-title">History</span>
+            <button class="new-chat-btn" onclick={startNew} title="New conversation">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
 
-    <SearchBar />
+        <SearchBar />
 
-    <div class="conversation-list">
-        {#if $conversations.length === 0}
-            <div class="empty-state">
-                <span class="empty-icon">
-                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-                        <path d="M8 12h16M8 16h10M8 20h13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                        <rect x="4" y="6" width="24" height="20" rx="4" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                    </svg>
-                </span>
-                <p>No conversations yet</p>
-                <span class="empty-hint">Start a new chat to begin</span>
-            </div>
-        {:else}
-            {#each $conversations as conv (conv.id)}
-                <button
-                    class="conversation-item"
-                    class:active={$activeConversationId === conv.id}
-                    onclick={() => selectConversation(conv.id)}
-                >
-                    {#if renamingId === conv.id}
-                        <input
-                            class="rename-input"
-                            bind:this={renameInput}
-                            bind:value={renameValue}
-                            onblur={() => commitRename(conv.id)}
-                            onkeydown={(e) => handleRenameKeydown(e, conv.id)}
-                            onclick={(e) => e.stopPropagation()}
-                        />
-                    {:else}
-                        <span class="conv-title">{conv.title}</span>
-                        <span class="conv-time">{formatRelativeDate(conv.updated_at)}</span>
-                    {/if}
+        <div class="conversation-list">
+            {#if $conversations.length === 0}
+                <div class="empty-state">
+                    <p>No conversations yet</p>
+                    <span class="empty-hint">Start a new chat to begin</span>
+                </div>
+            {:else}
+                {#each $conversations as conv (conv.id)}
+                    <div
+                        class="conversation-item"
+                        class:active={$activeConversationId === conv.id}
+                        role="button"
+                        tabindex="0"
+                        onclick={() => selectConversation(conv.id)}
+                        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') selectConversation(conv.id); }}
+                    >
+                        {#if renamingId === conv.id}
+                            <input
+                                class="rename-input"
+                                bind:this={renameInput}
+                                bind:value={renameValue}
+                                onblur={() => commitRename(conv.id)}
+                                onkeydown={(e) => handleRenameKeydown(e, conv.id)}
+                                onclick={(e) => e.stopPropagation()}
+                            />
+                        {:else}
+                            <div class="conv-content">
+                                <span class="conv-title">{conv.title}</span>
+                                <span class="conv-time">{formatRelativeDate(conv.updated_at)}</span>
+                            </div>
+                        {/if}
 
-                    <div class="conv-actions" onclick={(e) => e.stopPropagation()}>
-                        <button
-                            class="action-btn"
-                            title="Rename"
-                            onclick={() => startRename(conv.id, conv.title)}
-                        >
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
-                        </button>
-                        <button
-                            class="action-btn"
-                            title="Export"
-                            onclick={() => handleExport(conv.id, conv.title)}
-                        >
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                <path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
-                        </button>
-                        <button
-                            class="action-btn delete"
-                            title="Delete"
-                            onclick={() => handleDelete(conv.id)}
-                        >
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                                <path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
-                        </button>
+                        <div class="conv-actions" onclick={(e) => e.stopPropagation()}>
+                            <button class="action-btn" title="Rename" onclick={() => startRename(conv.id, conv.title)}>
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                    <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                            <button class="action-btn" title="Export" onclick={() => handleExport(conv.id, conv.title)}>
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                    <path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                            <button class="action-btn delete" title="Delete" onclick={() => handleDelete(conv.id)}>
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                    <path d="M2 4h12M5 4V2.5a.5.5 0 01.5-.5h5a.5.5 0 01.5.5V4M3.5 4l.75 9.5a1 1 0 001 .9h5.5a1 1 0 001-.9L12.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M6.5 7v4.5M9.5 7v4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                </svg>
+                            </button>
+                        </div>
                     </div>
-                </button>
-            {/each}
-        {/if}
+                {/each}
+            {/if}
+        </div>
     </div>
 </aside>
 
 <style>
+    /* ---- Floating island sidebar ---- */
     .sidebar {
         position: fixed;
-        top: 56px;
-        left: 0;
-        bottom: 0;
+        top: 68px;
+        left: 12px;
+        bottom: 12px;
         width: 280px;
-        z-index: 90;
+        z-index: 91;
+        pointer-events: none;
+
+        transform: translateX(-300px);
+        opacity: 0;
+        transition:
+            transform 250ms cubic-bezier(0.4, 0, 0.2, 1),
+            opacity 200ms ease;
+    }
+    .sidebar.open {
+        pointer-events: auto;
+        transform: translateX(0);
+        opacity: 1;
+        transition:
+            transform 350ms cubic-bezier(0.22, 1.2, 0.36, 1),
+            opacity 150ms ease;
+    }
+
+    .sidebar-inner {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
         background: var(--bubble-strong);
         backdrop-filter: var(--bubble-blur-heavy);
         -webkit-backdrop-filter: var(--bubble-blur-heavy);
-        border-right: var(--bubble-border);
-        box-shadow: var(--bubble-glow);
-        display: flex;
-        flex-direction: column;
-        transform: translateX(-100%);
-        transition: transform var(--transition-slow);
-    }
-    .sidebar.open {
-        transform: translateX(0);
+        border: var(--bubble-border);
+        border-radius: 20px;
+        box-shadow:
+            var(--bubble-glow-strong),
+            0 24px 80px rgba(0, 0, 0, 0.08);
+        overflow: hidden;
     }
 
+    /* ---- Header ---- */
     .sidebar-header {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 16px;
-        border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        justify-content: space-between;
+        padding: 18px 20px 10px;
+    }
+
+    .sidebar-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-muted);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
     }
 
     .new-chat-btn {
-        flex: 1;
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 8px;
-        padding: 9px 16px;
-        background: var(--bubble);
-        border: var(--bubble-border);
-        border-radius: var(--radius-sm);
-        color: var(--text);
-        font-size: 13px;
-        font-weight: 500;
+        width: 28px;
+        height: 28px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text-secondary);
         cursor: pointer;
-        transition: background var(--transition), box-shadow var(--transition);
+        transition: all 200ms ease;
     }
     .new-chat-btn:hover {
-        background: var(--bubble-strong);
+        background: var(--surface-hover);
+        color: var(--text);
         box-shadow: var(--shadow-sm);
     }
 
-    .close-btn {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 32px;
-        height: 32px;
-        background: none;
-        border: none;
-        border-radius: var(--radius-sm);
-        color: var(--text-muted);
-        cursor: pointer;
-        transition: color var(--transition), background var(--transition);
-        flex-shrink: 0;
-    }
-    .close-btn:hover {
-        color: var(--text);
-        background: rgba(0, 0, 0, 0.05);
-    }
-
+    /* ---- Conversation list ---- */
     .conversation-list {
         flex: 1;
         overflow-y: auto;
-        padding: 8px;
+        padding: 4px 8px 12px;
+        scrollbar-width: none;
+    }
+    .conversation-list::-webkit-scrollbar {
+        display: none;
     }
 
     .empty-state {
@@ -264,17 +255,12 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        padding: 48px 24px;
+        padding: 40px 20px;
         text-align: center;
-        gap: 8px;
-    }
-    .empty-icon {
-        color: var(--text-muted);
-        opacity: 0.4;
-        margin-bottom: 4px;
+        gap: 4px;
     }
     .empty-state p {
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 500;
         color: var(--text-secondary);
     }
@@ -283,98 +269,113 @@
         color: var(--text-muted);
     }
 
+    /* ---- Conversation item ---- */
     .conversation-item {
         display: flex;
-        flex-wrap: wrap;
         align-items: center;
-        gap: 4px;
         width: 100%;
         padding: 10px 12px;
         background: none;
         border: none;
-        border-radius: var(--radius-sm);
+        border-radius: 10px;
         cursor: pointer;
         text-align: left;
         position: relative;
-        transition: background var(--transition);
+        transition: background 150ms ease;
     }
     .conversation-item:hover {
-        background: rgba(0, 0, 0, 0.04);
+        background: var(--surface);
     }
     .conversation-item.active {
-        background: rgba(0, 0, 0, 0.06);
+        background: var(--surface-hover);
+    }
+
+    .conv-content {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        transition: max-width 150ms ease;
     }
 
     .conv-title {
-        flex: 1;
         font-size: 13px;
         font-weight: 500;
         color: var(--text);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        min-width: 0;
+        line-height: 1.3;
+        letter-spacing: -0.01em;
     }
 
     .conv-time {
         font-size: 11px;
+        font-weight: 400;
         color: var(--text-muted);
-        flex-shrink: 0;
+        letter-spacing: 0.01em;
     }
 
+    /* ---- Action buttons ---- */
     .conv-actions {
         display: none;
         align-items: center;
-        gap: 2px;
-        position: absolute;
-        right: 8px;
-        top: 50%;
-        transform: translateY(-50%);
-        background: var(--bubble-strong);
-        border-radius: 6px;
+        gap: 1px;
+        margin-left: auto;
+        flex-shrink: 0;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
         padding: 2px;
     }
     .conversation-item:hover .conv-actions {
         display: flex;
+    }
+    .conversation-item:hover .conv-content {
+        /* Make room for action buttons by shrinking text */
+        max-width: calc(100% - 90px);
     }
 
     .action-btn {
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 26px;
-        height: 26px;
+        width: 24px;
+        height: 24px;
         background: none;
         border: none;
-        border-radius: 5px;
+        border-radius: 6px;
         color: var(--text-muted);
         cursor: pointer;
-        transition: color var(--transition), background var(--transition);
+        transition: color 150ms ease, background 150ms ease;
     }
     .action-btn:hover {
         color: var(--text);
-        background: rgba(0, 0, 0, 0.06);
+        background: var(--surface);
     }
     .action-btn.delete:hover {
         color: var(--error);
-        background: rgba(207, 34, 46, 0.06);
+        background: rgba(207, 34, 46, 0.08);
     }
 
+    /* ---- Rename input ---- */
     .rename-input {
         flex: 1;
         font-size: 13px;
         font-weight: 500;
         color: var(--text);
-        background: rgba(255, 255, 255, 0.6);
-        border: 1px solid rgba(0, 0, 0, 0.1);
-        border-radius: 6px;
-        padding: 3px 8px;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        padding: 4px 10px;
         outline: none;
         min-width: 0;
         font-family: var(--font-body);
+        letter-spacing: -0.01em;
     }
     .rename-input:focus {
-        border-color: rgba(0, 0, 0, 0.2);
-        box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.04);
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px rgba(107, 107, 107, 0.1);
     }
 </style>

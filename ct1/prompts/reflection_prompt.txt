@@ -1,27 +1,19 @@
-You just completed a deliberation. Write your reflection as JSON.
+You just completed a code generation task. Write your reflection as JSON.
 
 Task: {goal}
 Complexity: {complexity}
-Rounds taken: {rounds}
-Your final response: {outcome}
+Your final output: {outcome}
 
-Reflect on the quality of your inner voices' reasoning:
-- Which voice had the strongest reasoning chain and why?
-- Which voice's reasoning was weakest or least relevant?
-- Did the complexity assessment match the actual difficulty?
-- One concrete lesson for future thinking
+Reflect on the quality of your work:
+- Did the output fully satisfy the request?
+- Were there any issues with the approach?
+- One concrete lesson for future tasks
 
 Output ONLY a JSON object with this exact structure (no extra text):
 {
   "goal": "<copy the task>",
   "complexity": "<brief|moderate|deep>",
-  "rounds": <number>,
-  "mind_contributions": {
-    "alpha": {"useful": <true or false>, "reasoning_quality": "<strong|moderate|weak>", "summary": "<what alpha contributed>"},
-    "beta": {"useful": <true or false>, "reasoning_quality": "<strong|moderate|weak>", "summary": "<what beta contributed>"},
-    "gamma": {"useful": <true or false>, "reasoning_quality": "<strong|moderate|weak>", "summary": "<what gamma contributed>"}
-  },
-  "outcome": "<one sentence summary>",
+  "outcome": "<one sentence summary of what you produced>",
   "lesson": "<one specific thing you learned>",
   "complexity_correct": <true or false>,
   "self_score": <0.0 to 1.0>

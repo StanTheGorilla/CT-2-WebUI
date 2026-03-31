@@ -1,8 +1,171 @@
+# Repo Cleanup & First GitHub Push — Implementation Plan
+
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Prepare the ct2 repo for its first public GitHub push — web UI only, CLI/training code moved to a local-only folder, README rewritten, config reset to safe defaults.
+
+**Architecture:** Move CLI/training artifacts to a gitignored `_local/` folder so they're preserved locally but never pushed. Update `.gitignore`, reset `model_config.yaml` to safe defaults, add `models/.gitkeep`, and rewrite README to cover only the web UI startup flow.
+
+**Tech Stack:** git, bash, YAML, Markdown
+
+---
+
+### Task 1: Create `_local/` and move CLI/training files
+
+**Files:**
+- Create: `_local/` (directory)
+- Move: `ct1.py` → `_local/ct1.py`
+- Move: `ct1/cli/` → `_local/cli/`
+- Move: `ct1/evolution/` → `_local/evolution/`
+- Move: `ct1/requirements-training.txt` → `_local/requirements-training.txt`
+
+**Step 1: Create the folder and move files**
+
+```bash
+mkdir -p _local
+mv ct1.py _local/ct1.py
+mv ct1/cli _local/cli
+mv ct1/evolution _local/evolution
+mv ct1/requirements-training.txt _local/requirements-training.txt
+```
+
+**Step 2: Verify moves**
+
+```bash
+ls _local/
+# Expected: ct1.py  cli/  evolution/  requirements-training.txt
+ls ct1/
+# Expected: cli and evolution are GONE from ct1/
+```
+
+**Step 3: Commit**
+
+```bash
+git add -A
+git commit -m "chore: move CLI and training code to _local (not for GitHub)"
+```
+
+---
+
+### Task 2: Update `.gitignore`
+
+**Files:**
+- Modify: `.gitignore`
+
+**Step 1: Add `_local/` to gitignore and remove the stale requirements-training.txt exception**
+
+Open `.gitignore`. Make two changes:
+
+1. Add under `# ── Dev scratch files ──────────────────────────────────────────────`:
+```
+_local/
+```
+
+2. Remove this line entirely:
+```
+!ct1/requirements-training.txt
+```
+
+**Step 2: Verify `_local/` is ignored**
+
+```bash
+git status
+# Expected: _local/ does NOT appear in untracked files
+```
+
+**Step 3: Commit**
+
+```bash
+git add .gitignore
+git commit -m "chore: gitignore _local/ and remove stale training reqs exception"
+```
+
+---
+
+### Task 3: Reset `model_config.yaml` to safe defaults
+
+**Files:**
+- Modify: `ct1/server/model_config.yaml`
+
+**Step 1: Reset personal settings**
+
+Edit `ct1/server/model_config.yaml`. Change:
+```yaml
+active_model: Qwen3.5-4B.Q6_Kdistiled.gguf
+context_size: 94314
+```
+To:
+```yaml
+active_model: null
+context_size: 32768
+```
+
+Leave all other fields (`port`, `n_gpu_layers`, `temperature`, etc.) unchanged.
+
+**Step 2: Verify**
+
+```bash
+grep -E "active_model|context_size" ct1/server/model_config.yaml
+# Expected:
+# active_model: null
+# context_size: 32768
+```
+
+**Step 3: Commit**
+
+```bash
+git add ct1/server/model_config.yaml
+git commit -m "chore: reset model_config to safe defaults for GitHub"
+```
+
+---
+
+### Task 4: Add `models/.gitkeep`
+
+**Files:**
+- Create: `models/.gitkeep`
+
+**Step 1: Create the placeholder file**
+
+```bash
+touch models/.gitkeep
+```
+
+**Step 2: Verify it's tracked (not gitignored)**
+
+```bash
+git status
+# Expected: models/.gitkeep appears as untracked (not ignored)
+```
+
+The `.gitignore` only ignores `models/*.gguf` and `models/*.bin`, so `.gitkeep` will be tracked correctly.
+
+**Step 3: Commit**
+
+```bash
+git add models/.gitkeep
+git commit -m "chore: add models/.gitkeep so empty dir is preserved on clone"
+```
+
+---
+
+### Task 5: Rewrite README.md
+
+**Files:**
+- Modify: `README.md`
+
+**Step 1: Replace the full README content**
+
+Replace the entire contents of `README.md` with the following:
+
+```markdown
 # CT-2 — Consciousness Testbed
 
 A local AI assistant powered by [llama.cpp](https://github.com/ggerganov/llama.cpp), with a modern web interface built in SvelteKit. Runs entirely on your machine — no API keys, no cloud, no telemetry.
 
 CT-2 wraps a single local GGUF model in a multi-phase pipeline: deterministic routing → self-planning → generation → validation → formatting. The result is significantly better output quality than talking to the model raw.
+
+![Settings — Model Selection](docs/screenshots/settings.png)
 
 ---
 
@@ -225,3 +388,54 @@ MIT
 4. Push and open a Pull Request
 
 Run tests before submitting: `pytest tests/`
+```
+
+**Step 2: Verify the file looks correct**
+
+```bash
+head -5 README.md
+# Expected: # CT-2 — Consciousness Testbed
+wc -l README.md
+# Expected: roughly 200 lines
+```
+
+**Step 3: Commit**
+
+```bash
+git add README.md
+git commit -m "docs: rewrite README for web UI only, add troubleshooting"
+```
+
+---
+
+### Task 6: Final verification
+
+**Step 1: Check git status — nothing unexpected should be staged or untracked**
+
+```bash
+git status
+# Expected: clean working tree, or only intentional untracked files
+```
+
+**Step 2: Dry-run check — confirm no model files or personal config will be pushed**
+
+```bash
+git ls-files | grep -E "\.gguf|\.bin|_local"
+# Expected: no output (none of these should be tracked)
+```
+
+**Step 3: Confirm `models/.gitkeep` is tracked**
+
+```bash
+git ls-files models/
+# Expected: models/.gitkeep
+```
+
+**Step 4: Confirm `model_config.yaml` has safe defaults**
+
+```bash
+grep -E "active_model|context_size" ct1/server/model_config.yaml
+# Expected:
+# active_model: null
+# context_size: 32768
+```

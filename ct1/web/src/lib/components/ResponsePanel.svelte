@@ -39,7 +39,7 @@
         align-items: center;
         gap: 10px;
         padding: 12px 18px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.4);
+        border-bottom: 1px solid var(--border);
     }
     .bar-indicator {
         width: 8px;
@@ -56,8 +56,8 @@
     }
     .thinking-btn {
         margin-left: auto;
-        background: rgba(0, 0, 0, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.5);
+        background: var(--accent-subtle);
+        border: 1px solid var(--border);
         border-radius: var(--radius-sm);
         color: var(--text-secondary);
         font-family: var(--font-body);
@@ -69,12 +69,12 @@
     }
     .thinking-btn:hover {
         color: var(--text);
-        background: rgba(0, 0, 0, 0.06);
+        background: var(--surface);
     }
     .thinking {
         padding: 14px 18px;
-        background: rgba(0, 0, 0, 0.02);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        background: var(--accent-subtle);
+        border-bottom: 1px solid var(--border);
         color: var(--text-secondary);
         font-size: 14px;
         line-height: 1.65;
@@ -97,4 +97,26 @@
     .body :global(h3) { margin: 20px 0 8px; }
     .body :global(ul),
     .body :global(ol) { padding-left: 22px; margin-bottom: 12px; }
+    .body :global(table) {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 12px 0;
+        font-size: 14px;
+        display: block;
+        overflow-x: auto;
+    }
+    .body :global(thead) { display: table; width: 100%; table-layout: fixed; }
+    .body :global(tbody) { display: table; width: 100%; table-layout: fixed; }
+    .body :global(th),
+    .body :global(td) {
+        padding: 8px 12px;
+        border: 1px solid var(--border);
+        text-align: left;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+    .body :global(th) {
+        background: var(--surface-hover);
+        font-weight: 600;
+    }
 </style>

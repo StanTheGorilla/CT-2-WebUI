@@ -6,7 +6,85 @@ Operates in two modes:
 """
 import httpx
 import json
+import re as _re
 from pathlib import Path
+
+
+def _repair_json(text: str) -> str:
+    """Fix common LLM JSON mistakes so json.loads succeeds.
+
+    Handles: trailing commas, single-quoted strings, unquoted keys,
+    JS-style comments, and Python-style True/False/None.
+    """
+    # 1. Strip JS-style comments (// ... and /* ... */)
+    text = _re.sub(r'//[^\n]*', '', text)
+    text = _re.sub(r'/\*.*?\*/', '', text, flags=_re.DOTALL)
+
+    # 2. Replace Python-style booleans/None outside of strings
+    #    (quick pass — only replaces if not inside quotes)
+    text = _re.sub(r'\bTrue\b', 'true', text)
+    text = _re.sub(r'\bFalse\b', 'false', text)
+    text = _re.sub(r'\bNone\b', 'null', text)
+
+    # 3. Remove trailing commas before } or ]
+    text = _re.sub(r',\s*([}\]])', r'\1', text)
+
+    # 4. Replace single-quoted strings with double-quoted
+    #    Walk char by char to avoid breaking apostrophes inside double-quoted strings
+    out = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '"':
+            # Double-quoted string — pass through unchanged
+            out.append(ch)
+            i += 1
+            while i < len(text):
+                c = text[i]
+                out.append(c)
+                if c == '\\':
+                    i += 1
+                    if i < len(text):
+                        out.append(text[i])
+                elif c == '"':
+                    break
+                i += 1
+            i += 1
+        elif ch == "'":
+            # Single-quoted string — convert to double-quoted
+            out.append('"')
+            i += 1
+            while i < len(text):
+                c = text[i]
+                if c == '\\':
+                    out.append(c)
+                    i += 1
+                    if i < len(text):
+                        out.append(text[i])
+                elif c == "'":
+                    break
+                elif c == '"':
+                    out.append('\\"')  # escape inner double quotes
+                    i += 1
+                    continue
+                else:
+                    out.append(c)
+                i += 1
+            out.append('"')
+            i += 1
+        else:
+            out.append(ch)
+            i += 1
+    text = ''.join(out)
+
+    # 5. Quote unquoted keys: `  key:` → `  "key":`
+    text = _re.sub(
+        r'(?<=[\{,\n])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:',
+        r' "\1":',
+        text,
+    )
+
+    return text
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 BRAIN_SYSTEM_TEMPLATE = (_PROMPTS_DIR / "brain_system.txt").read_text(
@@ -97,14 +175,42 @@ _GENERATOR_DESIGN_SYSTEM = (
     "- Hero must have visible foreground text, not just a background gradient.\n"
     "- Never rely on a single color for both background and text.\n\n"
 
-    "THINKING PROCESS — before writing ANY HTML, reason through these in your thinking:\n"
-    "1. What is this project? Who is the audience and what mood fits?\n"
-    "2. Color palette: pick 4-5 specific Tailwind colors (e.g. slate-900, amber-500)\n"
-    "3. Typography: choose heading + body Google Fonts\n"
-    "4. Sections: list every section you will build, in order\n"
-    "5. Layout approach for each section (grid, flex, centered, split)\n"
-    "6. One unique design detail that makes this site memorable\n"
-    "Then write the complete HTML.\n"
+    "DESIGN MINDSET — adopt this perspective for every build:\n"
+    "- Think as a UX-focused designer-developer. Every decision starts from the user's experience.\n"
+    "- Begin with the user-facing surface: what does the visitor see, feel, and do?\n"
+    "- Emphasize visual polish and production readiness over raw feature count.\n"
+    "- One beautifully crafted section beats three half-finished ones.\n\n"
+
+    "THINKING PROCESS — before writing ANY HTML, work through ALL of these in your thinking block:\n\n"
+    "STEP 1 — IDENTITY & EMOTION:\n"
+    "  Who visits this site? What should they FEEL on first load?\n"
+    "  Pick one emotional anchor word (bold, serene, playful, premium, warm).\n"
+    "  Every design choice must serve that emotion.\n\n"
+    "STEP 2 — SIGNATURE DETAIL:\n"
+    "  Choose ONE distinctive visual element that makes this site unmistakable.\n"
+    "  Examples: a diagonal section divider, an oversized hero number, a gradient\n"
+    "  text headline, a floating card with a colored shadow, an asymmetric grid.\n"
+    "  This detail carries through the whole page as a visual thread.\n\n"
+    "STEP 3 — VISUAL SYSTEM:\n"
+    "  - Color palette: pick 4-5 specific Tailwind colors with purpose\n"
+    "    (primary, accent, background, surface, text). State them explicitly.\n"
+    "  - Typography: choose heading + body Google Fonts. Set scale: hero size,\n"
+    "    section heading size, body size.\n"
+    "  - Spacing rhythm: consistent padding/gap values (e.g. py-20, gap-8).\n\n"
+    "STEP 4 — SECTION-BY-SECTION BLUEPRINT:\n"
+    "  For EACH section, write out in your thinking:\n"
+    "  a) What the visitor sees: describe the visual composition in one sentence\n"
+    "  b) The actual headline and subtext copy (real words, not placeholders)\n"
+    "  c) Layout: grid columns, flex direction, alignment, spacing\n"
+    "  d) How this section connects visually to the one above and below it\n"
+    "  Design the hero FIRST — it is the emotional anchor of the entire page.\n"
+    "  Then flow naturally downward: each section should feel like a continuation.\n\n"
+    "STEP 5 — VISUAL HIERARCHY CHECK:\n"
+    "  Walk through the page top-to-bottom as a visitor would.\n"
+    "  - Is there a clear visual flow guiding the eye?\n"
+    "  - Does contrast vary between sections (light/dark alternation)?\n"
+    "  - Are CTAs prominent and the next logical action obvious?\n\n"
+    "After completing ALL five steps in your thinking, write the complete HTML.\n"
 )
 
 _GENERATOR_EDIT_SYSTEM = (
@@ -334,7 +440,8 @@ class Engine:
                  presence_penalty: float = 1.0, frequency_penalty: float = 0.0,
                  max_tokens: int = 100000,
                  thinking_budget: int = -1,
-                 vision_supported: bool = False):
+                 vision_supported: bool = False,
+                 context_size: int = 16384):
         self.base_url = base_url
         self.temperature = temperature
         self.top_p = top_p
@@ -344,6 +451,7 @@ class Engine:
         self.max_tokens = max_tokens
         self.thinking_budget = thinking_budget
         self.vision_supported = vision_supported
+        self.context_size = context_size
         self.client = httpx.AsyncClient(timeout=600.0)
         self.lessons: list[str] = []
         self.last_session: str = ""
@@ -388,6 +496,9 @@ class Engine:
                     thinking_budget: int = None):
         """Call the engine. Thinking enabled by default."""
         if conversation:
+            system_prompt = messages[0].get("content", "") if messages else ""
+            conversation = truncate_conversation(
+                conversation, system_prompt, self.context_size)
             system = messages[:1]
             rest = messages[1:]
             messages = system + conversation + rest
@@ -497,6 +608,9 @@ class Engine:
                            thinking_budget: int = None):
         """Streaming call with token-by-token callback."""
         if conversation:
+            system_prompt = messages[0].get("content", "") if messages else ""
+            conversation = truncate_conversation(
+                conversation, system_prompt, self.context_size)
             system = messages[:1]
             rest = messages[1:]
             messages = system + conversation + rest
@@ -1010,7 +1124,17 @@ class Engine:
         if start < 0 or end <= start:
             raise ValueError(f"No JSON object found in Engine output: {text[:300]!r}")
 
-        return _json.loads(text[start:end])
+        raw_json = text[start:end]
+
+        # Try strict parse first
+        try:
+            return _json.loads(raw_json)
+        except _json.JSONDecodeError:
+            pass
+
+        # Repair common LLM JSON mistakes and retry
+        repaired = _repair_json(raw_json)
+        return _json.loads(repaired)
 
     # ── Self-refinement pass (design mode) ─────────────────────────────
 

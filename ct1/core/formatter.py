@@ -181,6 +181,13 @@ def extract_code(text: str) -> str:
         # Use the largest block — that's the actual code
         largest = max(fences, key=lambda m: len(m.group(1)))
         return largest.group(1).strip()
+    # Handle unclosed fence (model cut off before closing ```)
+    unclosed = re.match(
+        r'```(?:html|css|js|javascript|python|py|cpp|c\+\+|c|rust|go|java|sh|bash|typescript|ts)?\s*\n(.*)',
+        text, re.DOTALL
+    )
+    if unclosed:
+        return unclosed.group(1).strip()
     return text
 
 
@@ -447,30 +454,70 @@ def reassemble_html_section(original_html: str, section: str,
 
 
 def validate_html(html: str) -> list[str]:
-    """Programmatic structural validation for HTML. Returns list of issues."""
+    """Programmatic structural validation for HTML.
+
+    Returns only CRITICAL issues that indicate genuinely broken output
+    (truncated, empty body, unparseable). Non-critical gaps like missing
+    viewport/title/doctype are fixed deterministically by fix_html_structure()
+    — never sent back to the LLM, which would rewrite the whole thing.
+    """
     issues = []
     h = html.lower()
 
-    if '<!doctype html>' not in h:
-        issues.append("Missing <!DOCTYPE html> declaration")
-    if '<html' not in h:
-        issues.append("Missing <html> tag")
-    if '<head' not in h:
-        issues.append("Missing <head> section")
-    if '<body' not in h:
-        issues.append("Missing <body> section")
-    if '</html>' not in h:
-        issues.append("Missing closing </html>")
-    if 'viewport' not in h:
-        issues.append("Missing viewport meta tag")
-    if '<title' not in h:
-        issues.append("Missing <title> tag")
-    if '<style' not in h and 'stylesheet' not in h:
-        issues.append("No CSS styling found")
     if len(html.strip()) < 200:
         issues.append("Output too short — likely incomplete")
+    if '</html>' not in h and '<html' in h:
+        issues.append("Truncated output — missing closing </html>")
+
+    # Body exists but is empty (after stripping scripts)
+    body_match = re.search(r'<body[^>]*>(.*?)</body>', html,
+                           re.DOTALL | re.IGNORECASE)
+    if body_match:
+        body_content = re.sub(r'<script[^>]*>.*?</script>', '',
+                              body_match.group(1),
+                              flags=re.DOTALL | re.IGNORECASE).strip()
+        if len(body_content) < 20:
+            issues.append("Empty <body> — no visible content")
 
     return issues
+
+
+def fix_html_structure(html: str) -> str:
+    """Deterministically patch missing HTML boilerplate.
+
+    Adds DOCTYPE, <html>, <head>, viewport, <title> if absent.
+    No LLM call — pure string surgery. Returns the patched HTML.
+    """
+    h = html.lower()
+
+    # Already a full document — just patch missing pieces
+    if '<html' in h:
+        # Add DOCTYPE if missing
+        if '<!doctype' not in h:
+            html = '<!DOCTYPE html>\n' + html
+
+        # Add viewport if missing
+        if 'viewport' not in h:
+            head_end = re.search(r'(<head[^>]*>)', html, re.IGNORECASE)
+            if head_end:
+                insert_at = head_end.end()
+                html = (html[:insert_at]
+                        + '\n    <meta name="viewport" content="width=device-width, initial-scale=1.0">'
+                        + html[insert_at:])
+
+        # Add title if missing
+        if '<title' not in h:
+            head_end = re.search(r'(<head[^>]*>)', html, re.IGNORECASE)
+            if head_end:
+                insert_at = head_end.end()
+                html = (html[:insert_at]
+                        + '\n    <title>Page</title>'
+                        + html[insert_at:])
+
+        return html
+
+    # Fragment — wrap_html_fragment already handles this case
+    return html
 
 
 def validate_python(code: str) -> list[str]:

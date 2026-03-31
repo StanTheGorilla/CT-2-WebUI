@@ -52,6 +52,5 @@
     .panel-body { padding: 20px; display: flex; flex-direction: column; gap: 16px; max-height: 60vh; overflow-y: auto; scroll-behavior: smooth; }
 
     .thinking { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
-    .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.5s ease-in-out infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+    .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 6s ease-in-out infinite; }
 </style>

@@ -5,6 +5,8 @@ import 'highlight.js/styles/github.css';
 import 'katex/dist/katex.min.css';
 
 const marked = new Marked({
+    gfm: true,
+    breaks: true,
     renderer: {
         code({ text, lang }: { text: string; lang?: string }) {
             const language = lang && hljs.getLanguage(lang) ? lang : undefined;

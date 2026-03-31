@@ -3,6 +3,13 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<script>
+			// Apply theme BEFORE render to prevent flash
+			try {
+				var p = JSON.parse(localStorage.getItem('ct2-preferences') || '{}');
+				if (p.theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+			} catch(e) {}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

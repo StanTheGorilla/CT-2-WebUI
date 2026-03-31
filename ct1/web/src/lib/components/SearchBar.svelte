@@ -30,13 +30,19 @@
 </script>
 
 <div class="search-wrap">
-    <input
-        class="search-input"
-        type="text"
-        placeholder="Search conversations..."
-        bind:value={query}
-        oninput={onInput}
-    />
+    <div class="search-field">
+        <svg class="search-icon" width="13" height="13" viewBox="0 0 16 16" fill="none">
+            <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        <input
+            class="search-input"
+            type="text"
+            placeholder="Search..."
+            bind:value={query}
+            oninput={onInput}
+        />
+    </div>
     {#if results.length > 0}
         <div class="search-results">
             {#each results as r}
@@ -52,40 +58,60 @@
 <style>
     .search-wrap {
         position: relative;
-        padding: 0 16px 8px;
+        padding: 0 12px 6px;
+    }
+    .search-field {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+    .search-icon {
+        position: absolute;
+        left: 10px;
+        color: var(--text-muted);
+        pointer-events: none;
     }
     .search-input {
         width: 100%;
-        padding: 8px 12px;
-        font-size: 13px;
+        padding: 7px 10px 7px 30px;
+        font-size: 12px;
         font-family: inherit;
-        border: 1px solid rgba(0, 0, 0, 0.06);
-        border-radius: var(--radius-sm);
-        background: var(--bubble);
+        font-weight: 400;
+        letter-spacing: 0.01em;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface);
         color: var(--text);
         outline: none;
-        transition: border-color var(--transition);
+        transition: border-color 200ms ease, background 200ms ease;
     }
     .search-input:focus {
-        border-color: rgba(0, 0, 0, 0.12);
+        border-color: var(--border-strong);
+        background: var(--surface-hover);
     }
     .search-input::placeholder {
         color: var(--text-muted);
+        font-weight: 400;
     }
     .search-results {
         position: absolute;
-        top: 100%;
-        left: 16px;
-        right: 16px;
+        top: calc(100% + 4px);
+        left: 12px;
+        right: 12px;
         background: var(--bubble-strong);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
-        border-radius: var(--radius-sm);
+        border-radius: 12px;
         box-shadow: var(--shadow-md);
         z-index: 10;
-        max-height: 240px;
+        max-height: 220px;
         overflow-y: auto;
+        scrollbar-width: none;
+        padding: 4px;
+    }
+    .search-results::-webkit-scrollbar {
+        display: none;
     }
     .search-result {
         display: flex;
@@ -93,24 +119,26 @@
         gap: 2px;
         width: 100%;
         text-align: left;
-        padding: 8px 12px;
+        padding: 8px 10px;
         border: none;
         background: transparent;
         cursor: pointer;
         font-family: inherit;
         color: inherit;
-        transition: background var(--transition);
+        border-radius: 8px;
+        transition: background 150ms ease;
     }
     .search-result:hover {
-        background: rgba(0, 0, 0, 0.04);
+        background: var(--surface);
     }
     .result-title {
         font-size: 12px;
         font-weight: 600;
         color: var(--text);
+        letter-spacing: -0.01em;
     }
     .result-snippet {
-        font-size: 12px;
+        font-size: 11px;
         color: var(--text-muted);
         line-height: 1.4;
     }

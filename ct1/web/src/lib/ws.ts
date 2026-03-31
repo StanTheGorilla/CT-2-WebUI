@@ -4,6 +4,10 @@ export class WS {
     private socket: WebSocket | null = null;
     private handler: EventHandler;
     private url: string;
+    private shouldReconnect = true;
+    private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private reconnectDelay = 1000;
+    private maxDelay = 8000;
     onOpen: (() => void) | null = null;
 
     constructor(url: string, handler: EventHandler) {
@@ -12,8 +16,21 @@ export class WS {
     }
 
     connect() {
-        this.socket = new WebSocket(this.url);
+        this.shouldReconnect = true;
+        this.openSocket();
+    }
+
+    private openSocket() {
+        if (this.socket?.readyState === WebSocket.OPEN ||
+            this.socket?.readyState === WebSocket.CONNECTING) return;
+        try {
+            this.socket = new WebSocket(this.url);
+        } catch {
+            this.scheduleReconnect();
+            return;
+        }
         this.socket.onopen = () => {
+            this.reconnectDelay = 1000;
             this.onOpen?.();
         };
         this.socket.onmessage = (e) => {
@@ -24,7 +41,21 @@ export class WS {
         };
         this.socket.onclose = () => {
             this.socket = null;
+            this.scheduleReconnect();
         };
+        this.socket.onerror = () => {
+            // onclose will fire after onerror, triggering reconnect
+        };
+    }
+
+    private scheduleReconnect() {
+        if (!this.shouldReconnect) return;
+        if (this.reconnectTimer) return;
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.openSocket();
+        }, this.reconnectDelay);
+        this.reconnectDelay = Math.min(this.reconnectDelay * 1.5, this.maxDelay);
     }
 
     send(msg: Record<string, any>) {
@@ -34,6 +65,11 @@ export class WS {
     }
 
     disconnect() {
+        this.shouldReconnect = false;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
         this.socket?.close();
         this.socket = null;
     }

@@ -61,7 +61,7 @@
         font-family: var(--font-body);
         border: none;
     }
-    .entry:hover { background: rgba(0,0,0,0.02); }
+    .entry:hover { background: var(--accent-subtle); }
     .entry-row { display: flex; justify-content: space-between; align-items: center; }
     .goal {
         color: var(--text);
@@ -85,7 +85,7 @@
     }
     .chevron.open { transform: rotate(90deg); }
     .detail {
-        border-top: 1px solid rgba(255, 255, 255, 0.35);
+        border-top: 1px solid var(--border);
         padding: 12px 20px 16px;
     }
     .section { margin-top: 8px; }

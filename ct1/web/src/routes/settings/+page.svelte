@@ -4,97 +4,98 @@
     import { preferences } from '$lib/stores/preferences';
 
     const CONTEXT_MIN_FLOOR = 2048;
-    const PRESET_SETTINGS_KEY = 'ct2-preset-settings';
 
     let modelStatus = $state<Record<string, any>>({});
     let config = $state<Record<string, any>>({});
     let loading = $state(true);
 
-    let presets = $state<Record<string, any>>({});
-    let activePreset = $state('');
+    /* ── Model state ── */
+    interface ModelFile {
+        name: string;
+        size_gb: number;
+        thinking: boolean;
+        context_length: number | null;
+    }
+    let availableModels = $state<ModelFile[]>([]);
+    let activeModel = $state('');
+    let modelFound = $state(false);
+    let modelThinking = $state(false);
+    let scanning = $state(false);
     let switching = $state(false);
     let switchError = $state('');
+    let pickerOpen = $state(false);
 
     let contextSize = $state(0);
     let maxContextSize = $state(0);
     let runningContextSize = $state(0);
     let needsRestart = $derived(contextSize !== runningContextSize);
 
-    /* ── Per-preset settings persistence ── */
-
-    function loadPresetSettings(preset: string): Record<string, any> {
-        try {
-            const all = JSON.parse(localStorage.getItem(PRESET_SETTINGS_KEY) || '{}');
-            return all[preset] || {};
-        } catch { return {}; }
-    }
-
-    function savePresetSettings(preset: string, settings: Record<string, any>) {
-        try {
-            const all = JSON.parse(localStorage.getItem(PRESET_SETTINGS_KEY) || '{}');
-            all[preset] = settings;
-            localStorage.setItem(PRESET_SETTINGS_KEY, JSON.stringify(all));
-        } catch {}
-    }
-
-    function applyPresetContext(preset: string) {
-        const info = presets[preset];
-        maxContextSize = info?.context_size ?? 4096;
-        const saved = loadPresetSettings(preset);
-        const initial = saved.context_size ?? maxContextSize;
-        contextSize = Math.max(CONTEXT_MIN_FLOOR, Math.min(initial, maxContextSize));
-        runningContextSize = contextSize;
-    }
-
-    function onContextChange() {
-        if (!activePreset) return;
-        savePresetSettings(activePreset, { context_size: contextSize });
-    }
-
     /* ── Data loading ── */
 
     async function loadData() {
         loading = true;
         try {
-            const [statusRes, configRes, presetsRes] = await Promise.all([
+            const [statusRes, configRes, modelRes, modelsRes] = await Promise.all([
                 fetch('/api/status'),
                 fetch('/api/config'),
-                fetch('/api/presets'),
+                fetch('/api/model'),
+                fetch('/api/models'),
             ]);
             const statusData = await statusRes.json();
-            modelStatus = statusData.director ?? {};
+            modelStatus = statusData.model ?? statusData.director ?? {};
             config = await configRes.json();
-            const presetsData = await presetsRes.json();
-            presets = presetsData.presets ?? {};
-            activePreset = presetsData.active ?? '';
-            applyPresetContext(activePreset);
+
+            const modelData = await modelRes.json();
+            activeModel = modelData.active_model || '';
+            modelFound = modelData.model_found ?? false;
+            modelThinking = modelData.enable_thinking ?? false;
+
+            const ggufCtx = modelData.gguf_context_length;
+            const yamlCtx = modelData.context_size;
+            maxContextSize = ggufCtx ?? yamlCtx ?? 4096;
+            const initial = yamlCtx ?? maxContextSize;
+            contextSize = Math.max(CONTEXT_MIN_FLOOR, Math.min(initial, maxContextSize));
+            runningContextSize = contextSize;
+
+            const modelsData = await modelsRes.json();
+            availableModels = modelsData.models ?? [];
         } finally {
             loading = false;
         }
     }
 
-    onMount(loadData);
+    async function scanModels() {
+        scanning = true;
+        try {
+            const res = await fetch('/api/models');
+            availableModels = (await res.json()).models ?? [];
+        } finally {
+            scanning = false;
+        }
+    }
 
-    async function switchPreset(name: string) {
-        if (name === activePreset || switching) return;
+    async function selectModel(modelName: string) {
+        if (modelName === activeModel) {
+            pickerOpen = false;
+            return;
+        }
+        pickerOpen = false;
         switching = true;
         switchError = '';
         try {
-            const res = await fetch('/api/preset', {
+            const res = await fetch('/api/model/select', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ preset: name }),
+                body: JSON.stringify({ model: modelName }),
             });
             const data = await res.json();
             if (data.error) {
                 switchError = data.error;
             } else {
-                activePreset = name;
-                applyPresetContext(name);
                 await loadData();
             }
         } catch (e: any) {
-            switchError = e.message || 'Failed to switch preset';
+            switchError = e.message || 'Failed to select model';
         } finally {
             switching = false;
         }
@@ -104,10 +105,10 @@
         switching = true;
         switchError = '';
         try {
-            const res = await fetch('/api/preset', {
+            const res = await fetch('/api/restart', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ preset: activePreset, context_size: contextSize }),
+                body: JSON.stringify({ context_size: contextSize }),
             });
             const data = await res.json();
             if (data.error) {
@@ -123,104 +124,144 @@
         }
     }
 
-    function formatCtx(n: number): string {
+    function formatSize(gb: number): string {
+        if (gb >= 1) return gb.toFixed(1) + ' GB';
+        return Math.round(gb * 1024) + ' MB';
+    }
+
+    function formatCtx(n: number | null): string {
+        if (!n) return '—';
         return n >= 1024 ? `${Math.round(n / 1024)}K` : `${n}`;
     }
+
+    function extractParams(name: string): string {
+        const m = name.match(/(\d+\.?\d*)[Bb]/);
+        return m ? m[1] + 'B' : '';
+    }
+
+    onMount(loadData);
 </script>
 
-<div class="settings-page">
+<div class="settings-page" onclick={() => { if (pickerOpen) pickerOpen = false; }}>
 
-    <!-- ─── Preset Selector ─── -->
+    <!-- ─── Model Selection ─── -->
     <section class="section">
-        <h2 class="section-title">Model Preset</h2>
+        <div class="section-header">
+            <h2 class="section-title">Model</h2>
+            <button class="scan-btn" onclick={(e) => { e.stopPropagation(); scanModels(); }} disabled={scanning}>
+                {scanning ? 'Scanning…' : 'Scan models'}
+            </button>
+        </div>
+
         {#if loading}
             <div class="skeleton-card"></div>
-            <div class="skeleton-card"></div>
         {:else}
-            <div class="preset-grid">
-                {#each Object.entries(presets) as [name, info]}
-                    <button
-                        class="preset-card"
-                        class:active={name === activePreset}
-                        disabled={switching}
-                        onclick={() => switchPreset(name)}
-                    >
-                        <!-- Radio dot -->
-                        <div class="radio-col">
-                            <span class="radio" class:checked={name === activePreset}>
-                                {#if name === activePreset}
-                                    <span class="radio-dot"></span>
-                                {/if}
-                            </span>
-                        </div>
+            <!-- Active model display -->
+            <div class="model-selector" onclick={(e) => e.stopPropagation()}>
+                <button
+                    class="model-box"
+                    class:open={pickerOpen}
+                    class:assigned={modelFound}
+                    onclick={() => { pickerOpen = !pickerOpen; }}
+                    disabled={switching}
+                >
+                    <span class="model-dot" class:found={modelFound} class:empty={!activeModel}></span>
+                    <span class="model-box-label">
+                        {#if switching}
+                            Loading model…
+                        {:else if activeModel}
+                            {activeModel}
+                        {:else}
+                            No model selected — click to choose
+                        {/if}
+                    </span>
+                    {#if activeModel && modelThinking}
+                        <span class="cap-badge thinking">thinking</span>
+                    {/if}
+                    {#if activeModel}
+                        {@const params = extractParams(activeModel)}
+                        {#if params}
+                            <span class="cap-badge params">{params}</span>
+                        {/if}
+                    {/if}
+                    <span class="box-chevron" class:open={pickerOpen}></span>
+                </button>
 
-                        <div class="preset-body">
-                            <div class="preset-top">
-                                <span class="preset-name">{info.name}</span>
-                                <span class="preset-arch">{info.solo ? 'Solo' : 'Cooperative'}</span>
+                {#if pickerOpen}
+                    <div class="model-dropdown" onclick={(e) => e.stopPropagation()}>
+                        {#if availableModels.length === 0}
+                            <div class="drop-empty">
+                                No .gguf files found in <code>models/</code>.<br>
+                                Add model files there and click "Scan models".
                             </div>
-
-                            <p class="preset-desc">{info.description}</p>
-
-                            <!-- Best for / Not for -->
-                            {#if info.best_for?.length}
-                                <div class="use-case-row">
-                                    <div class="use-case-col">
-                                        <span class="use-case-label good">Best for</span>
-                                        <ul class="use-case-list">
-                                            {#each info.best_for as item}
-                                                <li>{item}</li>
-                                            {/each}
-                                        </ul>
-                                    </div>
-                                    {#if info.not_for?.length}
-                                        <div class="use-case-col">
-                                            <span class="use-case-label avoid">Not ideal for</span>
-                                            <ul class="use-case-list muted">
-                                                {#each info.not_for as item}
-                                                    <li>{item}</li>
-                                                {/each}
-                                            </ul>
+                        {:else}
+                            {#each availableModels as m}
+                                <button
+                                    class="drop-item"
+                                    class:active={activeModel === m.name}
+                                    onclick={() => selectModel(m.name)}
+                                >
+                                    <div class="drop-main">
+                                        <span class="drop-name">{m.name}</span>
+                                        <div class="drop-meta">
+                                            <span class="drop-size">{formatSize(m.size_gb)}</span>
+                                            {#if m.context_length}
+                                                <span class="drop-sep"></span>
+                                                <span class="drop-ctx">{formatCtx(m.context_length)} ctx</span>
+                                            {/if}
+                                            {#if m.thinking}
+                                                <span class="drop-sep"></span>
+                                                <span class="drop-thinking">thinking</span>
+                                            {/if}
                                         </div>
-                                    {/if}
-                                </div>
-                            {/if}
-
-                            <!-- Technical specs -->
-                            <div class="preset-footer">
-                                <div class="preset-specs">
-                                    <span class="spec">{info.director_model?.replace('.gguf', '')}</span>
-                                    {#if info.context_size}
-                                        <span class="spec-sep"></span>
-                                        <span class="spec">{formatCtx(info.context_size)} context</span>
-                                    {/if}
-                                </div>
-                                {#if info.adaptive && info.task_modes?.length}
-                                    <div class="preset-modes">
-                                        {#each info.task_modes as mode}
-                                            <span class="mode-pill">{mode}</span>
-                                        {/each}
                                     </div>
-                                {/if}
-                            </div>
-                        </div>
-                    </button>
-                {/each}
+                                    {#if activeModel === m.name}
+                                        <span class="drop-check">✓</span>
+                                    {/if}
+                                </button>
+                            {/each}
+                        {/if}
+                    </div>
+                {/if}
             </div>
 
             {#if switching}
                 <div class="switch-banner">
                     <div class="switch-spinner"></div>
-                    <span>Restarting servers with new model...</span>
+                    <span>Loading model — this may take a minute…</span>
                 </div>
             {/if}
             {#if switchError}
-                <div class="switch-banner error">
-                    <span>{switchError}</span>
-                </div>
+                <div class="switch-banner error"><span>{switchError}</span></div>
             {/if}
         {/if}
     </section>
+
+    <!-- ─── Context Size ─── -->
+    {#if maxContextSize > 0 && activeModel}
+        <section class="section">
+            <h2 class="section-title">Context Size</h2>
+            <div class="config-card">
+                <div class="config-row">
+                    <label>Context Window</label>
+                    <div class="slider-container">
+                        <input type="range"
+                            min={CONTEXT_MIN_FLOOR}
+                            max={maxContextSize}
+                            bind:value={contextSize}
+                        />
+                        <span class="slider-value">{Math.round(contextSize / 1024)}K</span>
+                    </div>
+                </div>
+            </div>
+            {#if needsRestart}
+                <div class="restart-notice">
+                    <span>Restart required to apply changes.</span>
+                    <button onclick={restartModel} class="restart-btn" disabled={switching}>Restart Model</button>
+                </div>
+            {/if}
+        </section>
+    {/if}
 
     <!-- ─── Pipeline ─── -->
     <section class="section">
@@ -242,6 +283,105 @@
         </label>
     </section>
 
+    <!-- ─── Atlas Mode ─── -->
+    <section class="section">
+        <h2 class="section-title">Atlas Mode <span class="beta-badge">Beta</span></h2>
+        <label class="toggle-row">
+            <span class="toggle-label">
+                <span class="toggle-name">Atlas Mode</span>
+                <span class="toggle-desc">Adaptive test-time compute: generates multiple candidates, selects the best, repairs failures automatically.</span>
+            </span>
+            <button
+                class="toggle-switch"
+                class:on={$preferences.atlasMode}
+                onclick={() => preferences.update(p => ({ ...p, atlasMode: !p.atlasMode }))}
+                role="switch"
+                aria-checked={$preferences.atlasMode}
+            >
+                <span class="toggle-knob"></span>
+            </button>
+        </label>
+
+        {#if $preferences.atlasMode}
+            <div class="atlas-settings">
+                <div class="atlas-row">
+                    <span class="atlas-label">Effort Mode</span>
+                    <select
+                        class="atlas-select"
+                        value={$preferences.atlasEffortMode}
+                        onchange={(e) => preferences.update(p => ({ ...p, atlasEffortMode: (e.target as HTMLSelectElement).value as 'auto' | 'manual' }))}
+                    >
+                        <option value="auto">Auto</option>
+                        <option value="manual">Manual</option>
+                    </select>
+                </div>
+
+                {#if $preferences.atlasEffortMode === 'manual'}
+                    <div class="atlas-row">
+                        <span class="atlas-label">Effort Level</span>
+                        <div class="slider-container">
+                            <input type="range"
+                                min="1"
+                                max="5"
+                                value={$preferences.atlasEffortLevel}
+                                oninput={(e) => preferences.update(p => ({ ...p, atlasEffortLevel: Number((e.target as HTMLInputElement).value) }))}
+                            />
+                            <span class="slider-value">{$preferences.atlasEffortLevel}</span>
+                        </div>
+                    </div>
+                {/if}
+
+                <label class="toggle-row sub-toggle">
+                    <span class="toggle-label">
+                        <span class="toggle-name">Self-Verification</span>
+                        <span class="toggle-desc">Automatically verify outputs against requirements before finalizing.</span>
+                    </span>
+                    <button
+                        class="toggle-switch"
+                        class:on={$preferences.atlasSelfVerification}
+                        onclick={() => preferences.update(p => ({ ...p, atlasSelfVerification: !p.atlasSelfVerification }))}
+                        role="switch"
+                        aria-checked={$preferences.atlasSelfVerification}
+                    >
+                        <span class="toggle-knob"></span>
+                    </button>
+                </label>
+
+                <label class="toggle-row sub-toggle">
+                    <span class="toggle-label">
+                        <span class="toggle-name">Multi-Perspective Review</span>
+                        <span class="toggle-desc">Evaluate candidates from multiple angles before selecting the best.</span>
+                    </span>
+                    <button
+                        class="toggle-switch"
+                        class:on={$preferences.atlasMultiPerspective}
+                        onclick={() => preferences.update(p => ({ ...p, atlasMultiPerspective: !p.atlasMultiPerspective }))}
+                        role="switch"
+                        aria-checked={$preferences.atlasMultiPerspective}
+                    >
+                        <span class="toggle-knob"></span>
+                    </button>
+                </label>
+
+                <label class="toggle-row sub-toggle">
+                    <span class="toggle-label">
+                        <span class="toggle-name">Iterative Refinement</span>
+                        <span class="toggle-desc">Automatically repair and refine outputs through successive iterations.</span>
+                    </span>
+                    <button
+                        class="toggle-switch"
+                        class:on={$preferences.atlasIterativeRefinement}
+                        onclick={() => preferences.update(p => ({ ...p, atlasIterativeRefinement: !p.atlasIterativeRefinement }))}
+                        role="switch"
+                        aria-checked={$preferences.atlasIterativeRefinement}
+                    >
+                        <span class="toggle-knob"></span>
+                    </button>
+                </label>
+            </div>
+        {/if}
+    </section>
+
     <!-- ─── Server Status ─── -->
     <section class="section">
         <h2 class="section-title">Server Status</h2>
@@ -254,62 +394,19 @@
         {/if}
     </section>
 
-    <!-- ─── Context Size ─── -->
-    {#if maxContextSize > 0}
-        <section class="section">
-            <h2 class="section-title">Context Size</h2>
-            <div class="config-card">
-                <div class="config-row">
-                    <label>Context Size</label>
-                    <div class="slider-container">
-                        <input type="range"
-                            min={CONTEXT_MIN_FLOOR}
-                            max={maxContextSize}
-                            bind:value={contextSize}
-                            oninput={onContextChange}
-                        />
-                        <span class="slider-value">{Math.round(contextSize / 1024)}K</span>
-                    </div>
-                </div>
-            </div>
-            {#if needsRestart}
-                <div class="restart-notice">
-                    <span>Restart required to apply changes.</span>
-                    <button onclick={restartModel} class="restart-btn" disabled={switching}>Restart Model</button>
-                </div>
-            {/if}
-        </section>
-    {/if}
-
     <!-- ─── Configuration ─── -->
-    {#if config.servers}
+    {#if config.preset}
         <section class="section">
             <h2 class="section-title">Configuration</h2>
-            {#each Object.entries(config.servers) as [name, info]}
-                <div class="config-card">
-                    <div class="config-card-title">{name}</div>
-                    {#each Object.entries(info as Record<string, any>) as [key, value]}
-                        <div class="config-row">
-                            <span class="config-key">{key.replace(/_/g, ' ')}</span>
-                            <span class="config-val">{value}</span>
-                        </div>
-                    {/each}
-                </div>
-            {/each}
-
-            {#if config.models}
-                {#each Object.entries(config.models) as [name, params]}
-                    <div class="config-card">
-                        <div class="config-card-title">{name} parameters</div>
-                        {#each Object.entries(params as Record<string, any>) as [key, value]}
-                            <div class="config-row">
-                                <span class="config-key">{key.replace(/_/g, ' ')}</span>
-                                <span class="config-val">{value}</span>
-                            </div>
-                        {/each}
-                    </div>
-                {/each}
-            {/if}
+            <div class="config-card">
+                <div class="config-row"><span class="config-key">model</span><span class="config-val">{config.model || '—'}</span></div>
+                <div class="config-row"><span class="config-key">context size</span><span class="config-val">{formatCtx(config.context_size)}</span></div>
+                <div class="config-row"><span class="config-key">thinking</span><span class="config-val">{config.enable_thinking ? 'enabled' : 'disabled'}</span></div>
+                <div class="config-row"><span class="config-key">temperature</span><span class="config-val">{config.temperature}</span></div>
+                <div class="config-row"><span class="config-key">top p</span><span class="config-val">{config.top_p}</span></div>
+                <div class="config-row"><span class="config-key">presence penalty</span><span class="config-val">{config.presence_penalty}</span></div>
+                <div class="config-row"><span class="config-key">port</span><span class="config-val">{config.port}</span></div>
+            </div>
         </section>
     {/if}
 </div>
@@ -336,12 +433,34 @@
         margin-bottom: 12px;
     }
 
+    /* ── Section header row ── */
+    .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+    }
+    .section-header .section-title { margin-bottom: 0; }
+    .scan-btn {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 11px;
+        border-radius: 9999px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-family: inherit;
+        transition: color var(--transition), background var(--transition);
+    }
+    .scan-btn:hover:not(:disabled) { background: var(--bubble-strong); color: var(--text); }
+    .scan-btn:disabled { opacity: 0.4; cursor: default; }
+
     /* ── Skeleton loading ── */
     .skeleton-card {
-        height: 110px;
+        height: 56px;
         border-radius: var(--radius);
         background: var(--bubble);
-        margin-bottom: 8px;
         animation: breathe 3s ease-in-out infinite;
     }
     .skeleton-row {
@@ -351,182 +470,182 @@
         animation: breathe 3s ease-in-out infinite;
     }
 
-    /* ── Preset Grid ── */
-    .preset-grid {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
+    /* ── Model Selector ── */
+    .model-selector { position: relative; }
 
-    .preset-card {
+    .model-box {
         display: flex;
-        align-items: flex-start;
-        gap: 14px;
-        text-align: left;
-        cursor: pointer;
+        align-items: center;
+        gap: 8px;
         width: 100%;
+        padding: 12px 16px;
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
         border-radius: var(--radius);
-        padding: 16px 20px;
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        color: var(--text);
+        text-align: left;
         box-shadow: var(--shadow-sm);
         transition:
-            box-shadow var(--transition),
+            border-color var(--transition),
             background var(--transition),
-            border-color var(--transition);
-        font-family: inherit;
-        color: inherit;
+            box-shadow var(--transition);
     }
-    .preset-card:hover:not(:disabled) {
+    .model-box:hover:not(:disabled) {
         background: var(--bubble-strong);
         box-shadow: var(--shadow-md);
     }
-    .preset-card.active {
-        background: var(--bubble-strong);
-        border-color: var(--border);
-        box-shadow: var(--bubble-glow);
+    .model-box.open {
+        border-color: var(--text-muted);
+        box-shadow: var(--shadow-md);
     }
-    .preset-card:disabled {
+    .model-box:disabled {
         opacity: 0.55;
         cursor: wait;
     }
-
-    /* ── Radio ── */
-    .radio-col {
-        padding-top: 2px;
+    .model-box-label {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .box-chevron {
         flex-shrink: 0;
+        width: 0; height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 5px solid var(--text-muted);
+        transition: transform 0.15s;
     }
-    .radio {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        border: 2px solid var(--text-muted);
-        transition: border-color var(--transition);
+    .box-chevron.open { transform: rotate(180deg); }
+
+    /* ── Capability badges ── */
+    .cap-badge {
+        font-size: 10px;
+        font-weight: 600;
+        font-family: inherit;
+        padding: 2px 8px;
+        border-radius: 9999px;
+        flex-shrink: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
     }
-    .radio.checked {
-        border-color: var(--text);
+    .cap-badge.thinking {
+        color: var(--text-muted);
+        background: rgba(139, 92, 246, 0.12);
+        border: 1px solid rgba(139, 92, 246, 0.2);
     }
-    .radio-dot {
+    .cap-badge.params {
+        color: var(--text-muted);
+        background: rgba(59, 130, 246, 0.1);
+        border: 1px solid rgba(59, 130, 246, 0.18);
+    }
+
+    /* ── Model dot ── */
+    .model-dot {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: var(--text);
+        flex-shrink: 0;
     }
+    .model-dot.found { background: #3fb950; }
+    .model-dot.empty { background: var(--text-muted); opacity: 0.35; }
 
-    /* ── Preset Content ── */
-    .preset-body {
-        flex: 1;
-        min-width: 0;
+    /* ── Dropdown ── */
+    .model-dropdown {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        z-index: 200;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-lg, var(--shadow-md));
+        overflow: hidden;
+        max-height: 300px;
+        overflow-y: auto;
+        scrollbar-width: thin;
     }
-    .preset-top {
-        display: flex;
-        align-items: baseline;
-        gap: 8px;
-        margin-bottom: 4px;
-    }
-    .preset-name {
-        font-size: 15px;
-        font-weight: 600;
-        color: var(--text);
-    }
-    .preset-arch {
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--text-muted);
-    }
-    .preset-desc {
-        font-size: 13px;
-        color: var(--text-secondary);
-        line-height: 1.45;
-        margin: 0 0 10px;
-    }
-
-    /* ── Use-case columns ── */
-    .use-case-row {
-        display: flex;
-        gap: 20px;
-        margin-bottom: 12px;
-    }
-    .use-case-col {
-        flex: 1;
-        min-width: 0;
-    }
-    .use-case-label {
-        display: block;
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 4px;
-    }
-    .use-case-label.good { color: var(--text-secondary); }
-    .use-case-label.avoid { color: var(--text-muted); }
-    .use-case-list {
-        list-style: none;
-        padding: 0;
-        margin: 0;
+    .drop-empty {
+        padding: 16px;
         font-size: 12.5px;
-        line-height: 1.55;
-        color: var(--text-secondary);
+        color: var(--text-muted);
+        line-height: 1.6;
+        font-family: inherit;
     }
-    .use-case-list.muted { color: var(--text-muted); }
-    .use-case-list li::before {
-        content: '';
-        display: inline-block;
-        width: 4px;
-        height: 4px;
-        border-radius: 50%;
-        background: currentColor;
-        opacity: 0.4;
-        margin-right: 7px;
-        vertical-align: middle;
-        position: relative;
-        top: -1px;
+    .drop-empty code {
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        background: var(--surface);
+        padding: 1px 4px;
+        border-radius: 3px;
     }
-
-    /* ── Footer: specs + mode pills ── */
-    .preset-footer {
+    .drop-item {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding-top: 10px;
-        border-top: 1px solid var(--border-subtle);
+        width: 100%;
+        padding: 10px 14px;
+        border: none;
+        background: none;
+        cursor: pointer;
+        font-family: inherit;
+        text-align: left;
+        border-bottom: 1px solid var(--border-subtle);
+        transition: background var(--transition);
     }
-    .preset-specs {
+    .drop-item:last-child { border-bottom: none; }
+    .drop-item:hover { background: var(--bubble-strong); }
+    .drop-item.active { background: rgba(63, 185, 80, 0.06); }
+    .drop-main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+    }
+    .drop-name {
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .drop-meta {
         display: flex;
         align-items: center;
         gap: 6px;
-        font-size: 11.5px;
-        font-family: var(--font-mono);
+        font-size: 11px;
         color: var(--text-muted);
     }
-    .spec-sep {
+    .drop-size { font-family: var(--font-mono); }
+    .drop-ctx { font-family: var(--font-mono); }
+    .drop-thinking {
+        color: rgba(139, 92, 246, 0.75);
+        font-weight: 500;
+    }
+    .drop-sep {
         width: 3px;
         height: 3px;
         border-radius: 50%;
         background: var(--text-muted);
-        opacity: 0.4;
+        opacity: 0.35;
     }
-    .preset-modes {
-        display: flex;
-        align-items: center;
-        gap: 4px;
+    .drop-check {
+        color: #3fb950;
+        font-size: 14px;
+        font-weight: 600;
         flex-shrink: 0;
-    }
-    .mode-pill {
-        font-size: 10.5px;
-        font-weight: 500;
-        color: var(--text-muted);
-        background: var(--accent-subtle);
-        padding: 2px 8px;
-        border-radius: var(--radius-pill);
-        text-transform: capitalize;
     }
 
     /* ── Switch feedback ── */
@@ -558,14 +677,6 @@
 
     /* ── Status ── */
     .status-grid { display: flex; flex-direction: column; gap: 6px; }
-    .solo-note {
-        font-size: 13px;
-        color: var(--text-muted);
-        padding: 10px 16px;
-        background: var(--bubble);
-        border: var(--bubble-border);
-        border-radius: var(--radius-sm);
-    }
 
     /* ── Config cards ── */
     .config-card {
@@ -577,14 +688,6 @@
         padding: 14px 18px;
         box-shadow: var(--shadow-xs);
         margin-bottom: 8px;
-    }
-    .config-card-title {
-        font-size: 12px;
-        font-weight: 600;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 6px;
     }
     .config-row {
         display: flex;
@@ -731,15 +834,67 @@
         color: var(--bg);
         background: var(--text-secondary);
         border: none;
-        border-radius: var(--radius-sm);
+        border-radius: 9999px;
         cursor: pointer;
         transition: opacity var(--transition);
     }
-    .restart-btn:hover:not(:disabled) {
-        opacity: 0.85;
+    .restart-btn:hover:not(:disabled) { opacity: 0.85; }
+    .restart-btn:disabled { opacity: 0.5; cursor: wait; }
+
+    /* ── Atlas Mode ── */
+    .beta-badge {
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--text-muted);
+        background: rgba(210, 153, 34, 0.12);
+        border: 1px solid rgba(210, 153, 34, 0.25);
+        padding: 1px 6px;
+        border-radius: 9999px;
+        vertical-align: middle;
+        margin-left: 6px;
+        text-transform: none;
+        letter-spacing: 0;
     }
-    .restart-btn:disabled {
-        opacity: 0.5;
-        cursor: wait;
+    .atlas-settings {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 8px;
+    }
+    .atlas-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 18px;
+        background: var(--bubble);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-xs);
+    }
+    .atlas-label {
+        font-size: 13px;
+        font-weight: 550;
+        color: var(--text);
+    }
+    .atlas-select {
+        font-family: inherit;
+        font-size: 12.5px;
+        color: var(--text);
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 4px 10px;
+        cursor: pointer;
+        outline: none;
+    }
+    .sub-toggle {
+        padding: 10px 18px;
+    }
+    .sub-toggle .toggle-name {
+        font-size: 13px;
+    }
+    .sub-toggle .toggle-desc {
+        font-size: 11.5px;
     }
 </style>
