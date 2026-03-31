@@ -25,6 +25,14 @@
     let switchError = $state('');
     let pickerOpen = $state(false);
 
+    /* ── Backend state ── */
+    let activeBackend = $state<'vulkan' | 'cuda'>('vulkan');
+    let switchingBackend = $state(false);
+    let backendError = $state('');
+    const isMac = $derived(
+        typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac')
+    );
+
     let contextSize = $state(0);
     let maxContextSize = $state(0);
     let runningContextSize = $state(0);
@@ -44,6 +52,7 @@
             const statusData = await statusRes.json();
             modelStatus = statusData.model ?? statusData.director ?? {};
             config = await configRes.json();
+            activeBackend = (config.backend as 'vulkan' | 'cuda') ?? 'vulkan';
 
             const modelData = await modelRes.json();
             activeModel = modelData.active_model || '';
@@ -71,6 +80,27 @@
             availableModels = (await res.json()).models ?? [];
         } finally {
             scanning = false;
+        }
+    }
+
+    async function switchBackend(backend: 'vulkan' | 'cuda') {
+        if (backend === activeBackend) return;
+        switchingBackend = true;
+        backendError = '';
+        try {
+            const res = await fetch('/api/backend/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ backend }),
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            activeBackend = backend;
+            await loadData();
+        } catch (e: any) {
+            backendError = e.message || 'Failed to switch backend';
+        } finally {
+            switchingBackend = false;
         }
     }
 
@@ -236,6 +266,33 @@
             {/if}
         {/if}
     </section>
+
+    <!-- ─── Backend ─── -->
+    {#if !isMac}
+        <div class="setting-row">
+            <label class="setting-label">Backend</label>
+            <div class="backend-picker">
+                <button
+                    class="backend-btn"
+                    class:active={activeBackend === 'vulkan'}
+                    onclick={() => switchBackend('vulkan')}
+                    disabled={switchingBackend}
+                >Vulkan</button>
+                <button
+                    class="backend-btn"
+                    class:active={activeBackend === 'cuda'}
+                    onclick={() => switchBackend('cuda')}
+                    disabled={switchingBackend}
+                >CUDA</button>
+            </div>
+            {#if backendError}
+                <p class="error-text">{backendError}</p>
+            {/if}
+            {#if switchingBackend}
+                <p class="switching-text">Switching backend…</p>
+            {/if}
+        </div>
+    {/if}
 
     <!-- ─── Context Size ─── -->
     {#if maxContextSize > 0 && activeModel}
@@ -897,4 +954,39 @@
     .sub-toggle .toggle-desc {
         font-size: 11.5px;
     }
+
+    /* ── Backend switcher ── */
+    .setting-row {
+        margin-bottom: 32px;
+    }
+    .setting-label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 12px;
+    }
+    .backend-picker {
+        display: flex;
+        gap: 0.5rem;
+    }
+    .backend-btn {
+        padding: 0.35rem 0.9rem;
+        border: 1px solid var(--border, #444);
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font-size: 0.85rem;
+        opacity: 0.6;
+        transition: opacity 0.15s, border-color 0.15s;
+    }
+    .backend-btn.active {
+        opacity: 1;
+        border-color: var(--accent, #7c6af7);
+    }
+    .backend-btn:disabled { cursor: wait; opacity: 0.3; }
+    .switching-text { font-size: 0.8rem; opacity: 0.6; margin: 0.25rem 0 0; }
 </style>
