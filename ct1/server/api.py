@@ -37,11 +37,24 @@ _workspace: WorkspaceManager | None = None
 
 
 def _ensure_frontend_built() -> None:
-    """Run `npm run build` in ct1/web/ on every startup to keep the frontend current."""
+    """Run npm install (if needed) then npm run build on every startup."""
     import subprocess
     web_dir = Path(__file__).parent.parent / "web"
-    print("[api] Building frontend...")
     try:
+        # Install dependencies if node_modules is missing
+        if not (web_dir / "node_modules").exists():
+            print("[api] Installing frontend dependencies (npm install)...")
+            result = subprocess.run(
+                ["npm", "install"],
+                cwd=str(web_dir),
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                print(f"[api] WARNING: npm install failed:\n{result.stderr[-1000:]}")
+                return
+
+        print("[api] Building frontend...")
         result = subprocess.run(
             ["npm", "run", "build"],
             cwd=str(web_dir),
