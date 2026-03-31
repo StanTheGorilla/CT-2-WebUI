@@ -1359,12 +1359,17 @@ class Orchestrator:
                 if detected != "other":
                     output_type = detected
 
+            # Extract code from markdown fences before validating.
+            # Models often wrap output in explanation text + ```lang ... ``` fences.
+            # Running ast.parse / HTML checks on raw markdown causes spurious errors.
+            _validate_target = extract_code(strip_think_tags(final_response))
+
             # HTML: fix missing boilerplate deterministically (no AI)
-            if output_type in ("html_page", "other") and detect_output_type(final_response) == "html_page":
+            if output_type in ("html_page", "other") and detect_output_type(_validate_target) == "html_page":
                 final_response = fix_html_structure(final_response)
 
             # Programmatic validation — only flags critical issues now
-            issues = validate_output(final_response, output_type)
+            issues = validate_output(_validate_target, output_type)
 
             if issues:
                 emit("validating", issues=issues,
@@ -1375,7 +1380,7 @@ class Orchestrator:
                 fix_prompt = (
                     f"Fix ALL these issues in the code:\n"
                     + "\n".join(f"- {i}" for i in issues)
-                    + f"\n\nOriginal code:\n{draft}"
+                    + f"\n\nOriginal code:\n{_validate_target}"
                 )
 
                 def on_fix_token(token, kind):

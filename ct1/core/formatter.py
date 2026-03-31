@@ -178,9 +178,10 @@ def strip_think_tags(text: str) -> str:
 def extract_code(text: str) -> str:
     """Extract code from markdown fences. Handles multiple fences and
     various language labels that 4B models produce."""
+    # Match any language label (or none) — models use python, Python, py, plaintext, etc.
     # Try to find the largest fenced block (models sometimes wrap entire output)
     fences = list(re.finditer(
-        r'```(?:html|css|js|javascript|python|py|cpp|c\+\+|c|rust|go|java|sh|bash|typescript|ts)?\s*\n(.*?)```',
+        r'```(?:\w[\w.+-]*)?\s*\n(.*?)```',
         text, re.DOTALL
     ))
     if fences:
@@ -189,7 +190,7 @@ def extract_code(text: str) -> str:
         return largest.group(1).strip()
     # Handle unclosed fence (model cut off before closing ```)
     unclosed = re.match(
-        r'```(?:html|css|js|javascript|python|py|cpp|c\+\+|c|rust|go|java|sh|bash|typescript|ts)?\s*\n(.*)',
+        r'```(?:\w[\w.+-]*)?\s*\n(.*)',
         text, re.DOTALL
     )
     if unclosed:
