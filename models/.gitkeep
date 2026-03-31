@@ -1,0 +1,7 @@
+# Place your .gguf model files in this directory.
+# They are gitignored — download them separately.
+#
+# Recommended models:
+#   - Qwen3.5-4B (Q4_K_M or Q6_K) — best balance
+#   - NVIDIA Nemotron-3-Nano-4B (Q4_K_M) — excellent thinking
+#   - Qwen3.5-2B (Q4_K_M) — fastest, lowest VRAM
