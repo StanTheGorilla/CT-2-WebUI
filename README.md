@@ -41,7 +41,7 @@ CT-2 wraps a single local GGUF model in a multi-phase pipeline: deterministic ro
 ### 1. Clone & install dependencies
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ct2.git
+git clone [https://github.com/YOUR_USERNAME/ct2.git](https://github.com/StanTheGorilla/CT-2.git)
 cd ct2
 
 # Python backend
