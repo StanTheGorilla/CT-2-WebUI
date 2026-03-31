@@ -39,13 +39,16 @@ _workspace: WorkspaceManager | None = None
 def _ensure_frontend_built() -> None:
     """Run npm install (if needed) then npm run build on every startup."""
     import subprocess
+    import sys as _sys
+    # On Windows, npm is a .cmd script — subprocess needs the explicit extension
+    npm = "npm.cmd" if _sys.platform == "win32" else "npm"
     web_dir = Path(__file__).parent.parent / "web"
     try:
         # Install dependencies if node_modules is missing
         if not (web_dir / "node_modules").exists():
             print("[api] Installing frontend dependencies (npm install)...")
             result = subprocess.run(
-                ["npm", "install"],
+                [npm, "install"],
                 cwd=str(web_dir),
                 capture_output=True,
                 text=True,
@@ -56,7 +59,7 @@ def _ensure_frontend_built() -> None:
 
         print("[api] Building frontend...")
         result = subprocess.run(
-            ["npm", "run", "build"],
+            [npm, "run", "build"],
             cwd=str(web_dir),
             capture_output=True,
             text=True,
