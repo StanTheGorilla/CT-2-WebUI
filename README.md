@@ -30,9 +30,11 @@ CT-2 wraps a single local GGUF model in a multi-phase pipeline: deterministic ro
 - **Node.js 20+**
 - **llama.cpp server** (`llama-server`) — [download a release](https://github.com/ggerganov/llama.cpp/releases)
 - **A GGUF model file** — any model works, but CT-2 is tested with:
-  - [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B-GGUF) — best balance of speed and quality
-  - [NVIDIA Nemotron-3-Nano-4B](https://huggingface.co/nvidia/Nemotron-3-Nano-4B-Instruct-GGUF) — excellent with thinking enabled
-  - [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B-GGUF) — fastest, lowest VRAM
+  - [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF) — best balance of speed and quality
+  - [NVIDIA Nemotron-Mini-4B](https://huggingface.co/nvidia/Nemotron-Mini-4B-Instruct-GGUF) — excellent with thinking enabled
+  - [Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF) — fast, low VRAM, minimum size that works reliably
+
+> **Note:** Models without thinking support (non-`<think>` instruction-tuned models) are not well supported and may produce inconsistent output. Models smaller than ~1B parameters are also unreliable even with thinking enabled.
 
 ---
 
