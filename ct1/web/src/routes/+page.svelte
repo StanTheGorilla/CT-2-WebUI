@@ -327,6 +327,7 @@
                             <p>{turn.content}</p>
                         </div>
                     {:else if turn.isCode && turn.route !== 'ROUTE_COMPUTER'}
+                        {@const hExt = planTypeToExt(turn.plan?.output_type)}
                         <div class="bubble-row">
                             {#if turn.route}
                                 <div class="route-row">
@@ -356,7 +357,6 @@
                                     </details>
                                 {/each}
                             {/if}
-                            {@const hExt = planTypeToExt(turn.plan?.output_type)}
                             <div class="output-card" style="animation-delay: {idx * 30}ms">
                                 <div class="output-bar">
                                     <span class="ext-badge" style="--ec: {extColor(hExt)}">{hExt.toUpperCase()}</span>
