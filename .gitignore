@@ -1,3 +1,4 @@
+# ── Python ──────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
@@ -9,14 +10,50 @@ build/
 .env
 .venv
 venv/
+.pytest_cache/
 
-# CT-1 runtime data (exclude from repo — grows large)
+# ── CT-2 runtime data (user-specific, grows large) ─────────────────
 ct1/data/journals/
 ct1/data/logs/
 ct1/data/adapters/
+ct1/data/workspaces/
 ct1/data/dpo_dataset.jsonl
 ct1/data/benchmarks/
+ct1/data/*.db
+ct1/data/sessions/
 
-# llama.cpp server logs
+# ── Model files (large GGUF binaries — download separately) ────────
+models/*.gguf
+models/*.bin
+
+# ── llama-server binaries (download separately) ────────────────────
+llama-*-bin-*/
+llama-*-bin-*.zip
+
+# ── llama.cpp logs ─────────────────────────────────────────────────
 *.log
+
+# ── SvelteKit / Node ───────────────────────────────────────────────
+ct1/web/.svelte-kit/
+ct1/web/build/
+ct1/web/node_modules/
+ct1/web/.pnpm-store/
+.pnpm-store/
+node_modules/
+
+# ── IDE / OS ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Dev scratch files ──────────────────────────────────────────────
+*.txt
+!README.txt
+!ct1/requirements.txt
 .worktrees/
+_local/
