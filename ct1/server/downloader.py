@@ -23,7 +23,7 @@ def _get_platform_info() -> dict:
         return {
             "vulkan":       "bin-win-vulkan-x64",
             # Main CUDA binary (contains llama-server.exe)
-            "cuda":         "bin-win-cuda-cu12.4-x64",
+            "cuda":         "bin-win-cuda-12.4-x64",
             # Separate cudart DLL package — must be extracted to the same dir
             "cuda_runtime": "cudart-llama-bin-win-cuda-12.4-x64",
             "exe":          "llama-server.exe",
