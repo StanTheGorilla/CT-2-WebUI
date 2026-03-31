@@ -53,15 +53,9 @@ cd ct1/web && npm install && cd ../..
 
 ### 2. Get llama-server
 
-Download a [llama.cpp release](https://github.com/ggerganov/llama.cpp/releases) for your platform:
+CT-2 downloads `llama-server` automatically on first startup (both Vulkan and CUDA builds). You can switch between backends in the Settings UI.
 
-| Platform | Package |
-|----------|---------|
-| Windows + AMD/NVIDIA GPU | `llama-*-bin-win-vulkan-x64.zip` |
-| Linux + NVIDIA | `llama-*-bin-ubuntu-x64-cuda.zip` |
-| macOS (Apple Silicon) | `llama-*-bin-macos-arm64.zip` |
-
-Extract the zip and place the folder next to the project directory, or add `llama-server` to your PATH.
+If you prefer to manage it manually, download a [llama.cpp release](https://github.com/ggerganov/llama.cpp/releases) and place it in your PATH or next to the project directory.
 
 ### 3. Add a model
 
