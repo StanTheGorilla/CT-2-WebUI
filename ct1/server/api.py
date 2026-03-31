@@ -128,6 +128,7 @@ async def get_config():
         "max_tokens": model_params.get("max_tokens", 100000),
         "thinking_budget": model_params.get("thinking_budget", -1),
         "vision_supported": model_params.get("vision_supported", False),
+        "backend": _raw_cfg.get("backend", "vulkan"),
     }
 
 
@@ -266,6 +267,39 @@ async def select_model(body: ModelSelect):
         "model": body.model,
         "info": _cfg.get("_preset_info", {}),
     }
+
+
+class BackendSelect(BaseModel):
+    backend: str  # "vulkan" | "cuda"
+
+
+@app.post("/api/backend/select")
+async def select_backend(body: BackendSelect):
+    """Switch active backend (vulkan/cuda) and restart llama-server."""
+    global _raw_cfg, _cfg, _orch, _server_procs
+
+    if body.backend not in ("vulkan", "cuda"):
+        return {"error": f"Invalid backend '{body.backend}'. Must be 'vulkan' or 'cuda'."}
+
+    _raw_cfg["backend"] = body.backend
+    _CONFIG_PATH.write_text(
+        yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    try:
+        _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH))
+    except Exception as e:
+        return {"error": str(e)}
+
+    stop_server(_server_procs)
+    _server_procs = []
+    try:
+        _server_procs = await start_server(str(_CONFIG_PATH))
+        _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
+        return {"ok": True, "backend": body.backend}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 class RestartBody(BaseModel):
