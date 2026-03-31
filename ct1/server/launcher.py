@@ -8,13 +8,16 @@ from pathlib import Path
 from ct1.server.health import wait_for_server
 
 
-def _find_llama_executable(project_root: Path, configured: str = "auto") -> str:
+def _find_llama_executable(project_root: Path, configured: str = "auto",
+                            backend: str = "vulkan") -> str:
     """Resolve the llama-server binary path.
 
     Priority:
     1. Explicit path in config, if it exists on disk
     2. `llama-server` found via PATH (shutil.which)
-    3. Any llama-*-bin-* directory relative to project root or its parent
+    3. bin/{backend}/ directory (auto-downloaded)
+    4. Any llama-*-bin-* directory relative to project root or its parent
+    5. Auto-download from GitHub, then retry bin/{backend}/
     """
     ext = ".exe" if os.name == "nt" else ""
 
@@ -28,6 +31,11 @@ def _find_llama_executable(project_root: Path, configured: str = "auto") -> str:
     if found:
         return found
 
+    # bin/{backend}/ — auto-downloaded location
+    bin_path = project_root / "bin" / backend / f"llama-server{ext}"
+    if bin_path.exists():
+        return str(bin_path)
+
     # Scan for bundled binary directories (newest first by name sort)
     for search_root in [project_root, project_root.parent]:
         candidates = sorted(search_root.glob("llama-*-bin-*"), reverse=True)
@@ -36,8 +44,16 @@ def _find_llama_executable(project_root: Path, configured: str = "auto") -> str:
             if candidate.exists():
                 return str(candidate)
 
+    # Auto-download as last resort
+    print("[launcher] llama-server not found — downloading automatically...")
+    from ct1.server.downloader import download_llama_server
+    download_llama_server(project_root)
+
+    if bin_path.exists():
+        return str(bin_path)
+
     raise FileNotFoundError(
-        "llama-server executable not found.\n"
+        "llama-server executable not found and auto-download failed.\n"
         f"  • Add llama-server{ext} to your PATH, or\n"
         "  • Place a llama-*-bin-* directory next to this project, or\n"
         "  • Set 'executable' in ct1/server/model_config.yaml to its full path."
@@ -193,7 +209,8 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
     models_dir_rel = raw_cfg.get("models_dir", "models")
     models_dir = project_root / models_dir_rel
 
-    executable = _find_llama_executable(project_root, raw_cfg.get("executable", "auto"))
+    backend = raw_cfg.get("backend", "vulkan")
+    executable = _find_llama_executable(project_root, raw_cfg.get("executable", "auto"), backend=backend)
 
     # ── Detect config format ──────────────────────────────────────
     is_new_format = "active_model" in raw_cfg and "presets" not in raw_cfg
