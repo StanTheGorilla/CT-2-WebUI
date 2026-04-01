@@ -1,18 +1,78 @@
-# Plan: Fix Design Refinement Stage
+# Plan: Fix Design Pipeline — Refinement + Spec JSON Errors
 
 **Date:** 2026-04-01  
 **Status:** Ready to implement  
-**Priority:** High — current refinement actively degrades output quality
+**Priority:** High — both bugs affect every design-mode request
 
 ---
 
-## Problem
+## Bug 1: Spec JSON Parse Error ("Spec validation failed")
 
-The current Phase 3 refinement in `_design_pipeline()` sends the full HTML page
-(30–50 KB, 1000+ lines) to the model and asks it to "rewrite it to be
-significantly better." A 4B model cannot hold that much content in attention
-and surgically improve it — it generates a fresh page from scratch, losing
-the original content/structure and often producing shorter, worse output.
+### Symptom
+Users see a warning: `Spec validation failed: Expecting ',' delimiter: line 1 column 14 (char 13)`  
+This has been happening for weeks. Intermittent but frequent.
+
+### Root Cause
+`generate_spec()` in `ct1/core/engine.py:1065` asks the model to output a JSON spec.
+The model (Qwen3.5-4B Q8) frequently writes `style_hints` as a **multi-line string**
+with literal newline characters inside the JSON string value. Literal newlines inside
+a JSON string are invalid. Example:
+
+```json
+"style_hints": "min-h-screen flex items-center justify-center
+via-zinc-800 to-black. text-center px-6. typography: tracking-w..."
+```
+
+`_repair_json()` in `engine.py:13` fixes trailing commas, single quotes, and
+unquoted keys — but does **not** escape literal newlines inside strings.
+Both `json.loads(raw_json)` and `json.loads(repaired)` fail. The error is
+emitted as a warning, a retry fires, but the retry often fails too.
+
+### Fix: Add newline escaping to `_repair_json()`
+
+**File:** `ct1/core/engine.py`  
+**Location:** `_repair_json()` function, after step 5 (around line 87)
+
+Add a new step 6 that walks through the repaired text and escapes any literal
+`\n`, `\r`, `\t` characters found inside string values:
+
+```python
+# 6. Escape literal newlines/tabs inside JSON strings
+# (models sometimes write style_hints as multi-line values)
+result = []
+in_string = False
+i = 0
+while i < len(text):
+    ch = text[i]
+    if ch == '"' and (i == 0 or text[i-1] != '\\'):
+        in_string = not in_string
+        result.append(ch)
+    elif in_string and ch == '\n':
+        result.append('\\n')
+    elif in_string and ch == '\r':
+        result.append('\\r')
+    elif in_string and ch == '\t':
+        result.append('\\t')
+    else:
+        result.append(ch)
+    i += 1
+text = ''.join(result)
+
+return text
+```
+
+**Important:** Remove the bare `return text` that currently ends the function
+and replace it with the block above (which ends with `return text`).
+
+---
+
+## Bug 2: Refinement Stage Replaces the Whole Design
+
+### Symptom
+After Phase 1 generates a good HTML page, Phase 3 (refinement) sends the entire
+page back to the model asking it to "rewrite it to be significantly better."
+The 4B model regenerates from scratch instead of polishing, producing a
+completely different — often worse — output.
 
 **Root cause:** `engine.refine_design()` in `ct1/core/engine.py:1164` uses a
 full-rewrite prompt. The model can't do reliable in-place editing at this scale.
@@ -41,14 +101,34 @@ Only the CSS needs polish: spacing, typography, hover states, responsiveness.
 
 | File | Change |
 |------|--------|
-| `ct1/core/engine.py` | Add `_REFINE_CSS_SYSTEM` prompt; add `refine_css_only()` method |
+| `ct1/core/engine.py` | Fix `_repair_json()` newline escaping; add `_REFINE_CSS_SYSTEM` + `refine_css_only()` |
 | `ct1/core/orchestrator.py` | Replace Phase 3 full-rewrite with CSS-only refinement |
 
 ---
 
 ## Task List
 
-### Task 1 — Add CSS-only refinement to engine.py
+### Task 1 — Fix `_repair_json()` in engine.py (spec JSON error)
+
+**File:** `ct1/core/engine.py`  
+**Location:** end of `_repair_json()` function (currently ends with bare `return text` around line 87)
+
+Replace the final `return text` with the newline-escaping block shown in Bug 1 above.
+This is a pure mechanical fix — no prompt changes, no LLM changes.
+
+**Verification:** After the fix, a `style_hints` string like:
+```
+"min-h-screen flex items-center\nvia-zinc-800 to-black"
+```
+should repair to:
+```
+"min-h-screen flex items-center\\nvia-zinc-800 to-black"
+```
+...which is valid JSON.
+
+---
+
+### Task 2 — Add CSS-only refinement to engine.py (Bug 2)
 
 **File:** `ct1/core/engine.py`
 
@@ -100,7 +180,7 @@ async def refine_css_only(self, css: str, task_overrides: dict = None) -> dict:
 
 ---
 
-### Task 2 — Replace Phase 3 in orchestrator.py
+### Task 3 — Replace Phase 3 in orchestrator.py (Bug 2)
 
 **File:** `ct1/core/orchestrator.py`  
 **Location:** `_design_pipeline()`, Phase 3 block starting at line ~881
@@ -169,9 +249,18 @@ if not skip_refinement:
 
 ## What Does NOT Change
 
-- Phase 0 (spec generation) — unchanged
+- Phase 0 spec generation prompt — unchanged (the JSON schema stays the same)
 - Phase 1 (full HTML generation) — unchanged  
 - Phase 2 (mechanical cleanup) — unchanged
 - Deterministic CSS polish (`polish_html_css()` in the polishing step) — unchanged
 - `skip_refinement` flag — still works the same way
 - Edit pipeline (`_design_edit_pipeline`) — not affected
+- The retry logic in orchestrator Phase 0 — unchanged (still retries once on failure;
+  the `_repair_json` fix should make the first attempt succeed in most cases)
+
+---
+
+## Implementation Order
+
+1. **Task 1 first** (Bug 1 fix) — standalone, no dependencies, immediate improvement
+2. **Task 2 + Task 3 together** (Bug 2 fix) — must be done as a pair
