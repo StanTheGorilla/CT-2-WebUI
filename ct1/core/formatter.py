@@ -97,7 +97,8 @@ def polish_html_css(html: str) -> str:
 def detect_output_type(text: str) -> str:
     """Auto-detect the output type from code content.
 
-    Returns: 'html_page', 'python_script', 'javascript', 'cpp', 'other'.
+    Returns: 'html_page', 'python_script', 'javascript', 'typescript',
+             'cpp', 'go', 'rust', 'shell', 'sql', 'other'.
     Used when planner is unavailable (solo mode) or plan is None.
     """
     t = text.strip()
@@ -106,16 +107,32 @@ def detect_output_type(text: str) -> str:
     if lower.startswith(("<!doctype", "<html")):
         return "html_page"
     if lower.startswith(("import ", "from ", "def ", "class ", "#!", "#!/")):
+        # Disambiguate: shebang lines are shell, not Python
+        if lower.startswith(("#!/bin/bash", "#!/bin/sh", "#!/usr/bin/env bash",
+                              "#!/usr/bin/env sh")):
+            return "shell"
+        # Disambiguate: TypeScript-only import form
+        if lower.startswith("import type "):
+            return "typescript"
         return "python_script"
     if lower.startswith(("#include", "using namespace", "int main")):
         return "cpp"
     if lower.startswith(("const ", "let ", "var ", "function ",
                          "import {", "import '", "import \"")):
+        # Disambiguate TypeScript: look for type annotations
+        if ": string" in lower or ": number" in lower or ": boolean" in lower \
+                or "interface " in lower or "type " in lower:
+            return "typescript"
         return "javascript"
     if lower.startswith(("package ", "func ")):
         return "go"
     if lower.startswith(("use ", "fn ", "mod ", "pub ")):
         return "rust"
+    if lower.startswith(("interface ", "type ")):
+        return "typescript"
+    if lower.startswith(("select ", "create ", "insert ", "drop ", "alter ",
+                         "update ", "delete ")):
+        return "sql"
 
     # Content-based detection for cases where preamble obscures the start
     if "<html" in lower or "<!doctype" in lower:
@@ -126,6 +143,8 @@ def detect_output_type(text: str) -> str:
         return "cpp"
     if "function " in lower and ("const " in lower or "let " in lower):
         return "javascript"
+    if "import type" in lower or (": string" in lower and "interface " in lower):
+        return "typescript"
 
     # Simple Python heuristics: scripts that start with print() or use
     # the standard __main__ guard but have no leading import/def
