@@ -1474,7 +1474,7 @@ class Orchestrator:
         # Only runs for HTML output — non-HTML code has no sections to retry.
         # Skip for computer mode — multi-file output doesn't use HTML section structure.
         _retry_output_type = plan.get("output_type", "other") if plan else "other"
-        if (is_code and not is_edit and route != "ROUTE_COMPUTER"
+        if (is_code and not is_edit and route not in ("ROUTE_COMPUTER", "ROUTE_CODE")
                 and _retry_output_type in ("html_page", "other")):
             for retry_num in range(2):
                 broken = detect_broken_sections(final_response)
