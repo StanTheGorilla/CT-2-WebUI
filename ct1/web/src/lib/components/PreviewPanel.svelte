@@ -8,10 +8,10 @@
     hljs.registerLanguage('css', css);
     hljs.registerLanguage('javascript', javascript);
 
-    let { code, onClose }:
-        { code: string; onClose: () => void } = $props();
+    let { code, outputType = 'html_page', onClose }:
+        { code: string; outputType?: string; onClose: () => void } = $props();
 
-    let activeTab = $state<'preview' | 'code'>('preview');
+    let activeTab = $state<'preview' | 'code'>(outputType === 'html_page' ? 'preview' : 'code');
     let copied = $state(false);
     let iframe = $state<HTMLIFrameElement>();
 

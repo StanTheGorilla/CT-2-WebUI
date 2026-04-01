@@ -145,8 +145,9 @@
         if ($chat.phase === 'generating' || $chat.phase === 'fixing') {
             didGenerate = true;
         }
-        // Auto-open preview when streaming code reaches enough content (not computer mode)
-        if (($chat.phase === 'generating' || $chat.phase === 'polishing') && isCode && !isComputerRoute && !userClosedPreview) {
+        // Auto-open preview when streaming code reaches enough content (design route only —
+        // code mode outputs Python/JS/etc. which must not be rendered as an HTML preview)
+        if (($chat.phase === 'generating' || $chat.phase === 'polishing') && $chat.route === 'ROUTE_DESIGN' && !userClosedPreview) {
             if ($chat.streamingText.length > 300 && !showPreview) {
                 showPreview = true;
                 previewOverride = null;
@@ -720,7 +721,7 @@
                                     <span class="gen-speed">{$chat.tokensPerSec} t/s</span>
                                 {/if}
                             </div>
-                            {#if isCode && !isComputerRoute && !$chat.editing && $chat.streamingText.length > 200}
+                            {#if $chat.route === 'ROUTE_DESIGN' && !$chat.editing && $chat.streamingText.length > 200}
                                 <button class="preview-btn" onclick={previewCurrentCode}>
                                     {showPreview ? 'Hide' : 'Preview'}
                                 </button>
@@ -1038,6 +1039,7 @@
             ></div>
             <PreviewPanel
                 code={previewCode}
+                outputType={$chat.plan?.output_type ?? 'html_page'}
                 onClose={() => { showPreview = false; userClosedPreview = true; }}
             />
         </div>
