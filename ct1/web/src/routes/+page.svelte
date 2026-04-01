@@ -242,7 +242,7 @@
     };
     const routeColors: Record<string, string> = {
         'ROUTE_DESIGN': 'var(--specialist)',
-        'ROUTE_CODE': 'var(--text)',
+        'ROUTE_CODE': '#5B8DEF',
         'ROUTE_DIRECT': 'var(--success)',
         'ROUTE_COMPUTER': 'var(--brain)',
     };
@@ -812,7 +812,7 @@
                     </div>
                 {/if}
 
-                {#if $chat.phase === 'polishing' && !isComputerRoute}
+                {#if $chat.phase === 'polishing' && isHtmlOutput && !isComputerRoute}
                     <div class="step polish">
                         <span class="step-dot pulse polish"></span>
                         <span class="step-text">Polishing CSS...</span>

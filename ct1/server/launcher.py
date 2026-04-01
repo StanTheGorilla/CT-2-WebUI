@@ -86,16 +86,50 @@ def _is_llama_server_running() -> bool:
         return False
 
 
-def _graceful_shutdown_llama(port: int = 8080, timeout: float = 10.0) -> bool:
-    """Ask llama-server to shut down via its API, letting it release Vulkan resources.
+def _get_llama_pid():
+    """Return the PID of the running llama-server process, or None."""
+    try:
+        if os.name == "nt":
+            r = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq llama-server.exe", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True,
+            )
+            for line in r.stdout.strip().splitlines():
+                # CSV format: "llama-server.exe","1234","Console","1","..."
+                parts = [p.strip('"') for p in line.split('","')]
+                if len(parts) >= 2:
+                    try:
+                        return int(parts[1])
+                    except ValueError:
+                        pass
+        else:
+            r = subprocess.run(
+                ["pgrep", "-f", "llama-server"], capture_output=True, text=True
+            )
+            if r.returncode == 0:
+                return int(r.stdout.strip().split()[0])
+    except Exception:
+        pass
+    return None
 
-    Returns True if the process exited gracefully within timeout.
-    Force-killing (taskkill /F) on AMD Vulkan prevents proper vkDestroyDevice cleanup,
-    leaving GPU memory fragmented. Subsequent launches get degraded bandwidth until reboot.
+
+def _graceful_shutdown_llama(port: int = 8080, timeout: float = 10.0) -> bool:
+    """Shut down llama-server gracefully so it can release Vulkan resources.
+
+    Strategy (in order):
+    1. POST /shutdown — works on llama-server b9xxx+
+    2. CTRL_BREAK_EVENT (Windows) / SIGTERM (Linux) — triggers the process's own
+       signal handler which calls vkDestroyDevice before exiting.  Much better than
+       taskkill /F which skips cleanup and leaves VRAM fragmented.
+
+    Returns True if the process exited cleanly within timeout.
     """
     import time
     import urllib.request
 
+    shutdown_signaled = False
+
+    # ── Step 1: HTTP shutdown endpoint ───────────────────────────────────────
     try:
         req = urllib.request.Request(
             f"http://localhost:{port}/shutdown",
@@ -103,14 +137,32 @@ def _graceful_shutdown_llama(port: int = 8080, timeout: float = 10.0) -> bool:
             data=b"",
         )
         urllib.request.urlopen(req, timeout=3)
+        shutdown_signaled = True
     except (ConnectionError, OSError):
-        # Connection reset/refused AFTER sending request = server is shutting down.
-        # Fall through to poll for process exit below.
-        pass
+        # Connection reset/refused after sending = server accepted and is exiting.
+        shutdown_signaled = True
     except Exception:
-        return False
+        pass  # Likely 404 on older build — fall through to signal approach
 
-    # Wait for process to actually exit
+    # ── Step 2: Process signal (graceful, not force-kill) ────────────────────
+    if not shutdown_signaled:
+        pid = _get_llama_pid()
+        if pid is None:
+            return False
+        try:
+            if os.name == "nt":
+                # CTRL_BREAK_EVENT goes to the process group (llama-server was started
+                # with CREATE_NEW_PROCESS_GROUP so its PGID == PID).  This fires the
+                # C-runtime signal handler, which calls proper Vulkan teardown.
+                os.kill(pid, signal.CTRL_BREAK_EVENT)
+            else:
+                os.kill(pid, signal.SIGTERM)
+            shutdown_signaled = True
+            print(f"[launcher] Sent graceful signal to llama-server (pid {pid})")
+        except (ProcessLookupError, PermissionError, OSError):
+            return False
+
+    # ── Poll for process exit ─────────────────────────────────────────────────
     start = time.monotonic()
     while time.monotonic() - start < timeout:
         if not _is_llama_server_running():

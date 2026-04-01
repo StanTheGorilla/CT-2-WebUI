@@ -16,7 +16,7 @@ from ct1.core.formatter import (
     clean_response, validate_output, validate_file,
     split_html_sections, reassemble_html_section,
     strip_think_tags, extract_code,
-    detect_broken_sections, detect_output_type,
+    detect_broken_sections, detect_output_type, detect_output_type_from_fence,
     polish_html_css, check_completeness,
     enforce_file_markers, fix_html_structure,
 )
@@ -248,25 +248,26 @@ class Orchestrator:
         if cls._COMPUTER_PATTERNS.search(msg):
             return "ROUTE_COMPUTER"
 
-        # 3. Design (single-file visual) — but not questions about design
+        # 3. Language name without design keywords → CODE
+        #    "write a simple python hello world script" → CODE
+        #    "create a landing page with javascript"    → falls through to DESIGN
+        has_lang = cls._LANG_PATTERN.search(msg)
+        if has_lang and not cls._DESIGN_PATTERNS.search(msg):
+            return "ROUTE_CODE"
+
+        # 4. Design (single-file visual) — but not questions about design
         if cls._DESIGN_PATTERNS.search(msg) and not cls._DESIGN_NEGATIVE.search(msg):
             return "ROUTE_DESIGN"
 
-        # 4. Code (generation/discussion)
+        # 5. Code (generation/discussion)
         if cls._CODE_PATTERNS.search(msg) or cls._CODE_FENCE.search(msg):
             return "ROUTE_CODE"
 
-        # 5. Analysis/reasoning signals -> DIRECT
+        # 6. Analysis/reasoning signals -> DIRECT
         if any(kw in lower for kw in cls._DIRECT_SIGNALS):
             return "ROUTE_DIRECT"
 
-        # 5.5. Language name + build intent → CODE
-        # Catches "write a simple python hello world script" where code patterns
-        # require keywords to be adjacent but the language name is elsewhere in msg.
-        if cls._LANG_PATTERN.search(msg) and any(phrase in lower for phrase in cls._BUILD_PHRASES):
-            return "ROUTE_CODE"
-
-        # 6. Build phrases without specific route -> DESIGN (prefer visual)
+        # 7. Build phrases without specific route -> DESIGN (prefer visual)
         if any(phrase in lower for phrase in cls._BUILD_PHRASES):
             return "ROUTE_DESIGN"
 
@@ -1324,6 +1325,7 @@ class Orchestrator:
                 emit("polished", code=final_response)
 
         # ── Phase 5: VALIDATE ─────────────────────────────────────────
+        fence_type = None  # resolved from model's fence tag; may stay None for edits/direct
         if is_code and not is_edit and route == "ROUTE_COMPUTER":
             # Computer mode: validate each parsed file individually
             parsed_files = self._parse_multi_file(draft)
@@ -1365,12 +1367,20 @@ class Orchestrator:
                      "critical_issues": [], "fix_instructions": ""})
 
         elif is_code and not is_edit:
-            # Non-computer code: auto-detect output type for proper validation
-            output_type = plan.get("output_type", "other") if plan else "other"
-            if output_type in ("other", "html_page"):
-                detected = detect_output_type(draft)
-                if detected != "other":
-                    output_type = detected
+            # Non-computer code: resolve output type for validation + download.
+            # Priority: model's fence language tag > plan > content heuristics.
+            # The fence tag (```python, ```typescript …) is the model's own
+            # declaration and is always more accurate than post-hoc detection.
+            raw_for_fence = strip_think_tags(final_response)
+            fence_type = detect_output_type_from_fence(raw_for_fence)
+            if fence_type:
+                output_type = fence_type
+            else:
+                output_type = plan.get("output_type", "other") if plan else "other"
+                if output_type in ("other", "html_page"):
+                    detected = detect_output_type(draft)
+                    if detected != "other":
+                        output_type = detected
 
             # Extract code from markdown fences before validating.
             # Models often wrap output in explanation text + ```lang ... ``` fences.
@@ -1468,14 +1478,17 @@ class Orchestrator:
                 final_response, is_code=is_code, output_type=output_type
             )
 
-            # For ROUTE_CODE: detect actual language from formatted content and
-            # propagate to plan so the frontend shows the right file extension/badge.
+            # For ROUTE_CODE: propagate the resolved output_type to plan so the
+            # frontend shows the right file extension/badge.
+            # Use fence type (already computed above) if available, otherwise detect.
             if route == "ROUTE_CODE":
-                actual_type = detect_output_type(final_response)
+                actual_type = (fence_type
+                               or detect_output_type(final_response)
+                               or "other")
                 if plan is None:
                     plan = {"output_type": actual_type,
                             "components": [], "complexity": "simple"}
-                elif plan.get("output_type") in ("other", None):
+                else:
                     plan["output_type"] = actual_type
 
         # Enforce file markers for computer mode

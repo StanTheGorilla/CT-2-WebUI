@@ -93,6 +93,32 @@ def polish_html_css(html: str) -> str:
 
 # ── Language detection ────────────────────────────────────────────────
 
+_FENCE_LANG_MAP = {
+    'python': 'python_script', 'py': 'python_script',
+    'javascript': 'javascript', 'js': 'javascript', 'jsx': 'javascript',
+    'typescript': 'typescript', 'ts': 'typescript', 'tsx': 'typescript',
+    'cpp': 'cpp', 'c++': 'cpp', 'cxx': 'cpp', 'cc': 'cpp', 'c': 'cpp',
+    'go': 'go', 'golang': 'go',
+    'rust': 'rust', 'rs': 'rust',
+    'shell': 'shell', 'bash': 'shell', 'sh': 'shell', 'zsh': 'shell',
+    'sql': 'sql',
+    'html': 'html_page', 'htm': 'html_page',
+}
+
+
+def detect_output_type_from_fence(text: str):
+    """Return the output_type declared by the model's code fence language tag.
+
+    E.g. ```python → 'python_script', ```typescript → 'typescript'.
+    Returns None if no fence is found or the language isn't in our map.
+    This is always more reliable than content heuristics because the model
+    explicitly says what language it is writing.
+    """
+    m = re.search(r'```(\w[\w.+-]*)', text.strip())
+    if not m:
+        return None
+    return _FENCE_LANG_MAP.get(m.group(1).lower())
+
 
 def detect_output_type(text: str) -> str:
     """Auto-detect the output type from code content.
