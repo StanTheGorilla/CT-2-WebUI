@@ -109,9 +109,17 @@
 
     let previewVisible = $derived(showPreview && !!previewCode);
 
-    function downloadBlob(code: string, ext: string = 'html') {
+    function downloadBlob(code: string, ext: string = 'txt') {
         if (!code) return;
-        const mime = ext === 'py' ? 'text/x-python' : ext === 'js' ? 'text/javascript' : 'text/html';
+        const mimeMap: Record<string, string> = {
+            html: 'text/html', htm: 'text/html',
+            py:   'text/x-python',
+            js:   'text/javascript', ts: 'text/typescript',
+            sh:   'text/x-sh',
+            sql:  'text/x-sql',
+            cpp:  'text/x-c++src', go: 'text/x-go', rs: 'text/x-rustsrc',
+        };
+        const mime = mimeMap[ext] || 'text/plain';
         const blob = new Blob([code], { type: mime });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -122,9 +130,7 @@
     }
 
     function downloadCode() {
-        const ext = $chat.plan?.output_type === 'python_script' ? 'py'
-            : $chat.plan?.output_type === 'javascript' ? 'js' : 'html';
-        downloadBlob($chat.response, ext);
+        downloadBlob($chat.response, planTypeToExt($chat.plan?.output_type));
     }
 
     function previewHistoryCode(code: string) {
@@ -256,9 +262,12 @@
             case 'html_page':     return 'html';
             case 'python_script': return 'py';
             case 'javascript':    return 'js';
+            case 'typescript':    return 'ts';
             case 'cpp':           return 'cpp';
             case 'go':            return 'go';
             case 'rust':          return 'rs';
+            case 'shell':         return 'sh';
+            case 'sql':           return 'sql';
             default:              return 'txt';
         }
     }

@@ -831,6 +831,10 @@ async def ws_think(websocket: WebSocket):
                     await stream_task
                 finally:
                     cancel_task.cancel()
+                    try:
+                        await cancel_task  # ensure task terminates before outer loop reads WS again
+                    except (asyncio.CancelledError, Exception):
+                        pass
                     current_think_task = None
 
     except WebSocketDisconnect:
