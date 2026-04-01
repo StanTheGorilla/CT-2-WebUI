@@ -665,7 +665,8 @@ class Orchestrator:
 
     _SOLO_PLAN_SYSTEM = (
         "Analyze this request and output ONLY a JSON object. No other text.\n"
-        '{"output_type":"html_page"|"python_script"|"javascript"|"cpp"|"other",'
+        '{"output_type":"html_page"|"python_script"|"javascript"|"typescript"'
+        '|"cpp"|"go"|"rust"|"shell"|"sql"|"other",'
         '"components":[{"id":1,"name":"short name","description":"what it does"}],'
         '"complexity":"simple"|"moderate"|"complex"}\n'
         "Max 5 components. Be concise."
@@ -691,7 +692,8 @@ class Orchestrator:
                 plan = json.loads(text[start:end])
                 # Validate and normalize
                 valid_types = ("html_page", "python_script", "javascript",
-                               "cpp", "api", "other")
+                               "typescript", "cpp", "go", "rust", "shell",
+                               "sql", "api", "other")
                 if plan.get("output_type") not in valid_types:
                     default = "html_page" if route == "ROUTE_DESIGN" else "other"
                     plan["output_type"] = default
