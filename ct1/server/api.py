@@ -807,14 +807,30 @@ async def ws_think(websocket: WebSocket):
                         except Exception as db_err:
                             print(f"[api] conversation save error: {db_err}")  # non-fatal
 
+                async def watch_for_cancel():
+                    """Read incoming WebSocket messages while inference runs.
+                    The outer while-loop is blocked at gather(), so without this
+                    watcher the cancel message would never be received mid-inference."""
+                    try:
+                        while True:
+                            incoming = await websocket.receive_json()
+                            if incoming.get("type") == "cancel":
+                                if current_think_task and not current_think_task.done():
+                                    current_think_task.cancel()
+                                return
+                    except Exception:
+                        pass
+
                 current_think_task = asyncio.create_task(run_think())
                 stream_task = asyncio.create_task(stream_events())
+                cancel_task = asyncio.create_task(watch_for_cancel())
                 try:
                     await asyncio.gather(current_think_task, stream_task)
                 except asyncio.CancelledError:
                     queue.put_nowait({"event": "done", "response": "", "route": ""})
                     await stream_task
                 finally:
+                    cancel_task.cancel()
                     current_think_task = None
 
     except WebSocketDisconnect:
