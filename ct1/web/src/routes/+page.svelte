@@ -15,6 +15,11 @@
     let isCode = $derived(
         $chat.route === 'ROUTE_DESIGN' || $chat.route === 'ROUTE_CODE'
     );
+    // Preview is only meaningful for HTML output. Design mode always produces HTML.
+    // Code mode only qualifies when the plan explicitly says html_page.
+    let isHtmlOutput = $derived(
+        $chat.route === 'ROUTE_DESIGN' || $chat.plan?.output_type === 'html_page'
+    );
     let isComputerMode = $derived(
         $chat.modeOverride === 'computer' || isComputerRoute
     );
@@ -145,9 +150,14 @@
         if ($chat.phase === 'generating' || $chat.phase === 'fixing') {
             didGenerate = true;
         }
-        // Auto-open preview when streaming code reaches enough content (design route only —
-        // code mode outputs Python/JS/etc. which must not be rendered as an HTML preview)
-        if (($chat.phase === 'generating' || $chat.phase === 'polishing') && $chat.route === 'ROUTE_DESIGN' && !userClosedPreview) {
+        // Close preview whenever generating non-HTML output.
+        // showPreview carries over from previous turns, so without this a Python request
+        // after an HTML design would keep the preview open and render Python-as-HTML.
+        if (($chat.phase === 'generating' || $chat.phase === 'polishing') && !isHtmlOutput && !isComputerRoute && showPreview) {
+            showPreview = false;
+        }
+        // Auto-open preview only for HTML output (design mode always HTML; code mode only when plan says html_page)
+        if (($chat.phase === 'generating' || $chat.phase === 'polishing') && isHtmlOutput && !isComputerRoute && !userClosedPreview) {
             if ($chat.streamingText.length > 300 && !showPreview) {
                 showPreview = true;
                 previewOverride = null;
@@ -721,7 +731,7 @@
                                     <span class="gen-speed">{$chat.tokensPerSec} t/s</span>
                                 {/if}
                             </div>
-                            {#if $chat.route === 'ROUTE_DESIGN' && !$chat.editing && $chat.streamingText.length > 200}
+                            {#if isHtmlOutput && !$chat.editing && $chat.streamingText.length > 200}
                                 <button class="preview-btn" onclick={previewCurrentCode}>
                                     {showPreview ? 'Hide' : 'Preview'}
                                 </button>
@@ -1039,7 +1049,7 @@
             ></div>
             <PreviewPanel
                 code={previewCode}
-                outputType={$chat.plan?.output_type ?? 'html_page'}
+                outputType={$chat.plan?.output_type ?? 'other'}
                 onClose={() => { showPreview = false; userClosedPreview = true; }}
             />
         </div>
