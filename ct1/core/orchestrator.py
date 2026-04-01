@@ -1370,10 +1370,17 @@ class Orchestrator:
             if output_type in ("html_page", "other") and detect_output_type(_validate_target) == "html_page":
                 final_response = fix_html_structure(final_response)
 
-            # Programmatic validation — only flags critical issues now
+            # Programmatic validation — informational only for ROUTE_CODE.
+            # No LLM fix cycle: the model rarely fixes syntax errors correctly and
+            # the UI gets stuck in a permanent "validation failed" state.
             issues = validate_output(_validate_target, output_type)
 
-            if issues:
+            if route == "ROUTE_CODE":
+                # Soft validation: always resolve, never trigger a fix cycle.
+                emit("validated", issues=issues,
+                     review={"pass": True, "critical_issues": [],
+                             "fix_instructions": ""})
+            elif issues:
                 emit("validating", issues=issues,
                      review={"pass": False, "critical_issues": issues,
                              "fix_instructions": ""})
