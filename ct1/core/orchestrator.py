@@ -218,9 +218,14 @@ class Orchestrator:
     _CODE_PATTERNS = re.compile(
         r'\b(?:write\s+a?\s*(?:function|class|script|program|module)|'
         r'implement|debug|refactor|fix\s+(?:this|the)\s+(?:code|bug|error)|'
-        r'(?:python|javascript|typescript|java|rust|go|c\+\+|ruby)\s+'
+        r'(?:python|javascript|typescript|java|rust|go|c\+\+|ruby|shell|bash|sql|cpp|golang)\s+'
         r'(?:script|function|class|program|code)|'
         r'api\s+endpoint|add\s+(?:a\s+)?(?:method|function|test))\b', re.I
+    )
+    # A language name anywhere in the message strongly implies code output
+    _LANG_PATTERN = re.compile(
+        r'\b(?:python|javascript|typescript|golang|go\b|rust|c\+\+|cpp|java|ruby|'
+        r'bash|shell|sql|php|swift|kotlin|node(?:\.?js)?)\b', re.I
     )
     _CODE_FENCE = re.compile(r'```\w*\n')
 
@@ -254,6 +259,12 @@ class Orchestrator:
         # 5. Analysis/reasoning signals -> DIRECT
         if any(kw in lower for kw in cls._DIRECT_SIGNALS):
             return "ROUTE_DIRECT"
+
+        # 5.5. Language name + build intent → CODE
+        # Catches "write a simple python hello world script" where code patterns
+        # require keywords to be adjacent but the language name is elsewhere in msg.
+        if cls._LANG_PATTERN.search(msg) and any(phrase in lower for phrase in cls._BUILD_PHRASES):
+            return "ROUTE_CODE"
 
         # 6. Build phrases without specific route -> DESIGN (prefer visual)
         if any(phrase in lower for phrase in cls._BUILD_PHRASES):
