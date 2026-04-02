@@ -878,42 +878,34 @@ class Orchestrator:
         final_response = draft
         final_thinking = draft_thinking
 
-        # ── Phase 3: Self-refinement (AI rewrites for polish) ──────
+        # ── Phase 3: CSS-only refinement ────────────────────────────
+        # Extract just the <style> block and ask the model to polish it.
+        # Much safer than full-page rewrite: HTML structure is preserved,
+        # the model only handles ~2-5 KB of CSS instead of the full page.
         if not skip_refinement:
             try:
-                draft_lower = draft.strip().lower()
-                if (draft and len(draft) > 100
-                        and (draft_lower.startswith("<!doctype")
-                             or draft_lower.startswith("<html"))):
+                sections = split_html_sections(draft)
+                css = sections.get("style", "")
+                if css and len(css.strip()) > 100:
                     emit("refining")
-
-                    # Refinement is a simpler task — cap thinking budget
                     refine_ovr = {**task_ovr}
-                    if "thinking_budget" in refine_ovr:
-                        refine_ovr["thinking_budget"] = min(
-                            refine_ovr["thinking_budget"], 2048
-                        )
-
-                    refine_result = await self.engine.refine_design(
-                        draft, on_token=None,
-                        task_overrides=refine_ovr,
+                    refine_result = await self.engine.refine_css_only(
+                        css, task_overrides=refine_ovr,
                     )
-                    refined = refine_result["text"]
-                    refined = strip_think_tags(refined)
-                    refined = extract_code(refined)
-                    refined_stripped = refined.strip().lower()
-                    if (refined_stripped.startswith("<!doctype") or
-                            refined_stripped.startswith("<html")):
-                        final_response = refined
-                        final_thinking = refine_result.get("thinking", "")
+                    improved_css = strip_think_tags(refine_result["text"])
+                    # Strip any accidental fences the model adds
+                    improved_css = re.sub(r'^```\w*\s*\n?', '', improved_css.strip())
+                    improved_css = re.sub(r'\n?```\s*$', '', improved_css)
+                    if improved_css and len(improved_css.strip()) > 50:
+                        final_response = reassemble_html_section(draft, "style", improved_css)
                         emit("polished", code=final_response)
-                        print("[design] Phase 3: refinement applied")
+                        print("[design] Phase 3: CSS-only refinement applied")
                     else:
-                        print("[design] Phase 3: refinement output not valid HTML, keeping original")
+                        print("[design] Phase 3: CSS refinement output empty, keeping original")
                 else:
-                    print("[design] Phase 3: skipping — draft not valid HTML")
+                    print("[design] Phase 3: skipping — no meaningful CSS to refine")
             except Exception as e:
-                print(f"[design] Phase 3: refinement failed, keeping original: {e}")
+                print(f"[design] Phase 3: CSS refinement failed, keeping original: {e}")
 
         # Persist spec for edit mode
         spec_json = _json.dumps(spec)

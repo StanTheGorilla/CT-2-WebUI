@@ -77,7 +77,32 @@ def _repair_json(text: str) -> str:
             i += 1
     text = ''.join(out)
 
-    # 5. Quote unquoted keys: `  key:` → `  "key":`
+    # 5. Escape literal newlines/tabs inside JSON strings BEFORE quoting unquoted keys.
+    # Must run first: the unquoted-key regex uses \n as a delimiter, so a literal \n
+    # inside a string value like "flex\ntext: center" would cause step 6 to incorrectly
+    # treat "text" as an unquoted key and corrupt the string.
+    result = []
+    in_string = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '"' and (i == 0 or text[i - 1] != '\\'):
+            in_string = not in_string
+            result.append(ch)
+        elif in_string and ch == '\n':
+            result.append('\\n')
+        elif in_string and ch == '\r':
+            result.append('\\r')
+        elif in_string and ch == '\t':
+            result.append('\\t')
+        else:
+            result.append(ch)
+        i += 1
+    text = ''.join(result)
+
+    # 6. Quote unquoted keys: `  key:` → `  "key":`
+    # Safe to run now: literal newlines inside strings have been escaped, so the
+    # \n lookbehind only fires on structural JSON newlines (outside strings).
     text = _re.sub(
         r'(?<=[\{,\n])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:',
         r' "\1":',
@@ -1161,6 +1186,22 @@ class Engine:
         "Keep everything that already works. Only fix what is listed.\n"
     )
 
+    _REFINE_CSS_SYSTEM = (
+        "You are a CSS expert reviewing a website's stylesheet.\n"
+        "Improve the CSS below for better visual polish. Focus on:\n"
+        "- SPACING: Consistent padding/margin scale. Generous whitespace in sections.\n"
+        "- TYPOGRAPHY: Clear hierarchy. Headings sized properly. Body text readable.\n"
+        "- HOVER STATES: Every button, link, and card needs a hover transition.\n"
+        "- TRANSITIONS: Use 'transition: all 0.2s ease' on interactive elements.\n"
+        "- CONSISTENCY: Same border-radius, box-shadow style throughout.\n"
+        "- MOBILE: Ensure media queries stack correctly on small screens.\n\n"
+        "Rules:\n"
+        "- Output ONLY the CSS — no HTML, no explanation, no markdown fences.\n"
+        "- Keep ALL existing class names and IDs exactly as-is.\n"
+        "- Do not remove any existing rules — only improve or add to them.\n"
+        "- Do not add new components or change the HTML structure.\n"
+    )
+
     async def refine_design(self, html: str, on_token=None,
                             task_overrides: dict = None,
                             missing_items: list[str] = None) -> dict:
@@ -1205,6 +1246,28 @@ class Engine:
             top_p=ovr.get("top_p", 0.9),
             enable_thinking=True,
             thinking_budget=ovr.get("thinking_budget"),
+        )
+
+    async def refine_css_only(self, css: str, task_overrides: dict = None) -> dict:
+        """Refine only the CSS block of a design output.
+
+        Much safer than full-page rewrite: the model only processes ~2-5 KB
+        of CSS, preserving the original HTML structure entirely.
+        Returns {"text": str, "thinking": str}.
+        """
+        ovr = task_overrides or {}
+        messages = [
+            {"role": "system", "content": self._REFINE_CSS_SYSTEM},
+            {"role": "user", "content": f"Improve this CSS:\n\n{css}"},
+        ]
+        return await self._call_stream(
+            messages,
+            on_token=None,
+            max_tokens=min(self.max_tokens, 8192),
+            temperature=ovr.get("temperature", 0.3),
+            top_p=ovr.get("top_p", 0.9),
+            enable_thinking=False,
+            thinking_budget=0,
         )
 
     # ── Section-level edit ──────────────────────────────────────────────
