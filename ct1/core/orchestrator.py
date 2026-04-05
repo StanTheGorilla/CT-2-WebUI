@@ -31,6 +31,24 @@ _CONFIG_PATH = (Path(__file__).parent.parent.parent
                 / "ct1" / "server" / "model_config.yaml")
 
 
+_EXT_TO_LANG = {
+    ".py": "python", ".js": "javascript", ".ts": "typescript",
+    ".html": "html", ".htm": "html", ".css": "css", ".cpp": "cpp",
+    ".go": "go", ".rs": "rust", ".json": "json", ".sh": "bash",
+}
+
+
+def _detect_lang_from_response(text: str) -> str:
+    """Extract primary language from first fenced code block tag."""
+    m = re.search(r'^```([\w+]+)', text, re.MULTILINE)
+    if m:
+        lang = m.group(1).lower()
+        _ALIASES = {"py": "python", "js": "javascript", "ts": "typescript",
+                    "sh": "bash", "shell": "bash", "c++": "cpp", "rs": "rust"}
+        return _ALIASES.get(lang, lang)
+    return "text"
+
+
 def _extract_text(goal) -> str:
     """Extract plain text from goal (may be string or multimodal content array)."""
     if isinstance(goal, str):
@@ -1551,6 +1569,31 @@ class Orchestrator:
                 "lesson": "", "self_score": 0.0,
             }
 
+        # ── Build metadata: detected_lang + files ─────────────────────
+        if route == "ROUTE_DESIGN":
+            _detected_lang = "html"
+            _files: list[dict] = []
+        elif route == "ROUTE_CODE":
+            _detected_lang = _detect_lang_from_response(final_response)
+            _files = []
+        elif route == "ROUTE_COMPUTER":
+            _detected_lang = "multi"
+            _parsed = self._parse_multi_file(final_response)
+            _files = [
+                {
+                    "path": f["path"],
+                    "lang": _EXT_TO_LANG.get(
+                        "." + f["path"].rsplit(".", 1)[-1].lower()
+                        if "." in f["path"] else "",
+                        "text",
+                    ),
+                }
+                for f in _parsed
+            ]
+        else:  # ROUTE_DIRECT
+            _detected_lang = "text"
+            _files = []
+
         return {
             "response": final_response,
             "thinking": final_thinking,
@@ -1561,6 +1604,8 @@ class Orchestrator:
             "plan": plan,
             "reflection": reflection,
             "tier": self.tier,
+            "detected_lang": _detected_lang,
+            "files": _files,
         }
 
     async def think(self, goal, on_event=None,

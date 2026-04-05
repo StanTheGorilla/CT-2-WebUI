@@ -975,6 +975,8 @@ async def ws_think(websocket: WebSocket):
                         "route": result.get("route", ""),
                         "specialist_data": result.get("specialist_data"),
                         "reflection": result.get("reflection", {}),
+                        "detected_lang": result.get("detected_lang", "text"),
+                        "files": result.get("files", []),
                     })
 
                     # Auto-persist conversation
