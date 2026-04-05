@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from ct1.core.orchestrator import Orchestrator
+from ct1.core.orchestrator import Orchestrator, _get_mode_registry
 from ct1.server.health import check_server_health
 from ct1.server.launcher import (
     load_raw_config, resolve_config,
@@ -21,6 +21,7 @@ from ct1.memory.component_cache import ComponentCache
 from ct1.server.workspace import WorkspaceManager, is_command_safe
 
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "ct1" / "server" / "model_config.yaml"
+_MODES_DIR = Path(__file__).parent.parent / "modes"
 
 _raw_cfg: dict = load_raw_config(str(_CONFIG_PATH))
 try:
@@ -334,6 +335,141 @@ async def list_models():
 class ModelSelect(BaseModel):
     model: str
     context_size: int | None = None
+
+
+class ModeUpdate(BaseModel):
+    description: str | None = None
+    patterns: list[str] | None = None
+    negative_patterns: list[str] | None = None
+    lang_patterns: list[str] | None = None
+    detected_lang: str | None = None
+    task_overrides: dict | None = None
+
+
+class ModeCreate(BaseModel):
+    name: str
+    route_id: str
+    description: str = ""
+    priority: int = 99
+    patterns: list[str] = []
+    negative_patterns: list[str] = []
+    lang_patterns: list[str] = []
+    detected_lang: str = "text"
+    task_overrides: dict = {}
+
+
+@app.get("/api/modes")
+async def list_modes():
+    """List all loaded mode definitions."""
+    registry = _get_mode_registry()
+    return {"modes": [
+        {
+            "name": m.name,
+            "route_id": m.route_id,
+            "description": m.description,
+            "priority": m.priority,
+            "patterns": m.patterns,
+            "negative_patterns": m.negative_patterns,
+            "lang_patterns": m.lang_patterns,
+            "detected_lang": m.detected_lang,
+            "task_overrides": m.task_overrides,
+        }
+        for m in registry.get_all()
+    ]}
+
+
+@app.get("/api/modes/{name}")
+async def get_mode(name: str):
+    """Get a single mode definition by name."""
+    registry = _get_mode_registry()
+    for m in registry.get_all():
+        if m.name == name:
+            return {
+                "name": m.name,
+                "route_id": m.route_id,
+                "description": m.description,
+                "priority": m.priority,
+                "patterns": m.patterns,
+                "negative_patterns": m.negative_patterns,
+                "lang_patterns": m.lang_patterns,
+                "detected_lang": m.detected_lang,
+                "task_overrides": m.task_overrides,
+            }
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail=f"Mode '{name}' not found")
+
+
+@app.put("/api/modes/{name}")
+async def update_mode(name: str, body: ModeUpdate):
+    """Update an existing mode's config and persist to YAML. Reloads registry."""
+    yaml_path = _MODES_DIR / f"{name}.yaml"
+    if not yaml_path.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Mode file '{name}.yaml' not found")
+    with yaml_path.open(encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    # Apply only fields that were provided
+    if body.description is not None:
+        data["description"] = body.description
+    if body.patterns is not None:
+        data["patterns"] = body.patterns
+    if body.negative_patterns is not None:
+        data["negative_patterns"] = body.negative_patterns
+    if body.lang_patterns is not None:
+        data["lang_patterns"] = body.lang_patterns
+    if body.detected_lang is not None:
+        data["detected_lang"] = body.detected_lang
+    if body.task_overrides is not None:
+        data["task_overrides"] = body.task_overrides
+    yaml_path.write_text(
+        yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    _get_mode_registry().reload()
+    return {"ok": True, "name": name}
+
+
+@app.post("/api/modes")
+async def create_mode(body: ModeCreate):
+    """Create a new mode definition YAML file. Reloads registry."""
+    yaml_path = _MODES_DIR / f"{body.name}.yaml"
+    if yaml_path.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=409, detail=f"Mode '{body.name}' already exists")
+    data = {
+        "name": body.name,
+        "route_id": body.route_id,
+        "description": body.description,
+        "priority": body.priority,
+        "patterns": body.patterns,
+        "negative_patterns": body.negative_patterns,
+        "lang_patterns": body.lang_patterns,
+        "detected_lang": body.detected_lang,
+        "task_overrides": body.task_overrides,
+    }
+    yaml_path.write_text(
+        yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    _get_mode_registry().reload()
+    return {"ok": True, "name": body.name}
+
+
+@app.delete("/api/modes/{name}")
+async def delete_mode(name: str):
+    """Delete a mode YAML file and reload the registry."""
+    # Protect built-in modes from deletion
+    _BUILTIN_MODES = {"direct", "code", "design", "computer"}
+    if name in _BUILTIN_MODES:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail=f"Built-in mode '{name}' cannot be deleted")
+    yaml_path = _MODES_DIR / f"{name}.yaml"
+    if not yaml_path.exists():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Mode '{name}' not found")
+    yaml_path.unlink()
+    _get_mode_registry().reload()
+    return {"ok": True, "name": name}
 
 
 @app.post("/api/model/select")
