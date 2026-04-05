@@ -50,6 +50,20 @@ def _detect_lang_from_response(text: str) -> str:
     return "text"
 
 
+# ── Mode registry singleton (loaded once at startup) ─────────────
+from ct1.modes.registry import ModeRegistry as _ModeRegistry
+
+_mode_registry: _ModeRegistry | None = None
+
+
+def _get_mode_registry() -> _ModeRegistry:
+    """Lazy-load the mode registry (avoids import-time filesystem access)."""
+    global _mode_registry
+    if _mode_registry is None:
+        _mode_registry = _ModeRegistry()
+    return _mode_registry
+
+
 def _extract_text(goal) -> str:
     """Extract plain text from goal (may be string or multimodal content array)."""
     if isinstance(goal, str):
@@ -192,110 +206,13 @@ class Orchestrator:
 
     # ── Deterministic pre-routing (runs BEFORE AI routing) ──────────
 
-    _DIRECT_SIGNALS = {
-        "analyze", "analyse", "analyzing", "analysis",
-        "evaluate", "evaluating", "evaluation",
-        "advising", "advise", "advice",
-        "recommend", "assess", "assessing",
-        "compare", "contrast", "discuss",
-        "maximize", "minimize", "optimize",
-        "probability", "trade-off", "tradeoff",
-        "pros and cons", "constraint",
-        "scenario", "decompos",
-        "think through", "reason about",
-        "what would", "how would you", "what should",
-        "advantages", "disadvantages",
-        "calculate", "solve", "prove", "derive",
-    }
-
-    _BUILD_PHRASES = {
-        "build", "create", "make me", "make a", "make an",
-        "generate a", "generate an", "generate me",
-        "write me", "write a", "write an",
-        "code a", "code me", "implement a", "implement an",
-        "develop a", "develop an", "scaffold",
-        "build me", "create me", "give me a", "give me an",
-        "set up a", "set up an",
-    }
-
-    _COMPUTER_PATTERNS = re.compile(
-        r'\b(?:create\s+a?\s*project|build\s+a?\s*(?:website|app|project)|'
-        r'write\s+to\s+file|run\s+command|execute|install\s+|mkdir|'
-        r'save\s+as|multi[- ]?file|full\s+project|make\s+a?\s*folder|'
-        r'set\s+up\s+a?\s*(?:project|repo|directory))\b', re.I
-    )
-
-    _DESIGN_PATTERNS = re.compile(
-        r'\b(?:design|landing\s+page|dashboard|portfolio|webpage|'
-        r'website\s+layout|mockup|wireframe|styled?\s+page|'
-        r'html\s+page|web\s+page|ui\s+design)\b', re.I
-    )
-    _DESIGN_NEGATIVE = re.compile(
-        r'\b(?:explain|how\s+does|what\s+is|what\s+are|why\s+does)\b', re.I
-    )
-
-    _CODE_PATTERNS = re.compile(
-        r'\b(?:write\s+a?\s*(?:function|class|script|program|module)|'
-        r'implement|debug|refactor|fix\s+(?:this|the)\s+(?:code|bug|error)|'
-        r'(?:python|javascript|typescript|java|rust|go|c\+\+|ruby|shell|bash|sql|cpp|golang)\s+'
-        r'(?:script|function|class|program|code)|'
-        r'api\s+endpoint|add\s+(?:a\s+)?(?:method|function|test))\b', re.I
-    )
-    # A language name anywhere in the message strongly implies code output
-    _LANG_PATTERN = re.compile(
-        r'\b(?:python|javascript|typescript|golang|go\b|rust|c\+\+|cpp|java|ruby|'
-        r'bash|shell|sql|php|swift|kotlin|node(?:\.?js)?)\b', re.I
-    )
-    _CODE_FENCE = re.compile(r'```\w*\n')
-
     @classmethod
     def _deterministic_route(cls, msg: str) -> str:
-        """Deterministic routing via keyword/regex. No AI call.
+        """Deterministic routing via keyword/regex. Delegates to ModeRegistry.
 
-        Priority: question > computer > design > code > direct (fallback).
+        Priority order is defined in ct1/modes/*.yaml (sorted by priority field).
         """
-        lower = msg.lower().strip()
-
-        # 1. Questions -> always DIRECT
-        if _is_question(msg):
-            # Exception: question + code fence = code context
-            if cls._CODE_FENCE.search(msg):
-                return "ROUTE_CODE"
-            return "ROUTE_DIRECT"
-
-        # 2. Computer mode (file operations, project creation)
-        if cls._COMPUTER_PATTERNS.search(msg):
-            return "ROUTE_COMPUTER"
-
-        # 3. Language name without design keywords → CODE
-        #    "write a simple python hello world script" → CODE
-        #    "create a landing page with javascript"    → falls through to DESIGN
-        has_lang = cls._LANG_PATTERN.search(msg)
-        if has_lang and not cls._DESIGN_PATTERNS.search(msg):
-            return "ROUTE_CODE"
-
-        # 4. Design (single-file visual) — but not questions about design
-        if cls._DESIGN_PATTERNS.search(msg) and not cls._DESIGN_NEGATIVE.search(msg):
-            return "ROUTE_DESIGN"
-
-        # 5. Code (generation/discussion)
-        if cls._CODE_PATTERNS.search(msg) or cls._CODE_FENCE.search(msg):
-            return "ROUTE_CODE"
-
-        # 6. Analysis/reasoning signals -> DIRECT
-        if any(kw in lower for kw in cls._DIRECT_SIGNALS):
-            return "ROUTE_DIRECT"
-
-        # 7. Build phrases without specific route -> DESIGN (prefer visual)
-        if any(phrase in lower for phrase in cls._BUILD_PHRASES):
-            return "ROUTE_DESIGN"
-
-        # 7. Long text without build intent -> DIRECT
-        if len(msg) > 300:
-            return "ROUTE_DIRECT"
-
-        # 8. Default fallback
-        return "ROUTE_DIRECT"
+        return _get_mode_registry().resolve(msg).route_id
 
     # ── Main pipeline ────────────────────────────────────────────────
 
@@ -431,17 +348,17 @@ class Orchestrator:
     }
 
     def _get_task_overrides(self, route: str, goal_text: str) -> dict:
-        """Select per-task parameter overrides based on route and content."""
-        if not self.task_overrides:
-            return {}
+        """Select per-task parameter overrides based on route and content.
 
-        # Check for reasoning keywords (math, planning, logic)
+        Mode YAML provides defaults; model_config.yaml overrides win if present.
+        """
+        # Reasoning keywords → reasoning-specific overrides (model_config only)
         lower = goal_text.lower()
         if any(kw in lower for kw in self._REASONING_KEYWORDS):
-            if "reasoning" in self.task_overrides:
+            if self.task_overrides.get("reasoning"):
                 return self.task_overrides["reasoning"]
 
-        # Map route to override key
+        # Map route to override key used in model_config
         route_map = {
             "ROUTE_CODE": "code",
             "ROUTE_DESIGN": "design",
@@ -449,7 +366,16 @@ class Orchestrator:
             "ROUTE_COMPUTER": "computer",
         }
         key = route_map.get(route, "direct")
-        return self.task_overrides.get(key, {})
+
+        # Start with mode YAML defaults, then apply model_config overrides on top
+        mode_defaults: dict = {}
+        for m in _get_mode_registry().get_all():
+            if m.route_id == route:
+                mode_defaults = dict(m.task_overrides)
+                break
+
+        model_overrides = self.task_overrides.get(key, {})
+        return {**mode_defaults, **model_overrides}
 
     # ── Multi-file parsing (Computer Mode) ──────────────────────────
 
