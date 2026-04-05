@@ -221,6 +221,7 @@
     async function loadPrompts() {
         try {
             const res = await fetch('/api/prompts');
+            if (!res.ok) return;
             const data = await res.json();
             prompts = data.prompts ?? {};
             promptEdits = { ...prompts };
@@ -237,6 +238,7 @@
         promptEdits[name] = value;
         promptsDirty[name] = promptEdits[name] !== prompts[name];
         promptsSaved[name] = false;
+        promptsSaveError[name] = '';
     }
 
     async function savePrompt(name: string) {
