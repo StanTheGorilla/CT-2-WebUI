@@ -644,6 +644,14 @@ class Engine:
         content_token_count = 0
         thinking_token_count = 0
 
+        # httpx.AsyncClient.stream() is implemented as an @asynccontextmanager
+        # with a try/finally that calls response.aclose() unconditionally.
+        # This means if a CancelledError propagates out of the async-for loop
+        # (e.g. because the WebSocket client disconnected), aclose() is still
+        # called immediately, closing the TCP connection to llama-server
+        # without draining the remaining response body. CancelledError is then
+        # re-raised by the context manager so the task cancellation propagates
+        # correctly up the call stack. No additional try/except is needed here.
         async with self.client.stream(
             "POST", f"{self.base_url}/v1/chat/completions", json=payload
         ) as response:
