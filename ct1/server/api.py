@@ -35,6 +35,7 @@ _db: ConversationDB | None = None
 _cache: ComponentCache | None = None
 _workspace: WorkspaceManager | None = None
 _swapping: bool = False          # True while model swap is in progress
+_shutting_down: bool = False     # True during application shutdown
 _active_think_tasks: set = set() # Active /ws/think asyncio tasks
 _WS_QUEUE_MAX = 500  # Max buffered events per WebSocket session (~1-2 full responses)
 
@@ -82,7 +83,7 @@ def _ensure_frontend_built() -> None:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global _orch, _server_procs, _db, _cache, _workspace
+    global _orch, _server_procs, _db, _cache, _workspace, _shutting_down
     try:
         _server_procs = await start_server(str(_CONFIG_PATH))
     except Exception as e:
@@ -98,6 +99,21 @@ async def lifespan(application: FastAPI):
     await _db.init()
     _workspace = WorkspaceManager()
     yield
+    _shutting_down = True
+    # Drain active generations (max 30s)
+    snapshot = set(_active_think_tasks)
+    if snapshot:
+        print(f"[api] Shutdown: waiting for {len(snapshot)} active generation(s)...")
+        try:
+            _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+            if _pending:
+                print(f"[api] Shutdown: {len(_pending)} generation(s) did not finish in 30s — cancelling")
+                for task in _pending:
+                    task.cancel()
+                # Await cancellation to complete before tearing down resources
+                await asyncio.gather(*_pending, return_exceptions=True)
+        except Exception:
+            pass
     if _db:
         await _db.close()
     if _cache:
@@ -510,8 +526,8 @@ async def delete_cached_component(comp_id: str):
 
 @app.websocket("/ws/think")
 async def ws_think(websocket: WebSocket):
-    if _swapping:
-        await websocket.close(code=1013, reason="Model swap in progress")
+    if _swapping or _shutting_down:
+        await websocket.close(code=1013, reason="Server busy — try again shortly")
         return
     await websocket.accept()
     current_think_task: asyncio.Task | None = None
