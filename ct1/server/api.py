@@ -36,6 +36,7 @@ _cache: ComponentCache | None = None
 _workspace: WorkspaceManager | None = None
 _swapping: bool = False          # True while model swap is in progress
 _active_think_tasks: set = set() # Active /ws/think asyncio tasks
+_WS_QUEUE_MAX = 500  # Max buffered events per WebSocket session (~1-2 full responses)
 
 
 def _npm_run(args: list, cwd: str) -> "subprocess.CompletedProcess":
@@ -536,10 +537,13 @@ async def ws_think(websocket: WebSocket):
 
                 goal = msg.get("goal", "")
                 conversation = msg.get("conversation", [])
-                queue: asyncio.Queue = asyncio.Queue()
+                queue: asyncio.Queue = asyncio.Queue(maxsize=_WS_QUEUE_MAX)
 
                 def on_event(event: str, **data):
-                    queue.put_nowait({"event": event, **data})
+                    try:
+                        queue.put_nowait({"event": event, **data})
+                    except asyncio.QueueFull:
+                        pass  # Client not consuming events (likely disconnected)
 
                 async def stream_events():
                     while True:
@@ -549,6 +553,12 @@ async def ws_think(websocket: WebSocket):
                         except Exception:
                             break
                         if item.get("event") == "done":
+                            break
+                    # Drain any remaining items so the queue can be GC'd
+                    while not queue.empty():
+                        try:
+                            queue.get_nowait()
+                        except asyncio.QueueEmpty:
                             break
 
                 async def run_think():
@@ -567,20 +577,26 @@ async def ws_think(websocket: WebSocket):
                     detected_urls = extract_urls(goal_text_for_urls)
 
                     if len(all_found) > MAX_URLS_PER_MESSAGE:
-                        queue.put_nowait({
-                            "event": "warning",
-                            "message": f"Found {len(all_found)} URLs; only the first {MAX_URLS_PER_MESSAGE} will be fetched.",
-                        })
+                        try:
+                            queue.put_nowait({
+                                "event": "warning",
+                                "message": f"Found {len(all_found)} URLs; only the first {MAX_URLS_PER_MESSAGE} will be fetched.",
+                            })
+                        except asyncio.QueueFull:
+                            pass  # Client not consuming events (likely disconnected)
 
                     if detected_urls:
                         ctx_size = _cfg.get("llama_server", {}).get("context_size", 16384)
                         budget_chars = int((ctx_size * 3.5 - 2000) / 2 / len(detected_urls))
 
                         if budget_chars < 500:
-                            queue.put_nowait({
-                                "event": "warning",
-                                "message": "Context too small to fetch URL content; skipping web fetch.",
-                            })
+                            try:
+                                queue.put_nowait({
+                                    "event": "warning",
+                                    "message": "Context too small to fetch URL content; skipping web fetch.",
+                                })
+                            except asyncio.QueueFull:
+                                pass  # Client not consuming events (likely disconnected)
                             detected_urls = []
 
                     if detected_urls:
@@ -588,14 +604,20 @@ async def ws_think(websocket: WebSocket):
                         fetched_meta = []
 
                         for u in detected_urls:
-                            queue.put_nowait({"event": "url_fetching", "url": u})
+                            try:
+                                queue.put_nowait({"event": "url_fetching", "url": u})
+                            except asyncio.QueueFull:
+                                pass  # Client not consuming events (likely disconnected)
                             try:
                                 fr = await _fetch_url(u, max_chars=budget_chars)
                                 if fr.error:
-                                    queue.put_nowait({
-                                        "event": "url_failed",
-                                        "url": u, "error": fr.error,
-                                    })
+                                    try:
+                                        queue.put_nowait({
+                                            "event": "url_failed",
+                                            "url": u, "error": fr.error,
+                                        })
+                                    except asyncio.QueueFull:
+                                        pass  # Client not consuming events (likely disconnected)
                                 else:
                                     fetched_blocks.append(
                                         f'[FETCHED CONTENT FROM: {fr.url} — "{fr.title}"]\n'
@@ -609,19 +631,25 @@ async def ws_think(websocket: WebSocket):
                                         "content_length": fr.content_length,
                                         "truncated": fr.truncated,
                                     })
-                                    queue.put_nowait({
-                                        "event": "url_fetched",
-                                        "url": fr.url,
-                                        "title": fr.title,
-                                        "content_length": fr.content_length,
-                                        "truncated": fr.truncated,
-                                        "preview": fr.content[:500],
-                                    })
+                                    try:
+                                        queue.put_nowait({
+                                            "event": "url_fetched",
+                                            "url": fr.url,
+                                            "title": fr.title,
+                                            "content_length": fr.content_length,
+                                            "truncated": fr.truncated,
+                                            "preview": fr.content[:500],
+                                        })
+                                    except asyncio.QueueFull:
+                                        pass  # Client not consuming events (likely disconnected)
                             except Exception as e:
-                                queue.put_nowait({
-                                    "event": "url_failed",
-                                    "url": u, "error": str(e),
-                                })
+                                try:
+                                    queue.put_nowait({
+                                        "event": "url_failed",
+                                        "url": u, "error": str(e),
+                                    })
+                                except asyncio.QueueFull:
+                                    pass  # Client not consuming events (likely disconnected)
 
                         if fetched_blocks:
                             ctx = "\n\n".join(fetched_blocks)
@@ -643,7 +671,10 @@ async def ws_think(websocket: WebSocket):
                     if result.get("route") == "ROUTE_COMPUTER" and _workspace:
                         ws_id = msg.get("workspace_id")
                         if not ws_id:
-                            queue.put_nowait({"event": "warning", "message": "No workspace — files not saved. Switch to Computer mode first."})
+                            try:
+                                queue.put_nowait({"event": "warning", "message": "No workspace — files not saved. Switch to Computer mode first."})
+                            except asyncio.QueueFull:
+                                pass  # Client not consuming events (likely disconnected)
                         if ws_id:
                             current_response = result["response"]
                             max_fix_iterations = 2
@@ -655,11 +686,14 @@ async def ws_think(websocket: WebSocket):
                                     files = Orchestrator._parse_multi_file(current_response)
                                     for f in files:
                                         _workspace.write_file(ws_id, f["path"], f["content"])
-                                        queue.put_nowait({
-                                            "event": "file_saved",
-                                            "path": f["path"],
-                                            "workspace_id": ws_id,
-                                        })
+                                        try:
+                                            queue.put_nowait({
+                                                "event": "file_saved",
+                                                "path": f["path"],
+                                                "workspace_id": ws_id,
+                                            })
+                                        except asyncio.QueueFull:
+                                            pass  # Client not consuming events (likely disconnected)
                                 except Exception as fs_err:
                                     print(f"[api] file save error: {fs_err}")
                                     break
@@ -691,10 +725,16 @@ async def ws_think(websocket: WebSocket):
                                         for cmd_text in commands:
                                             if not is_command_safe(cmd_text):
                                                 out_text = f"$ {cmd_text}\nBlocked: command not allowed\n"
-                                                queue.put_nowait({"event": "terminal_output", "text": out_text})
+                                                try:
+                                                    queue.put_nowait({"event": "terminal_output", "text": out_text})
+                                                except asyncio.QueueFull:
+                                                    pass  # Client not consuming events (likely disconnected)
                                                 all_cmd_output.append(out_text)
                                                 continue
-                                            queue.put_nowait({"event": "terminal_output", "text": f"$ {cmd_text}\n"})
+                                            try:
+                                                queue.put_nowait({"event": "terminal_output", "text": f"$ {cmd_text}\n"})
+                                            except asyncio.QueueFull:
+                                                pass  # Client not consuming events (likely disconnected)
                                             try:
                                                 import sys as _sys
                                                 shell = "cmd.exe" if _sys.platform == "win32" else "/bin/bash"
@@ -715,7 +755,10 @@ async def ws_think(websocket: WebSocket):
                                                 )
                                                 output = stdout.decode("utf-8", errors="replace") if stdout else ""
                                                 exit_info = f"\n[exit {proc.returncode}]\n" if proc.returncode else "\n"
-                                                queue.put_nowait({"event": "terminal_output", "text": output + exit_info})
+                                                try:
+                                                    queue.put_nowait({"event": "terminal_output", "text": output + exit_info})
+                                                except asyncio.QueueFull:
+                                                    pass  # Client not consuming events (likely disconnected)
                                                 all_cmd_output.append(f"$ {cmd_text}\n{output}{exit_info}")
                                                 if proc.returncode and proc.returncode != 0:
                                                     has_errors = True
@@ -727,12 +770,18 @@ async def ws_think(websocket: WebSocket):
                                                 except Exception:
                                                     pass
                                                 timeout_msg = "[timed out — script may use input() which is not supported in non-interactive mode]\n"
-                                                queue.put_nowait({"event": "terminal_output", "text": timeout_msg})
+                                                try:
+                                                    queue.put_nowait({"event": "terminal_output", "text": timeout_msg})
+                                                except asyncio.QueueFull:
+                                                    pass  # Client not consuming events (likely disconnected)
                                                 all_cmd_output.append(f"$ {cmd_text}\n{timeout_msg}")
                                                 has_errors = True
                                             except Exception as cmd_err:
                                                 err_text = f"Error: {cmd_err}\n"
-                                                queue.put_nowait({"event": "terminal_output", "text": err_text})
+                                                try:
+                                                    queue.put_nowait({"event": "terminal_output", "text": err_text})
+                                                except asyncio.QueueFull:
+                                                    pass  # Client not consuming events (likely disconnected)
                                                 all_cmd_output.append(f"$ {cmd_text}\n{err_text}")
                                                 has_errors = True
                                 except Exception as run_err:
@@ -742,11 +791,17 @@ async def ws_think(websocket: WebSocket):
                                 # If errors found and iterations remain, ask AI to fix
                                 if has_errors and iteration < max_fix_iterations:
                                     terminal_log = "\n".join(all_cmd_output)[-3000:]
-                                    queue.put_nowait({
-                                        "event": "terminal_output",
-                                        "text": f"\n[CT-2: errors detected, auto-fixing (attempt {iteration + 1}/{max_fix_iterations})...]\n",
-                                    })
-                                    queue.put_nowait({"event": "fixing"})
+                                    try:
+                                        queue.put_nowait({
+                                            "event": "terminal_output",
+                                            "text": f"\n[CT-2: errors detected, auto-fixing (attempt {iteration + 1}/{max_fix_iterations})...]\n",
+                                        })
+                                    except asyncio.QueueFull:
+                                        pass  # Client not consuming events (likely disconnected)
+                                    try:
+                                        queue.put_nowait({"event": "fixing"})
+                                    except asyncio.QueueFull:
+                                        pass  # Client not consuming events (likely disconnected)
 
                                     # Read back the files the AI wrote for context
                                     file_context = ""
@@ -782,16 +837,19 @@ async def ws_think(websocket: WebSocket):
                                         result["thinking"] = fix_result.get("thinking", "")
                                         # Loop continues — will save new files and re-run
                                     except Exception as fix_err:
-                                        queue.put_nowait({
-                                            "event": "terminal_output",
-                                            "text": f"\n[CT-2: fix attempt failed: {fix_err}]\n",
-                                        })
+                                        try:
+                                            queue.put_nowait({
+                                                "event": "terminal_output",
+                                                "text": f"\n[CT-2: fix attempt failed: {fix_err}]\n",
+                                            })
+                                        except asyncio.QueueFull:
+                                            pass  # Client not consuming events (likely disconnected)
                                         break
                                 else:
                                     # No errors or out of iterations
                                     break
 
-                    queue.put_nowait({
+                    await queue.put({
                         "event": "done",
                         "response": result["response"],
                         "thinking": result.get("thinking", ""),
@@ -852,7 +910,7 @@ async def ws_think(websocket: WebSocket):
                 try:
                     await asyncio.gather(current_think_task, stream_task)
                 except asyncio.CancelledError:
-                    queue.put_nowait({"event": "done", "response": "", "route": ""})
+                    await queue.put({"event": "done", "response": "", "route": ""})
                     await stream_task
                 finally:
                     cancel_task.cancel()
