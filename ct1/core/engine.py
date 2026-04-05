@@ -1766,4 +1766,5 @@ class Engine:
             self.client = httpx.AsyncClient(timeout=600.0)
 
     async def close(self):
-        await self.client.aclose()
+        async with self._client_lock:
+            await self.client.aclose()
