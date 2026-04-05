@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ct1.core.orchestrator import Orchestrator, _get_mode_registry
 from ct1.server.health import check_server_health
@@ -22,6 +22,7 @@ from ct1.server.workspace import WorkspaceManager, is_command_safe
 
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "ct1" / "server" / "model_config.yaml"
 _MODES_DIR = Path(__file__).parent.parent / "modes"
+_BUILTIN_MODES: frozenset[str] = frozenset({"direct", "code", "design", "computer"})
 
 _raw_cfg: dict = load_raw_config(str(_CONFIG_PATH))
 try:
@@ -351,11 +352,11 @@ class ModeCreate(BaseModel):
     route_id: str
     description: str = ""
     priority: int = 99
-    patterns: list[str] = []
-    negative_patterns: list[str] = []
-    lang_patterns: list[str] = []
+    patterns: list[str] = Field(default_factory=list)
+    negative_patterns: list[str] = Field(default_factory=list)
+    lang_patterns: list[str] = Field(default_factory=list)
     detected_lang: str = "text"
-    task_overrides: dict = {}
+    task_overrides: dict = Field(default_factory=dict)
 
 
 @app.get("/api/modes")
@@ -402,9 +403,11 @@ async def get_mode(name: str):
 @app.put("/api/modes/{name}")
 async def update_mode(name: str, body: ModeUpdate):
     """Update an existing mode's config and persist to YAML. Reloads registry."""
-    yaml_path = _MODES_DIR / f"{name}.yaml"
+    import os, tempfile
+    yaml_path = (_MODES_DIR / f"{name}.yaml").resolve()
+    if yaml_path.parent != _MODES_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid mode name")
     if not yaml_path.exists():
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Mode file '{name}.yaml' not found")
     with yaml_path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
@@ -421,10 +424,18 @@ async def update_mode(name: str, body: ModeUpdate):
         data["detected_lang"] = body.detected_lang
     if body.task_overrides is not None:
         data["task_overrides"] = body.task_overrides
-    yaml_path.write_text(
-        yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(_MODES_DIR), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, str(yaml_path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     _get_mode_registry().reload()
     return {"ok": True, "name": name}
 
@@ -432,9 +443,11 @@ async def update_mode(name: str, body: ModeUpdate):
 @app.post("/api/modes")
 async def create_mode(body: ModeCreate):
     """Create a new mode definition YAML file. Reloads registry."""
-    yaml_path = _MODES_DIR / f"{body.name}.yaml"
+    import os, tempfile
+    yaml_path = (_MODES_DIR / f"{body.name}.yaml").resolve()
+    if yaml_path.parent != _MODES_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid mode name")
     if yaml_path.exists():
-        from fastapi import HTTPException
         raise HTTPException(status_code=409, detail=f"Mode '{body.name}' already exists")
     data = {
         "name": body.name,
@@ -447,10 +460,18 @@ async def create_mode(body: ModeCreate):
         "detected_lang": body.detected_lang,
         "task_overrides": body.task_overrides,
     }
-    yaml_path.write_text(
-        yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
+    content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=str(_MODES_DIR), suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, str(yaml_path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     _get_mode_registry().reload()
     return {"ok": True, "name": body.name}
 
@@ -459,13 +480,12 @@ async def create_mode(body: ModeCreate):
 async def delete_mode(name: str):
     """Delete a mode YAML file and reload the registry."""
     # Protect built-in modes from deletion
-    _BUILTIN_MODES = {"direct", "code", "design", "computer"}
     if name in _BUILTIN_MODES:
-        from fastapi import HTTPException
         raise HTTPException(status_code=403, detail=f"Built-in mode '{name}' cannot be deleted")
-    yaml_path = _MODES_DIR / f"{name}.yaml"
+    yaml_path = (_MODES_DIR / f"{name}.yaml").resolve()
+    if yaml_path.parent != _MODES_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid mode name")
     if not yaml_path.exists():
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Mode '{name}' not found")
     yaml_path.unlink()
     _get_mode_registry().reload()
