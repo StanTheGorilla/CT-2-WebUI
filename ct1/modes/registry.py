@@ -71,8 +71,11 @@ class ModeRegistry:
         """Load all *.yaml files from modes_dir, compile regex patterns."""
         loaded: list[ModeDefinition] = []
         for yaml_file in self._modes_dir.glob("*.yaml"):
-            with yaml_file.open(encoding="utf-8") as f:
-                data = yaml.safe_load(f)
+            try:
+                with yaml_file.open(encoding="utf-8") as f:
+                    data = yaml.safe_load(f)
+            except Exception:
+                continue
             if not isinstance(data, dict) or "name" not in data or "route_id" not in data:
                 continue
             mode = load_mode_from_dict(data)
