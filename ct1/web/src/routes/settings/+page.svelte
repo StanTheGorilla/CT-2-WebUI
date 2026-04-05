@@ -209,6 +209,57 @@
         modesDirty[modeName] = true;
     }
 
+    /* ── Prompts state ── */
+    let prompts = $state<Record<string, string>>({});
+    let promptsExpanded = $state<Record<string, boolean>>({});
+    let promptEdits = $state<Record<string, string>>({});
+    let promptsDirty = $state<Record<string, boolean>>({});
+    let promptsSaving = $state<Record<string, boolean>>({});
+    let promptsSaved = $state<Record<string, boolean>>({});  // shows "restart required" after save
+    let promptsSaveError = $state<Record<string, string>>({});
+
+    async function loadPrompts() {
+        try {
+            const res = await fetch('/api/prompts');
+            const data = await res.json();
+            prompts = data.prompts ?? {};
+            promptEdits = { ...prompts };
+        } catch (e) {
+            // silent
+        }
+    }
+
+    function togglePrompt(name: string) {
+        promptsExpanded[name] = !promptsExpanded[name];
+    }
+
+    function editPrompt(name: string, value: string) {
+        promptEdits[name] = value;
+        promptsDirty[name] = promptEdits[name] !== prompts[name];
+        promptsSaved[name] = false;
+    }
+
+    async function savePrompt(name: string) {
+        promptsSaving[name] = true;
+        promptsSaveError[name] = '';
+        try {
+            const res = await fetch(`/api/prompts/${name}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: promptEdits[name] }),
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            prompts[name] = promptEdits[name];
+            promptsDirty[name] = false;
+            promptsSaved[name] = true;  // trigger "restart required" notice
+        } catch (e: any) {
+            promptsSaveError[name] = e.message || 'Failed to save';
+        } finally {
+            promptsSaving[name] = false;
+        }
+    }
+
     function formatSize(gb: number): string {
         if (gb >= 1) return gb.toFixed(1) + ' GB';
         return Math.round(gb * 1024) + ' MB';
@@ -225,8 +276,7 @@
     }
 
     onMount(async () => {
-        await loadData();
-        await loadModes();
+        await Promise.all([loadData(), loadModes(), loadPrompts()]);
     });
 </script>
 
@@ -425,6 +475,52 @@
                             disabled={modesSaving[mode.name]}
                         >{modesSaving[mode.name] ? 'Saving…' : 'Save'}</button>
                     </div>
+                    {/if}
+                </div>
+            {/each}
+        </div>
+    </section>
+    {/if}
+
+    <!-- ─── Prompts ─── -->
+    {#if Object.keys(prompts).length > 0}
+    <section class="section">
+        <h2 class="section-title">System Prompts</h2>
+        <div class="prompts-list">
+            {#each Object.entries(prompts).sort(([a], [b]) => a.localeCompare(b)) as [name, _content]}
+                <div class="prompt-row" class:expanded={promptsExpanded[name]}>
+                    <button class="prompt-header" onclick={() => togglePrompt(name)}>
+                        <span class="prompt-name">{name}</span>
+                        <span class="prompt-chars">{(promptEdits[name] ?? _content).length} chars</span>
+                        <span class="prompt-chevron" class:open={promptsExpanded[name]}></span>
+                    </button>
+                    {#if promptsExpanded[name]}
+                        <div class="prompt-body">
+                            <textarea
+                                class="prompt-textarea"
+                                rows="12"
+                                value={promptEdits[name] ?? _content}
+                                oninput={(e) => editPrompt(name, (e.target as HTMLTextAreaElement).value)}
+                                spellcheck={false}
+                            ></textarea>
+                            {#if promptsSaved[name]}
+                                <div class="prompt-restart-notice">
+                                    Saved. Restart the model server to apply changes.
+                                </div>
+                            {/if}
+                            {#if promptsSaveError[name]}
+                                <div class="prompt-error">{promptsSaveError[name]}</div>
+                            {/if}
+                            {#if promptsDirty[name] || promptsSaveError[name]}
+                                <div class="prompt-actions">
+                                    <button
+                                        class="prompt-save-btn"
+                                        onclick={() => savePrompt(name)}
+                                        disabled={promptsSaving[name]}
+                                    >{promptsSaving[name] ? 'Saving…' : 'Save'}</button>
+                                </div>
+                            {/if}
+                        </div>
                     {/if}
                 </div>
             {/each}
@@ -1199,4 +1295,108 @@
     }
     .mode-save-btn:hover:not(:disabled) { opacity: 0.85; }
     .mode-save-btn:disabled { opacity: 0.5; cursor: wait; }
+
+    /* ── Prompts ── */
+    .prompts-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        overflow: hidden;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        box-shadow: var(--shadow-xs);
+    }
+    .prompt-row {
+        border-bottom: 1px solid var(--border-subtle);
+    }
+    .prompt-row:last-child { border-bottom: none; }
+    .prompt-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 11px 16px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-family: inherit;
+        text-align: left;
+        transition: background var(--transition);
+    }
+    .prompt-header:hover { background: var(--bubble-strong); }
+    .prompt-name {
+        flex: 1;
+        font-size: 13px;
+        font-family: var(--font-mono);
+        color: var(--text);
+    }
+    .prompt-chars {
+        font-size: 11px;
+        color: var(--text-muted);
+        flex-shrink: 0;
+    }
+    .prompt-chevron {
+        flex-shrink: 0;
+        width: 0; height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 5px solid var(--text-muted);
+        transition: transform 0.15s;
+    }
+    .prompt-chevron.open { transform: rotate(180deg); }
+    .prompt-body {
+        padding: 0 16px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .prompt-textarea {
+        width: 100%;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--text);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
+        resize: vertical;
+        outline: none;
+        transition: border-color var(--transition);
+        box-sizing: border-box;
+    }
+    .prompt-textarea:focus { border-color: var(--text-muted); }
+    .prompt-restart-notice {
+        font-size: 12px;
+        color: rgba(210, 153, 34, 0.9);
+        background: rgba(210, 153, 34, 0.07);
+        border: 1px solid rgba(210, 153, 34, 0.18);
+        border-radius: var(--radius-sm);
+        padding: 7px 12px;
+    }
+    .prompt-error {
+        font-size: 12px;
+        color: var(--error, #e06c75);
+    }
+    .prompt-actions {
+        display: flex;
+        justify-content: flex-end;
+    }
+    .prompt-save-btn {
+        padding: 5px 16px;
+        font-size: 12px;
+        font-weight: 600;
+        font-family: inherit;
+        color: var(--bg);
+        background: var(--text-secondary);
+        border: none;
+        border-radius: 9999px;
+        cursor: pointer;
+        transition: opacity var(--transition);
+    }
+    .prompt-save-btn:hover:not(:disabled) { opacity: 0.85; }
+    .prompt-save-btn:disabled { opacity: 0.5; cursor: wait; }
 </style>
