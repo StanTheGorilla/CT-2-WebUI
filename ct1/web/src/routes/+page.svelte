@@ -1,5 +1,6 @@
 <script lang="ts">
     import { chat, setFeedback, regenerate, undo, setWorkspaceId, stopGeneration } from '$lib/stores/chat';
+    import { getLangMeta } from '$lib/langMap';
     import { render } from '$lib/markdown';
     import hljs from 'highlight.js';
     import ChatInput from '$lib/components/ChatInput.svelte';
@@ -114,28 +115,23 @@
 
     let previewVisible = $derived(showPreview && !!previewCode);
 
-    function downloadBlob(code: string, ext: string = 'txt') {
+    function downloadBlob(code: string, lang: string = 'text') {
         if (!code) return;
-        const mimeMap: Record<string, string> = {
-            html: 'text/html', htm: 'text/html',
-            py:   'text/x-python',
-            js:   'text/javascript', ts: 'text/typescript',
-            sh:   'text/x-sh',
-            sql:  'text/x-sql',
-            cpp:  'text/x-c++src', go: 'text/x-go', rs: 'text/x-rustsrc',
-        };
-        const mime = mimeMap[ext] || 'text/plain';
+        if (lang === 'multi') return; // multi-file: already saved to workspace
+        const [ext, mime] = getLangMeta(lang);
+        const filename = lang === 'html' ? 'index.html' : `response${ext}`;
         const blob = new Blob([code], { type: mime });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `output.${ext}`;
+        a.download = filename;
         a.click();
         URL.revokeObjectURL(url);
     }
 
     function downloadCode() {
-        downloadBlob($chat.response, planTypeToExt($chat.plan?.output_type));
+        const lang = $chat.conversation[$chat.conversation.length - 1]?.detectedLang ?? 'text';
+        downloadBlob($chat.response, lang);
     }
 
     function previewHistoryCode(code: string) {
@@ -347,7 +343,8 @@
                             <p>{turn.content}</p>
                         </div>
                     {:else if turn.isCode && turn.route !== 'ROUTE_COMPUTER'}
-                        {@const hExt = planTypeToExt(turn.plan?.output_type)}
+                        {@const hLang = turn.detectedLang ?? 'text'}
+                        {@const hExt = hLang !== 'text' ? getLangMeta(hLang)[0].slice(1) : planTypeToExt(turn.plan?.output_type)}
                         <div class="bubble-row">
                             {#if turn.route}
                                 <div class="route-row">
@@ -391,9 +388,11 @@
                                         <button class="act-btn" onclick={() => copyToClipboard(turn.content)} title="Copy code">
                                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
                                         </button>
-                                        <button class="act-btn" onclick={() => downloadBlob(turn.content, hExt)} title="Download">
+                                        {#if hLang !== 'multi'}
+                                        <button class="act-btn" onclick={() => downloadBlob(turn.content, hLang)} title="Download">
                                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 2.5v7M5 7.5l2.5 2.5L10 7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11.5h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
                                         </button>
+                                        {/if}
                                     </div>
                                 </div>
                             </div>
@@ -859,11 +858,12 @@
 
                 <!-- Output file card (code responses — not computer mode) -->
                 {#if $chat.response && isCode && !isComputerRoute}
-                    {@const ext = outputExt()}
+                    {@const _respLang = $chat.conversation[$chat.conversation.length - 1]?.detectedLang ?? 'text'}
+                    {@const ext = _respLang !== 'text' ? getLangMeta(_respLang)[0].slice(1) : outputExt()}
                     <div class="output-card">
                         <div class="output-bar">
                             <span class="ext-badge" style="--ec: {extColor(ext)}">{ext.toUpperCase()}</span>
-                            <span class="output-name">output.{ext}</span>
+                            <span class="output-name">{_respLang === 'html' ? 'index.html' : `response.${ext}`}</span>
                             <span class="output-meta">
                                 {formatChars($chat.response.length)}{#if $chat.tokenCount > 0}&ensp;·&ensp;{$chat.tokenCount} tok{#if $chat.tokensPerSec > 0} · {$chat.tokensPerSec}/s{/if}{/if}
                             </span>
@@ -879,9 +879,11 @@
                                 <button class="act-btn" onclick={() => copyToClipboard($chat.response)} title="Copy code">
                                     <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
                                 </button>
+                                {#if _respLang !== 'multi'}
                                 <button class="act-btn" onclick={downloadCode} title="Download">
                                     <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 2.5v7M5 7.5l2.5 2.5L10 7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 11.5h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
                                 </button>
+                                {/if}
                                 {#if $chat.undoStack.length > 0}
                                     <button class="act-btn undo" onclick={undo} title="Undo last edit ({$chat.undoStack.length})">
                                         <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M3 7.5h9M3 7.5l3-3M3 7.5l3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>

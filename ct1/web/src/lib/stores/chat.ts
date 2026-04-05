@@ -31,6 +31,10 @@ export interface Turn {
     feedback?: number;
     fetchedContent?: { url: string; title: string; content: string;
                        contentLength: number; truncated: boolean }[];
+    /** Detected language identifier from backend (e.g. 'python', 'html') */
+    detectedLang?: string;
+    /** Files written to workspace (computer mode) */
+    files?: Array<{ path: string; lang: string }>;
 }
 
 export interface Reflection {
@@ -319,6 +323,8 @@ function handleEvent(data: Record<string, any>) {
                         thinking: s.thinking,
                         draftThinking: s.draftThinking,
                         fetchedContent: s.fetchedContent.length > 0 ? s.fetchedContent : undefined,
+                        detectedLang: data.detected_lang ?? 'text',
+                        files: data.files ?? [],
                     },
                 ];
                 break;
