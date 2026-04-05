@@ -154,6 +154,61 @@
         }
     }
 
+    /* ── Modes state ── */
+    interface ModeDefinition {
+        name: string;
+        route_id: string;
+        detected_lang: string;
+        priority: number;
+        patterns: string[];
+        negative_patterns: string[];
+        task_overrides: Record<string, number>;
+    }
+    let modes = $state<ModeDefinition[]>([]);
+    let modesDirty = $state<Record<string, boolean>>({});
+    let modesSaving = $state<Record<string, boolean>>({});
+    let modesSaveError = $state<Record<string, string>>({});
+    let modeEdits = $state<Record<string, Record<string, number>>>({});
+
+    async function loadModes() {
+        try {
+            const res = await fetch('/api/modes');
+            const data = await res.json();
+            modes = data.modes ?? [];
+            // Initialize edits from current task_overrides
+            modeEdits = Object.fromEntries(
+                modes.map(m => [m.name, { ...m.task_overrides }])
+            );
+        } catch (e) {
+            // silent — modes section just won't show
+        }
+    }
+
+    async function saveMode(name: string) {
+        modesSaving[name] = true;
+        modesSaveError[name] = '';
+        try {
+            const res = await fetch(`/api/modes/${name}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task_overrides: modeEdits[name] }),
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            modesDirty[name] = false;
+        } catch (e: any) {
+            modesSaveError[name] = e.message || 'Failed to save';
+        } finally {
+            modesSaving[name] = false;
+        }
+    }
+
+    function updateModeOverride(modeName: string, key: string, value: number) {
+        if (!modeEdits[modeName]) modeEdits[modeName] = {};
+        modeEdits[modeName][key] = value;
+        modesDirty[modeName] = true;
+    }
+
     function formatSize(gb: number): string {
         if (gb >= 1) return gb.toFixed(1) + ' GB';
         return Math.round(gb * 1024) + ' MB';
@@ -169,7 +224,10 @@
         return m ? m[1] + 'B' : '';
     }
 
-    onMount(loadData);
+    onMount(async () => {
+        await loadData();
+        await loadModes();
+    });
 </script>
 
 <div class="settings-page" onclick={() => { if (pickerOpen) pickerOpen = false; }}>
@@ -318,6 +376,60 @@
                 </div>
             {/if}
         </section>
+    {/if}
+
+    <!-- ─── Modes ─── -->
+    {#if modes.length > 0}
+    <section class="section">
+        <h2 class="section-title">Routing Modes</h2>
+        <div class="modes-list">
+            {#each modes as mode (mode.name)}
+                <div class="mode-card">
+                    <div class="mode-header">
+                        <div class="mode-meta">
+                            <span class="mode-name">{mode.name}</span>
+                            <span class="mode-route">{mode.route_id.replace('ROUTE_', '')}</span>
+                            {#if mode.patterns.length > 0}
+                                <span class="mode-badge">{mode.patterns.length} patterns</span>
+                            {/if}
+                        </div>
+                    </div>
+                    <div class="mode-overrides">
+                        {#each [['temperature', 0, 2, 0.05], ['top_p', 0, 1, 0.05], ['presence_penalty', -2, 2, 0.05]] as [key, min, max, step]}
+                            {@const val = (modeEdits[mode.name]?.[key as string] ?? mode.task_overrides[key as string])}
+                            {#if val !== undefined}
+                            <div class="override-row">
+                                <span class="override-key">{key}</span>
+                                <div class="slider-container">
+                                    <input type="range"
+                                        min={min}
+                                        max={max}
+                                        step={step}
+                                        value={val}
+                                        oninput={(e) => updateModeOverride(mode.name, key as string, Number((e.target as HTMLInputElement).value))}
+                                    />
+                                    <span class="slider-value">{(modeEdits[mode.name]?.[key as string] ?? val).toFixed(2)}</span>
+                                </div>
+                            </div>
+                            {/if}
+                        {/each}
+                    </div>
+                    {#if modesDirty[mode.name] || modesSaveError[mode.name]}
+                    <div class="mode-footer">
+                        {#if modesSaveError[mode.name]}
+                            <span class="mode-error">{modesSaveError[mode.name]}</span>
+                        {/if}
+                        <button
+                            class="mode-save-btn"
+                            onclick={() => saveMode(mode.name)}
+                            disabled={modesSaving[mode.name]}
+                        >{modesSaving[mode.name] ? 'Saving…' : 'Save'}</button>
+                    </div>
+                    {/if}
+                </div>
+            {/each}
+        </div>
+    </section>
     {/if}
 
     <!-- ─── Pipeline ─── -->
@@ -990,4 +1102,101 @@
     .backend-btn:disabled { cursor: wait; opacity: 0.3; }
     .switching-text { font-size: 0.8rem; opacity: 0.6; margin: 0.25rem 0 0; }
     .error-text { font-size: 0.8rem; color: #e06c75; margin: 0.25rem 0 0; }
+
+    /* ── Modes ── */
+    .modes-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    .mode-card {
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        padding: 14px 18px;
+        box-shadow: var(--shadow-xs);
+    }
+    .mode-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+    }
+    .mode-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .mode-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        text-transform: capitalize;
+    }
+    .mode-route {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        background: var(--surface);
+        padding: 2px 8px;
+        border-radius: 9999px;
+        border: 1px solid var(--border-subtle);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .mode-badge {
+        font-size: 11px;
+        color: var(--text-muted);
+        background: rgba(59, 130, 246, 0.08);
+        border: 1px solid rgba(59, 130, 246, 0.15);
+        padding: 2px 8px;
+        border-radius: 9999px;
+    }
+    .mode-overrides {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .override-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .override-key {
+        font-size: 12px;
+        color: var(--text-secondary);
+        min-width: 120px;
+        flex-shrink: 0;
+    }
+    .mode-footer {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--border-subtle);
+    }
+    .mode-error {
+        font-size: 12px;
+        color: var(--error, #e06c75);
+        flex: 1;
+    }
+    .mode-save-btn {
+        padding: 5px 16px;
+        font-size: 12px;
+        font-weight: 600;
+        font-family: inherit;
+        color: var(--bg);
+        background: var(--text-secondary);
+        border: none;
+        border-radius: 9999px;
+        cursor: pointer;
+        transition: opacity var(--transition);
+    }
+    .mode-save-btn:hover:not(:disabled) { opacity: 0.85; }
+    .mode-save-btn:disabled { opacity: 0.5; cursor: wait; }
 </style>
