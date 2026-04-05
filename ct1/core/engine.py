@@ -4,6 +4,7 @@ Operates in two modes:
   - ROUTER: Classifies intent → ROUTE_DESIGN | ROUTE_CODE | ROUTE_DIRECT
   - GENERATOR: Produces full code/answers
 """
+import asyncio
 import httpx
 import json
 import re as _re
@@ -454,6 +455,7 @@ class Engine:
         self.vision_supported = vision_supported
         self.context_size = context_size
         self.client = httpx.AsyncClient(timeout=600.0)
+        self._client_lock = asyncio.Lock()
         self.lessons: list[str] = []
         self.last_session: str = ""
 
@@ -1723,6 +1725,23 @@ class Engine:
             )
         except Exception:
             return None
+
+    async def reset_client(self) -> None:
+        """Close and recreate the httpx client to flush stale TCP connections.
+
+        Call this after llama-server restarts or model swaps to flush stale
+        Windows TCP TIME_WAIT sockets that degrade inference throughput.
+
+        Safe to call concurrently — guarded by _client_lock.
+        IMPORTANT: Only call when no inference is in progress (i.e., server is
+        offline/restarting), as the client will be unavailable during reset.
+        """
+        async with self._client_lock:
+            try:
+                await self.client.aclose()
+            except Exception:
+                pass
+            self.client = httpx.AsyncClient(timeout=600.0)
 
     async def close(self):
         await self.client.aclose()

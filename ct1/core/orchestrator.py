@@ -1582,5 +1582,12 @@ class Orchestrator:
             skip_refinement=skip_refinement,
         )
 
+    async def reset_engine_client(self) -> None:
+        """Delegate to Engine.reset_client() to flush stale TCP connections.
+
+        Call this after llama-server restarts or model swaps.
+        """
+        await self.engine.reset_client()
+
     async def close(self):
         await self.engine.close()
