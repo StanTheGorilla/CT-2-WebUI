@@ -1,0 +1,17 @@
+
+
+EXAMPLE STRUCTURE (follow this pattern, not content):
+```python
+import sys
+
+def process(data: list[str]) -> dict:
+    if not data:
+        return {}
+    result = {}
+    for item in data:
+        result[item] = len(item)
+    return result
+
+if __name__ == "__main__":
+    print(process(sys.argv[1:]))
+```

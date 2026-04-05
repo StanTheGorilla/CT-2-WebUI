@@ -1,0 +1,15 @@
+
+
+EXAMPLE STRUCTURE (follow this pattern, not content):
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>/* custom animations, gradients, fonts only */</style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+  <!-- semantic sections with Tailwind classes -->
+</body>
+</html>

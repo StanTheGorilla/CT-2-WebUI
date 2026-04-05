@@ -1,0 +1,8 @@
+
+
+<verify>
+BEFORE FINALIZING:
+- Does the output fully address every part of the request?
+- Is anything missing, incomplete, or placeholder?
+- If a check fails, correct the output before responding.
+</verify>

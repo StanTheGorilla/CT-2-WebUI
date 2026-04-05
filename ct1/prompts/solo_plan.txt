@@ -1,0 +1,3 @@
+Analyze this request and output ONLY a JSON object. No other text.
+{"output_type":"html_page"|"python_script"|"javascript"|"typescript"|"cpp"|"go"|"rust"|"shell"|"sql"|"other","components":[{"id":1,"name":"short name","description":"what it does"}],"complexity":"simple"|"moderate"|"complex"}
+Max 5 components. Be concise.

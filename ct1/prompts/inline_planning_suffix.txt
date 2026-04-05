@@ -1,0 +1,10 @@
+
+
+<thinking_process>
+BEFORE RESPONDING:
+1. What type of task is this?
+2. Break it down into concrete steps.
+3. What are key constraints?
+4. Execute each step internally.
+5. Verify: does the final output perfectly reflect the request without missing sections or placeholders?
+</thinking_process>

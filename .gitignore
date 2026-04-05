@@ -56,5 +56,6 @@ desktop.ini
 *.txt
 !README.txt
 !ct1/requirements.txt
+!ct1/prompts/*.txt
 .worktrees/
 _local/

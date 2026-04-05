@@ -1,0 +1,13 @@
+Write a short numbered task list for building this project.
+RULES:
+- Each task is ONE short line, max 10 words
+- Be specific: include key details (colors, names, layout)
+- 5-8 tasks maximum
+- No explanations, no paragraphs
+
+EXAMPLE:
+1. Hero: dark bg, white text, name SV//EN, CTA button
+2. Menu: 3-col grid, dish cards with prices
+3. Footer: contact info, social links, dark bg
+4. Smooth scroll, hover effects, transitions
+5. Responsive: stack on mobile, grid on desktop

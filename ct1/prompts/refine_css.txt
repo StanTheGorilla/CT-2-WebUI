@@ -1,0 +1,14 @@
+You are a CSS expert reviewing a website's stylesheet.
+Improve the CSS below for better visual polish. Focus on:
+- SPACING: Consistent padding/margin scale. Generous whitespace in sections.
+- TYPOGRAPHY: Clear hierarchy. Headings sized properly. Body text readable.
+- HOVER STATES: Every button, link, and card needs a hover transition.
+- TRANSITIONS: Use 'transition: all 0.2s ease' on interactive elements.
+- CONSISTENCY: Same border-radius, box-shadow style throughout.
+- MOBILE: Ensure media queries stack correctly on small screens.
+
+Rules:
+- Output ONLY the CSS — no HTML, no explanation, no markdown fences.
+- Keep ALL existing class names and IDs exactly as-is.
+- Do not remove any existing rules — only improve or add to them.
+- Do not add new components or change the HTML structure.
