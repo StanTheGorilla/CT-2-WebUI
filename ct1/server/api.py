@@ -380,6 +380,7 @@ async def select_model(body: ModelSelect):
         # Teardown old orchestrator
         if _orch:
             await _orch.close()
+            _orch = None  # Prevent stale calls if start_server fails below
 
         # Restart llama-server
         if _server_procs:
@@ -393,7 +394,8 @@ async def select_model(body: ModelSelect):
 
         # New orchestrator
         _orch = Orchestrator(str(_CONFIG_PATH),
-                             context_size_override=body.context_size)
+                             context_size_override=body.context_size,
+                             component_cache=_cache)
         await _orch.reset_engine_client()  # Flush stale TCP connections from prior server
 
         return {
@@ -443,6 +445,7 @@ async def select_backend(body: BackendSelect):
 
         if _orch:
             await _orch.close()
+            _orch = None  # Prevent stale calls if start_server fails below
 
         stop_server(_server_procs)
         _server_procs = []
@@ -494,6 +497,7 @@ async def restart_model(body: RestartBody):
 
         if _orch:
             await _orch.close()
+            _orch = None  # Prevent stale calls if start_server fails below
 
         if _server_procs:
             stop_server(_server_procs)
@@ -505,7 +509,8 @@ async def restart_model(body: RestartBody):
             return {"error": f"Failed to start server: {e}"}
 
         _orch = Orchestrator(str(_CONFIG_PATH),
-                             context_size_override=body.context_size)
+                             context_size_override=body.context_size,
+                             component_cache=_cache)
         await _orch.reset_engine_client()  # Flush stale TCP connections from prior server
 
         return {"status": "ok", "info": _cfg.get("_preset_info", {})}
