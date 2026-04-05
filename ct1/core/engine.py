@@ -995,8 +995,7 @@ class Engine:
 
         Returns {"text": str} — thinking disabled to keep output clean.
         """
-        polish_prompt_path = _PROMPTS_DIR / "polish_system.txt"
-        system = polish_prompt_path.read_text(encoding="utf-8")
+        system = _pm().get("polish_system")
 
         # Truncate if CSS is huge
         if len(css) > 6000:
@@ -1311,9 +1310,7 @@ class Engine:
 
     async def reflect(self, goal: str, complexity: str, outcome: str,
                       conversation: list[dict] = None) -> dict:
-        reflection_template = (
-            _PROMPTS_DIR / "reflection_prompt.txt"
-        ).read_text(encoding="utf-8")
+        reflection_template = _pm().get("reflection_prompt")
         if len(outcome) > 500:
             outcome_for_prompt = (
                 f"[Generated {len(outcome)} characters of output]"
