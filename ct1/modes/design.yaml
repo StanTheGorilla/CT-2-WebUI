@@ -1,0 +1,26 @@
+name: design
+route_id: ROUTE_DESIGN
+description: Single-file visual web page / UI design
+priority: 2
+detected_lang: html
+patterns:
+  - "design"
+  - "landing\\s+page"
+  - "dashboard"
+  - "portfolio"
+  - "webpage"
+  - "website\\s+layout"
+  - "mockup"
+  - "wireframe"
+  - "styled?\\s+page"
+  - "html\\s+page"
+  - "web\\s+page"
+  - "ui\\s+design"
+negative_patterns:
+  - "explain"
+  - "how\\s+does"
+  - "what\\s+is"
+  - "what\\s+are"
+  - "why\\s+does"
+task_overrides:
+  temperature: 0.4

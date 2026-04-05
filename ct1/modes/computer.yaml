@@ -1,0 +1,23 @@
+name: computer
+route_id: ROUTE_COMPUTER
+description: Multi-file project generation and shell command execution
+priority: 1
+detected_lang: multi
+patterns:
+  - "create\\s+a?\\s*project"
+  - "build\\s+a?\\s*(?:website|app|project)"
+  - "write\\s+to\\s+file"
+  - "run\\s+command"
+  - "execute"
+  - "install\\s+"
+  - "mkdir"
+  - "save\\s+as"
+  - "multi[- ]?file"
+  - "full\\s+project"
+  - "make\\s+a?\\s*folder"
+  - "set\\s+up\\s+a?\\s*(?:project|repo|directory)"
+negative_patterns: []
+task_overrides:
+  temperature: 0.25
+  top_p: 0.8
+  presence_penalty: 1.3
