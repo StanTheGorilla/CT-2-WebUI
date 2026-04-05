@@ -10,6 +10,7 @@
 import yaml
 from pathlib import Path
 from ct1.core.engine import Engine
+from ct1.prompts.manager import _get_prompt_manager as _pm
 from ct1.server.launcher import load_raw_config, resolve_config
 import re
 from ct1.core.formatter import (
@@ -620,14 +621,7 @@ class Orchestrator:
 
     # ── Self-planning via Engine ────────────────────────────────────────
 
-    _SOLO_PLAN_SYSTEM = (
-        "Analyze this request and output ONLY a JSON object. No other text.\n"
-        '{"output_type":"html_page"|"python_script"|"javascript"|"typescript"'
-        '|"cpp"|"go"|"rust"|"shell"|"sql"|"other",'
-        '"components":[{"id":1,"name":"short name","description":"what it does"}],'
-        '"complexity":"simple"|"moderate"|"complex"}\n'
-        "Max 5 components. Be concise."
-    )
+    _SOLO_PLAN_SYSTEM = _pm().get("solo_plan")
 
     async def _solo_plan(self, goal: str, route: str) -> dict | None:
         """Lightweight self-planning via Engine.
