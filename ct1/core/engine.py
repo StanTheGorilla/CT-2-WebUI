@@ -8,7 +8,6 @@ import asyncio
 import httpx
 import json
 import re as _re
-from pathlib import Path
 from ct1.prompts.manager import _get_prompt_manager as _pm
 
 
@@ -113,16 +112,8 @@ def _repair_json(text: str) -> str:
 
     return text
 
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
-BRAIN_SYSTEM_TEMPLATE = (_PROMPTS_DIR / "brain_system.txt").read_text(
-    encoding="utf-8"
-)
-
-_DESIGN_TOOLKIT_PATH = _PROMPTS_DIR / "design_toolkit.txt"
-_DESIGN_TOOLKIT = (
-    _DESIGN_TOOLKIT_PATH.read_text(encoding="utf-8")
-    if _DESIGN_TOOLKIT_PATH.exists() else ""
-)
+BRAIN_SYSTEM_TEMPLATE = _pm().get("brain_system")
+_DESIGN_TOOLKIT = _pm().get("design_toolkit")
 
 _GENERATOR_CODE_SYSTEM = _pm().get("generator_code")
 

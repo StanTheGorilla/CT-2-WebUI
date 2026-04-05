@@ -534,7 +534,7 @@ async def update_prompt(name: str, body: PromptUpdate):
     except ValueError as e:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=str(e))
-    return {"ok": True, "name": name}
+    return {"ok": True, "name": name, "restart_required": True}
 
 
 @app.post("/api/model/select")

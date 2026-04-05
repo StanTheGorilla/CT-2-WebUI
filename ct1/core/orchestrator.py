@@ -148,6 +148,9 @@ _EDIT_INTENT = {
 }
 
 
+_SOLO_PLAN_SYSTEM = _pm().get("solo_plan")
+
+
 class Orchestrator:
     def __init__(self, config_path: str = None, component_cache=None,
                  context_size_override: int = None):
@@ -621,15 +624,13 @@ class Orchestrator:
 
     # ── Self-planning via Engine ────────────────────────────────────────
 
-    _SOLO_PLAN_SYSTEM = _pm().get("solo_plan")
-
     async def _solo_plan(self, goal: str, route: str) -> dict | None:
         """Lightweight self-planning via Engine.
         Uses the engine with thinking disabled for speed."""
         try:
             import json
             raw = await self.engine._call(
-                [{"role": "system", "content": self._SOLO_PLAN_SYSTEM},
+                [{"role": "system", "content": _SOLO_PLAN_SYSTEM},
                  {"role": "user", "content": goal}],
                 max_tokens=512,
                 enable_thinking=False,
