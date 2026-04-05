@@ -523,7 +523,7 @@ async def get_prompt(name: str):
 
 @app.put("/api/prompts/{name}")
 async def update_prompt(name: str, body: PromptUpdate):
-    """Update a prompt's content and persist to disk. Reloads the prompt manager."""
+    """Update a prompt's content. Persists to disk and updates the in-memory cache."""
     pm = _get_pm()
     # Only allow updating existing prompts (no creating new ones via PUT)
     if name not in pm.list_all():
