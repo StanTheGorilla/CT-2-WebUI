@@ -13,6 +13,8 @@ patterns:
   - "api\\s+endpoint"
   - "add\\s+(?:a\\s+)?(?:method|function|test)"
   - "\\b(?:python|javascript|typescript|golang|go\\b|rust|c\\+\\+|cpp|java|ruby|bash|shell|sql|php|swift|kotlin|node(?:\\.?js)?)\\b"
+lang_patterns:
+  - "\\b(?:python|javascript|typescript|golang|go\\b|rust|c\\+\\+|cpp|java|ruby|bash|shell|sql|php|swift|kotlin|node(?:\\.?js)?)\\b"
 negative_patterns: []
 task_overrides:
   temperature: 0.25
