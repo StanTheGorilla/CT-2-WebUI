@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from ct1.core.orchestrator import Orchestrator, _get_mode_registry
+from ct1.prompts.manager import _get_prompt_manager as _get_pm
 from ct1.server.health import check_server_health
 from ct1.server.launcher import (
     load_raw_config, resolve_config,
@@ -365,6 +366,11 @@ class ModeCreate(BaseModel):
     task_overrides: dict = Field(default_factory=dict)
 
 
+class PromptUpdate(BaseModel):
+    """Update a prompt's content. Content replaces the full prompt text."""
+    content: str
+
+
 @app.get("/api/modes")
 async def list_modes():
     """List all loaded mode definitions."""
@@ -495,6 +501,39 @@ async def delete_mode(name: str):
         raise HTTPException(status_code=404, detail=f"Mode '{name}' not found")
     yaml_path.unlink()
     _get_mode_registry().reload()
+    return {"ok": True, "name": name}
+
+
+@app.get("/api/prompts")
+async def list_prompts():
+    """List all loaded prompts with their content."""
+    return {"prompts": _get_pm().list_all()}
+
+
+@app.get("/api/prompts/{name}")
+async def get_prompt(name: str):
+    """Get a single prompt by name."""
+    pm = _get_pm()
+    all_prompts = pm.list_all()
+    if name not in all_prompts:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Prompt '{name}' not found")
+    return {"name": name, "content": all_prompts[name]}
+
+
+@app.put("/api/prompts/{name}")
+async def update_prompt(name: str, body: PromptUpdate):
+    """Update a prompt's content and persist to disk. Reloads the prompt manager."""
+    pm = _get_pm()
+    # Only allow updating existing prompts (no creating new ones via PUT)
+    if name not in pm.list_all():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Prompt '{name}' not found")
+    try:
+        pm.save(name, body.content)
+    except ValueError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "name": name}
 
 
