@@ -37,7 +37,59 @@ _workspace: WorkspaceManager | None = None
 _swapping: bool = False          # True while model swap is in progress
 _shutting_down: bool = False     # True during application shutdown
 _active_think_tasks: set = set() # Active /ws/think asyncio tasks
+_health_task: asyncio.Task | None = None  # Background health monitor task
 _WS_QUEUE_MAX = 500  # Max buffered events per WebSocket session (~1-2 full responses)
+
+
+async def _health_monitor(port: int = 8080, interval: float = 30.0) -> None:
+    """Periodically check llama-server health and auto-restart if unresponsive.
+
+    Runs as a background task for the application lifetime. Checks every
+    `interval` seconds. After 3 consecutive failures, attempts auto-restart.
+    """
+    global _server_procs, _orch, _swapping
+    import httpx
+    consecutive_failures = 0
+
+    while True:
+        await asyncio.sleep(interval)
+
+        # Skip checks during model swap or shutdown
+        if _swapping or _shutting_down:
+            consecutive_failures = 0
+            continue
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"http://localhost:{port}/health")
+            if resp.status_code == 200:
+                consecutive_failures = 0
+                continue
+        except Exception:
+            pass
+
+        consecutive_failures += 1
+        print(f"[health] llama-server health check failed ({consecutive_failures}/3)")
+
+        if consecutive_failures >= 3:
+            consecutive_failures = 0
+            # Re-check swap/shutdown state before acting — a user-triggered swap may
+            # have started after we accumulated 3 failures
+            if _swapping or _shutting_down:
+                continue
+            print("[health] 3 consecutive failures — attempting auto-restart")
+            _swapping = True
+            try:
+                stop_server(_server_procs)
+                _server_procs = await start_server(str(_CONFIG_PATH))
+                if _orch:
+                    await _orch.reset_engine_client()
+                print("[health] Auto-restart successful")
+            except Exception as e:
+                print(f"[health] Auto-restart failed: {e}")
+                # _orch may be stale after failed restart — next request will timeout
+            finally:
+                _swapping = False
 
 
 def _npm_run(args: list, cwd: str) -> "subprocess.CompletedProcess":
@@ -98,8 +150,16 @@ async def lifespan(application: FastAPI):
     _db = ConversationDB()
     await _db.init()
     _workspace = WorkspaceManager()
+    global _health_task
+    _health_task = asyncio.create_task(_health_monitor(port=_cfg.get("llama_server", {}).get("port", 8080)))
     yield
     _shutting_down = True
+    if _health_task:
+        _health_task.cancel()
+        try:
+            await _health_task
+        except asyncio.CancelledError:
+            pass
     # Drain active generations (max 30s)
     snapshot = set(_active_think_tasks)
     if snapshot:
