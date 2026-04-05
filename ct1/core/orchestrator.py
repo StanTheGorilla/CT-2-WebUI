@@ -1582,6 +1582,15 @@ class Orchestrator:
             skip_refinement=skip_refinement,
         )
 
+    async def clear_kv_cache(self) -> bool:
+        """Clear the llama-server KV cache to reclaim VRAM between conversations.
+
+        Call this after a conversation completes (on 'done' event) to prevent
+        VRAM fragmentation across long sessions. Safe no-op on older server builds.
+        Returns True if cleared, False if unsupported or server unreachable.
+        """
+        return await self.engine.clear_kv_cache()
+
     async def reset_engine_client(self) -> None:
         """Delegate to Engine.reset_client() to flush stale TCP connections.
 

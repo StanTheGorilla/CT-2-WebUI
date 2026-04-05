@@ -807,6 +807,9 @@ async def ws_think(websocket: WebSocket):
                         except Exception as db_err:
                             print(f"[api] conversation save error: {db_err}")  # non-fatal
 
+                    if _orch:
+                        asyncio.create_task(_orch.clear_kv_cache())
+
                 async def watch_for_cancel():
                     """Read incoming WebSocket messages while inference runs.
                     The outer while-loop is blocked at gather(), so without this

@@ -1726,6 +1726,28 @@ class Engine:
         except Exception:
             return None
 
+    async def clear_kv_cache(self) -> bool:
+        """Erase llama-server's KV cache to reclaim VRAM between conversations.
+
+        Calls POST /slots/0 with {"action": "erase"} — the standard llama-server
+        slot management API (supported from llama-server build b3000+ onward).
+
+        Returns True if the cache was cleared, False if the server doesn't support
+        it (404) or is unreachable. Never raises.
+        """
+        try:
+            resp = await self.client.post(
+                f"{self.base_url}/slots/0",
+                json={"action": "erase"},
+                timeout=5.0,
+            )
+            if resp.status_code in (200, 204):
+                return True
+            # 404 = older llama-server build without slot API
+            return False
+        except Exception:
+            return False
+
     async def reset_client(self) -> None:
         """Close and recreate the httpx client to flush stale TCP connections.
 
