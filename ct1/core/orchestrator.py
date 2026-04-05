@@ -26,6 +26,7 @@ from ct1.memory.session_store import SessionStore
 from ct1.core.assembler import assemble_page, patch_component as patch_component_in_page
 from ct1.templates.fallbacks import get_fallback
 from ct1.core.atlas import AtlasController
+from ct1.core.validator import validate_spec
 
 _CONFIG_PATH = (Path(__file__).parent.parent.parent
                 / "ct1" / "server" / "model_config.yaml")
@@ -34,7 +35,7 @@ _CONFIG_PATH = (Path(__file__).parent.parent.parent
 _EXT_TO_LANG = {
     ".py": "python", ".js": "javascript", ".ts": "typescript",
     ".html": "html", ".htm": "html", ".css": "css", ".cpp": "cpp",
-    ".go": "go", ".rs": "rust", ".json": "json", ".sh": "bash",
+    ".c": "c", ".go": "go", ".rs": "rust", ".json": "json", ".sh": "bash",
 }
 
 
@@ -771,6 +772,7 @@ class Orchestrator:
         self, goal, goal_text: str, conversation: list[dict],
         emit, on_token, task_ovr: dict,
         skip_refinement: bool = False,
+        mode: str = "new",
     ) -> dict:
         """Precision-Design pipeline for new ROUTE_DESIGN generation.
 
@@ -843,6 +845,19 @@ class Orchestrator:
             if comp.get("type") not in valid_types:
                 print(f"[design] remapped component type '{comp.get('type')}' → 'custom' for '{comp.get('id')}'")
                 comp["type"] = "custom"
+
+        # Only validate spec when we actually generated a fresh one
+        should_validate_spec = (
+            mode == "new"
+            and spec is not None
+            and bool(spec)
+            and bool(spec.get("components"))
+        )
+        if should_validate_spec:
+            spec_ok, spec_errors = validate_spec(spec)
+            if not spec_ok:
+                print(f"[design] Phase 0.5: spec validation warnings: {spec_errors}")
+                emit("spec_warnings", errors=spec_errors)
 
         emit("spec_validated", spec=spec)
         print(f"[design] Phase 0.5: {len(spec.get('components', []))} components, "
@@ -978,6 +993,7 @@ class Orchestrator:
             return await self._design_pipeline(
                 goal_text, goal_text, conversation,
                 emit, on_token, task_ovr,
+                mode=mode,
             )
 
         # Use Engine to identify target component(s) from edit request
@@ -1187,6 +1203,7 @@ class Orchestrator:
                     goal, goal_text, conversation,
                     emit, on_token, task_ovr,
                     skip_refinement=skip_refinement,
+                    mode=mode,
                 )
                 # Run reflection
                 if result.get("reflection") is None:
