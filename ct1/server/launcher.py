@@ -113,7 +113,7 @@ def _get_llama_pid():
     return None
 
 
-def _graceful_shutdown_llama(port: int = 8080, timeout: float = 10.0) -> bool:
+def _graceful_shutdown_llama(port: int = 8080, timeout: float = 30.0) -> bool:
     """Shut down llama-server gracefully so it can release Vulkan resources.
 
     Strategy (in order):
@@ -170,6 +170,7 @@ def _graceful_shutdown_llama(port: int = 8080, timeout: float = 10.0) -> bool:
             return True
         time.sleep(0.5)
 
+    print(f"[launcher] Graceful shutdown timed out after {timeout}s — escalating to force-kill")
     return False
 
 
@@ -217,9 +218,9 @@ def kill_existing_llama_servers(port: int = 8080):
 
     # GPU cooldown — longer wait after force-kill since cleanup was incomplete
     if os.name == "nt":
-        time.sleep(5)
+        time.sleep(10)  # AMD Vulkan driver needs time to reclaim VRAM after unclean exit
     else:
-        time.sleep(2)
+        time.sleep(3)
 
 
 def load_raw_config(config_path: str = "ct1/server/model_config.yaml") -> dict:
@@ -522,7 +523,7 @@ def stop_server(procs, port: int = 8080):
 
     # Try graceful API shutdown first — critical for AMD Vulkan cleanup
     if any(p and p.poll() is None for p in procs):
-        _graceful_shutdown_llama(port, timeout=10)
+        _graceful_shutdown_llama(port)
 
     # Clean up any that didn't exit via API
     for proc in procs:
