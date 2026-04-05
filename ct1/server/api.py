@@ -291,12 +291,13 @@ async def select_model(body: ModelSelect):
     _swapping = True
     try:
         # Drain active generation tasks (max 30s)
-        if _active_think_tasks:
-            print(f"[api] Waiting for {len(_active_think_tasks)} active generation(s) to complete...")
+        snapshot = set(_active_think_tasks)
+        if snapshot:
+            print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
             try:
-                _done, _pending = await asyncio.wait(_active_think_tasks, timeout=30.0)
+                _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
                 if _pending:
-                    print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with model swap")
+                    print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
             except Exception:
                 pass
 
@@ -351,30 +352,49 @@ class BackendSelect(BaseModel):
 @app.post("/api/backend/select")
 async def select_backend(body: BackendSelect):
     """Switch active backend (vulkan/cuda) and restart llama-server."""
-    global _raw_cfg, _cfg, _orch, _server_procs
+    global _raw_cfg, _cfg, _orch, _server_procs, _swapping, _active_think_tasks
 
     if body.backend not in ("vulkan", "cuda"):
         return {"error": f"Invalid backend '{body.backend}'. Must be 'vulkan' or 'cuda'."}
 
-    _raw_cfg["backend"] = body.backend
-    _CONFIG_PATH.write_text(
-        yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
-
+    _swapping = True
     try:
-        _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH))
-    except Exception as e:
-        return {"error": str(e)}
+        # Drain active generation tasks (max 30s)
+        snapshot = set(_active_think_tasks)
+        if snapshot:
+            print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
+            try:
+                _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                if _pending:
+                    print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
+            except Exception:
+                pass
 
-    stop_server(_server_procs)
-    _server_procs = []
-    try:
-        _server_procs = await start_server(str(_CONFIG_PATH))
-        _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
-        return {"ok": True, "backend": body.backend}
-    except Exception as e:
-        return {"error": str(e)}
+        _raw_cfg["backend"] = body.backend
+        _CONFIG_PATH.write_text(
+            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+        try:
+            _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH))
+        except Exception as e:
+            return {"error": str(e)}
+
+        if _orch:
+            await _orch.close()
+
+        stop_server(_server_procs)
+        _server_procs = []
+        try:
+            _server_procs = await start_server(str(_CONFIG_PATH))
+            _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
+            await _orch.reset_engine_client()  # Flush stale TCP connections from prior server
+            return {"ok": True, "backend": body.backend}
+        except Exception as e:
+            return {"error": str(e)}
+    finally:
+        _swapping = False
 
 
 class RestartBody(BaseModel):
@@ -384,37 +404,53 @@ class RestartBody(BaseModel):
 @app.post("/api/restart")
 async def restart_model(body: RestartBody):
     """Restart the current model with an optional context_size override."""
-    global _raw_cfg, _cfg, _orch, _server_procs
+    global _raw_cfg, _cfg, _orch, _server_procs, _swapping, _active_think_tasks
 
-    if body.context_size is not None:
-        _raw_cfg["context_size"] = body.context_size
-        _CONFIG_PATH.write_text(
-            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
-
+    _swapping = True
     try:
-        _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
-                              context_size_override=body.context_size)
-    except Exception as e:
-        return {"error": str(e)}
+        # Drain active generation tasks (max 30s)
+        snapshot = set(_active_think_tasks)
+        if snapshot:
+            print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
+            try:
+                _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                if _pending:
+                    print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
+            except Exception:
+                pass
 
-    if _orch:
-        await _orch.close()
+        if body.context_size is not None:
+            _raw_cfg["context_size"] = body.context_size
+            _CONFIG_PATH.write_text(
+                yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+                encoding="utf-8",
+            )
 
-    if _server_procs:
-        stop_server(_server_procs)
-        _server_procs = []
-    try:
-        _server_procs = await start_server(str(_CONFIG_PATH),
-                                           context_size_override=body.context_size)
-    except Exception as e:
-        return {"error": f"Failed to start server: {e}"}
+        try:
+            _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
+                                  context_size_override=body.context_size)
+        except Exception as e:
+            return {"error": str(e)}
 
-    _orch = Orchestrator(str(_CONFIG_PATH),
-                         context_size_override=body.context_size)
+        if _orch:
+            await _orch.close()
 
-    return {"status": "ok", "info": _cfg.get("_preset_info", {})}
+        if _server_procs:
+            stop_server(_server_procs)
+            _server_procs = []
+        try:
+            _server_procs = await start_server(str(_CONFIG_PATH),
+                                               context_size_override=body.context_size)
+        except Exception as e:
+            return {"error": f"Failed to start server: {e}"}
+
+        _orch = Orchestrator(str(_CONFIG_PATH),
+                             context_size_override=body.context_size)
+        await _orch.reset_engine_client()  # Flush stale TCP connections from prior server
+
+        return {"status": "ok", "info": _cfg.get("_preset_info", {})}
+    finally:
+        _swapping = False
 
 
 # Legacy endpoint — kept for backward compat
