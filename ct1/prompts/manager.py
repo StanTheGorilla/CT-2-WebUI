@@ -48,6 +48,8 @@ class PromptManager:
         Uses tempfile + os.replace for atomic write (no partial-write corruption).
         Creates the file if it doesn't exist.
         """
+        if not name or "/" in name or "\\" in name or name.endswith(".txt"):
+            raise ValueError(f"Invalid prompt name: {name!r}")
         target = self._dir / f"{name}.txt"
         # Path traversal guard
         if target.resolve().parent != self._dir.resolve():
