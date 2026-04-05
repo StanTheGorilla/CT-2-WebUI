@@ -74,7 +74,8 @@ class ModeRegistry:
             try:
                 with yaml_file.open(encoding="utf-8") as f:
                     data = yaml.safe_load(f)
-            except Exception:
+            except Exception as e:
+                print(f"[modes] WARNING: failed to load {yaml_file.name}: {e}")
                 continue
             if not isinstance(data, dict) or "name" not in data or "route_id" not in data:
                 continue
@@ -177,11 +178,16 @@ class ModeRegistry:
         return self._get("direct")
 
     def _get(self, name: str) -> ModeDefinition:
-        """Get a loaded mode by name. Raises KeyError if not found."""
+        """Get a loaded mode by name. Falls back to 'direct' if not found."""
         for m in self._modes:
             if m.name == name:
                 return m
-        raise KeyError(f"Mode '{name}' not found in registry")
+        # Graceful fallback: unknown mode name → direct
+        for m in self._modes:
+            if m.name == "direct":
+                print(f"[modes] WARNING: mode '{name}' not found, falling back to 'direct'")
+                return m
+        raise KeyError(f"Mode '{name}' not found and no 'direct' fallback available")
 
     def get_all(self) -> list[ModeDefinition]:
         """Return every registered ModeDefinition."""
@@ -190,5 +196,4 @@ class ModeRegistry:
     def reload(self) -> None:
         """Re-read all YAML files from disk and refresh the registry."""
         self._modes.clear()
-        self._compiled.clear()
         self._load()
