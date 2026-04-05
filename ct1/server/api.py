@@ -339,6 +339,12 @@ class ModelSelect(BaseModel):
 
 
 class ModeUpdate(BaseModel):
+    """Partial update for a mode definition.
+
+    Note: `priority` and `route_id` are intentionally excluded — they can only
+    be set at creation time. To change priority, delete and recreate the mode.
+    """
+
     description: str | None = None
     patterns: list[str] | None = None
     negative_patterns: list[str] | None = None

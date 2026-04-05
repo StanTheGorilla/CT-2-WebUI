@@ -7,6 +7,14 @@ from pathlib import Path
 from . import ModeDefinition, load_mode_from_dict
 
 
+# Canonical mode names — these must match the 'name' field in the corresponding YAML files.
+# The routing algorithm in resolve() references these by name directly.
+_COMPUTER_MODE = "computer"
+_DESIGN_MODE = "design"
+_CODE_MODE = "code"
+_DIRECT_MODE = "direct"
+
+
 class ModeRegistry:
     """Registry of ModeDefinition objects loaded from YAML files.
 
@@ -123,7 +131,7 @@ class ModeRegistry:
 
     def _lang_matches(self, msg: str) -> bool:
         """True if the code mode's lang_patterns match *msg*."""
-        _, _, lang = self._compiled.get("code", (None, None, None))
+        _, _, lang = self._compiled.get(_CODE_MODE, (None, None, None))
         return bool(lang and lang.search(msg))
 
     # ------------------------------------------------------------------
@@ -141,41 +149,41 @@ class ModeRegistry:
         # 1. Questions → DIRECT (exception: code fence → CODE)
         if self._is_question(msg):
             if self._CODE_FENCE.search(msg):
-                return self._get("code")
-            return self._get("direct")
+                return self._get(_CODE_MODE)
+            return self._get(_DIRECT_MODE)
 
         # 2. Computer (file operations, project creation)
-        if self._matches("computer", msg):
-            return self._get("computer")
+        if self._matches(_COMPUTER_MODE, msg):
+            return self._get(_COMPUTER_MODE)
 
         # 3. Language name anywhere, but not in design context → CODE
-        design_pat, _, _ = self._compiled.get("design", (None, None, None))
+        design_pat, _, _ = self._compiled.get(_DESIGN_MODE, (None, None, None))
         if self._lang_matches(msg) and not (design_pat and design_pat.search(msg)):
-            return self._get("code")
+            return self._get(_CODE_MODE)
 
         # 4. Design patterns (unless suppressed by negative)
-        if self._matches("design", msg):
-            return self._get("design")
+        if self._matches(_DESIGN_MODE, msg):
+            return self._get(_DESIGN_MODE)
 
         # 5. Code patterns or code fence
-        code_pat, _, _ = self._compiled.get("code", (None, None, None))
+        code_pat, _, _ = self._compiled.get(_CODE_MODE, (None, None, None))
         if (code_pat and code_pat.search(msg)) or self._CODE_FENCE.search(msg):
-            return self._get("code")
+            return self._get(_CODE_MODE)
 
         # 6. Analysis / reasoning signals → DIRECT
         if any(kw in lower for kw in self._DIRECT_SIGNALS):
-            return self._get("direct")
+            return self._get(_DIRECT_MODE)
 
         # 7. Build phrases → DESIGN
         if any(phrase in lower for phrase in self._BUILD_PHRASES):
-            return self._get("design")
+            return self._get(_DESIGN_MODE)
 
         # 8. Long text → DIRECT
         if len(msg) > 300:
-            return self._get("direct")
+            return self._get(_DIRECT_MODE)
 
         # 9. Default fallback
-        return self._get("direct")
+        return self._get(_DIRECT_MODE)
 
     def _get(self, name: str) -> ModeDefinition:
         """Get a loaded mode by name. Falls back to 'direct' if not found."""
@@ -184,10 +192,10 @@ class ModeRegistry:
                 return m
         # Graceful fallback: unknown mode name → direct
         for m in self._modes:
-            if m.name == "direct":
-                print(f"[modes] WARNING: mode '{name}' not found, falling back to 'direct'")
+            if m.name == _DIRECT_MODE:
+                print(f"[modes] WARNING: mode '{name}' not found, falling back to '{_DIRECT_MODE}'")
                 return m
-        raise KeyError(f"Mode '{name}' not found and no 'direct' fallback available")
+        raise KeyError(f"Mode '{name}' not found and no '{_DIRECT_MODE}' fallback available")
 
     def get_all(self) -> list[ModeDefinition]:
         """Return every registered ModeDefinition."""
@@ -195,5 +203,4 @@ class ModeRegistry:
 
     def reload(self) -> None:
         """Re-read all YAML files from disk and refresh the registry."""
-        self._modes.clear()
         self._load()
