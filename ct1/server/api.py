@@ -34,6 +34,8 @@ _server_procs: list = []
 _db: ConversationDB | None = None
 _cache: ComponentCache | None = None
 _workspace: WorkspaceManager | None = None
+_swapping: bool = False          # True while model swap is in progress
+_active_think_tasks: set = set() # Active /ws/think asyncio tasks
 
 
 def _npm_run(args: list, cwd: str) -> "subprocess.CompletedProcess":
@@ -260,7 +262,7 @@ class ModelSelect(BaseModel):
 @app.post("/api/model/select")
 async def select_model(body: ModelSelect):
     """Select a model file and restart the server."""
-    global _raw_cfg, _cfg, _orch, _server_procs
+    global _raw_cfg, _cfg, _orch, _server_procs, _swapping, _active_think_tasks
 
     # Validate model exists
     models_dir_rel = _raw_cfg.get("models_dir", "models")
@@ -269,45 +271,60 @@ async def select_model(body: ModelSelect):
     if not model_path.exists():
         return {"error": f"Model file not found: {body.model}"}
 
-    # Update config
-    _raw_cfg["active_model"] = body.model
-    if body.context_size is not None:
-        _raw_cfg["context_size"] = body.context_size
-    _CONFIG_PATH.write_text(
-        yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
-
-    # Resolve config
+    _swapping = True
     try:
-        _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
-                              context_size_override=body.context_size)
-    except Exception as e:
-        return {"error": str(e)}
+        # Drain active generation tasks (max 30s)
+        if _active_think_tasks:
+            print(f"[api] Waiting for {len(_active_think_tasks)} active generation(s) to complete...")
+            try:
+                _done, _pending = await asyncio.wait(_active_think_tasks, timeout=30.0)
+                if _pending:
+                    print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with model swap")
+            except Exception:
+                pass
 
-    # Teardown old orchestrator
-    if _orch:
-        await _orch.close()
+        # Update config
+        _raw_cfg["active_model"] = body.model
+        if body.context_size is not None:
+            _raw_cfg["context_size"] = body.context_size
+        _CONFIG_PATH.write_text(
+            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
 
-    # Restart llama-server
-    if _server_procs:
-        stop_server(_server_procs)
-        _server_procs = []
-    try:
-        _server_procs = await start_server(str(_CONFIG_PATH),
-                                           context_size_override=body.context_size)
-    except Exception as e:
-        return {"error": f"Failed to start server: {e}"}
+        # Resolve config
+        try:
+            _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
+                                  context_size_override=body.context_size)
+        except Exception as e:
+            return {"error": str(e)}
 
-    # New orchestrator
-    _orch = Orchestrator(str(_CONFIG_PATH),
-                         context_size_override=body.context_size)
+        # Teardown old orchestrator
+        if _orch:
+            await _orch.close()
 
-    return {
-        "status": "ok",
-        "model": body.model,
-        "info": _cfg.get("_preset_info", {}),
-    }
+        # Restart llama-server
+        if _server_procs:
+            stop_server(_server_procs)
+            _server_procs = []
+        try:
+            _server_procs = await start_server(str(_CONFIG_PATH),
+                                               context_size_override=body.context_size)
+        except Exception as e:
+            return {"error": f"Failed to start server: {e}"}
+
+        # New orchestrator
+        _orch = Orchestrator(str(_CONFIG_PATH),
+                             context_size_override=body.context_size)
+        await _orch.reset_engine_client()  # Flush stale TCP connections from prior server
+
+        return {
+            "status": "ok",
+            "model": body.model,
+            "info": _cfg.get("_preset_info", {}),
+        }
+    finally:
+        _swapping = False
 
 
 class BackendSelect(BaseModel):
@@ -492,8 +509,13 @@ async def delete_cached_component(comp_id: str):
 
 @app.websocket("/ws/think")
 async def ws_think(websocket: WebSocket):
+    if _swapping:
+        await websocket.close(code=1013, reason="Model swap in progress")
+        return
     await websocket.accept()
     current_think_task: asyncio.Task | None = None
+    current_task = asyncio.current_task()
+    _active_think_tasks.add(current_task)
     try:
         while True:
             msg = await websocket.receive_json()
@@ -850,6 +872,8 @@ async def ws_think(websocket: WebSocket):
             await websocket.send_json({"event": "error", "message": err_msg})
         except Exception:
             pass
+    finally:
+        _active_think_tasks.discard(current_task)
 
 
 # ── Workspace endpoints (Computer Mode) ──────────────────────────────
