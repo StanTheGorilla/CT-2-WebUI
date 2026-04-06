@@ -377,40 +377,44 @@
         {/if}
     </section>
 
-    <!-- ─── Backend ─── -->
-    {#if !isMac}
-        <div class="setting-row">
-            <label class="setting-label">Backend</label>
-            <div class="backend-picker">
-                <button
-                    class="backend-btn"
-                    class:active={activeBackend === 'vulkan'}
-                    onclick={() => switchBackend('vulkan')}
-                    disabled={switchingBackend}
-                >Vulkan</button>
-                <button
-                    class="backend-btn"
-                    class:active={activeBackend === 'cuda'}
-                    onclick={() => switchBackend('cuda')}
-                    disabled={switchingBackend}
-                >CUDA</button>
-            </div>
-            {#if backendError}
-                <p class="error-text">{backendError}</p>
-            {/if}
-            {#if switchingBackend}
-                <p class="switching-text">Switching backend…</p>
-            {/if}
-        </div>
-    {/if}
+    <!-- ─── Performance ─── -->
+    {#if !isMac || (maxContextSize > 0 && activeModel)}
+    <section class="section">
+        <h2 class="section-title">Performance</h2>
 
-    <!-- ─── Context Size ─── -->
-    {#if maxContextSize > 0 && activeModel}
-        <section class="section">
-            <h2 class="section-title">Context Size</h2>
+        {#if !isMac}
+            <div class="setting-row">
+                <label class="setting-label">GPU Backend</label>
+                <div class="backend-picker">
+                    <button
+                        class="backend-btn"
+                        class:active={activeBackend === 'vulkan'}
+                        onclick={() => switchBackend('vulkan')}
+                        disabled={switchingBackend}
+                    >Vulkan</button>
+                    <button
+                        class="backend-btn"
+                        class:active={activeBackend === 'cuda'}
+                        onclick={() => switchBackend('cuda')}
+                        disabled={switchingBackend}
+                    >CUDA</button>
+                </div>
+                {#if backendError}
+                    <p class="error-text">{backendError}</p>
+                {/if}
+                {#if switchingBackend}
+                    <p class="switching-text">Switching backend…</p>
+                {/if}
+            </div>
+        {/if}
+
+        {#if maxContextSize > 0 && activeModel}
             <div class="config-card">
                 <div class="config-row">
-                    <label>Context Window</label>
+                    <label>
+                        Memory Window
+                        <span class="setting-desc">How much conversation the AI remembers. Larger = richer context but uses more VRAM.</span>
+                    </label>
                     <div class="slider-container">
                         <input type="range"
                             min={CONTEXT_MIN_FLOOR}
@@ -427,13 +431,15 @@
                     <button onclick={restartModel} class="restart-btn" disabled={switching}>Restart Model</button>
                 </div>
             {/if}
-        </section>
+        {/if}
+    </section>
     {/if}
 
     <!-- ─── Modes ─── -->
     {#if modes.length > 0}
     <section class="section">
-        <h2 class="section-title">Routing Modes</h2>
+        <h2 class="section-title">Response Style</h2>
+        <p class="section-desc">Fine-tune how each mode responds. Changes apply immediately.</p>
         <div class="modes-list">
             {#each modes as mode (mode.name)}
                 <div class="mode-card">
@@ -447,11 +453,14 @@
                         </div>
                     </div>
                     <div class="mode-overrides">
-                        {#each [['temperature', 0, 2, 0.05], ['top_p', 0, 1, 0.05], ['presence_penalty', -2, 2, 0.05]] as [key, min, max, step]}
+                        {#each [['temperature', 0, 2, 0.05, 'Creativity', 'How surprising vs. predictable responses are'], ['top_p', 0, 1, 0.05, 'Focus', 'How broad or precise word choices are'], ['presence_penalty', -2, 2, 0.05, 'Variety', 'How much the AI avoids repeating itself']] as [key, min, max, step, label, desc]}
                             {@const val = (modeEdits[mode.name]?.[key as string] ?? mode.task_overrides[key as string])}
                             {#if val !== undefined}
                             <div class="override-row">
-                                <span class="override-key">{key}</span>
+                                <span class="override-key">
+                                    {label}
+                                    <span class="setting-desc">{desc}</span>
+                                </span>
                                 <div class="slider-container">
                                     <input type="range"
                                         min={min}
@@ -487,7 +496,8 @@
     <!-- ─── Prompts ─── -->
     {#if Object.keys(prompts).length > 0}
     <section class="section">
-        <h2 class="section-title">System Prompts</h2>
+        <h2 class="section-title">Custom Instructions</h2>
+        <p class="section-desc">Built-in instructions for each mode. Advanced — restart required after saving.</p>
         <div class="prompts-list">
             {#each Object.entries(prompts).sort(([a], [b]) => a.localeCompare(b)) as [name, _content]}
                 <div class="prompt-row" class:expanded={promptsExpanded[name]}>
@@ -532,7 +542,7 @@
 
     <!-- ─── Pipeline ─── -->
     <section class="section">
-        <h2 class="section-title">Pipeline</h2>
+        <h2 class="section-title">Features</h2>
         <label class="toggle-row">
             <span class="toggle-label">
                 <span class="toggle-name">Design refinement</span>
@@ -1401,4 +1411,20 @@
     }
     .prompt-save-btn:hover:not(:disabled) { opacity: 0.85; }
     .prompt-save-btn:disabled { opacity: 0.5; cursor: wait; }
+
+    .section-desc {
+        font-size: 0.78rem;
+        color: var(--text-muted, #888);
+        margin: 2px 0 10px;
+        line-height: 1.4;
+    }
+
+    .setting-desc {
+        display: block;
+        font-size: 0.72rem;
+        color: var(--text-muted, #888);
+        font-weight: 400;
+        margin-top: 2px;
+        line-height: 1.3;
+    }
 </style>
