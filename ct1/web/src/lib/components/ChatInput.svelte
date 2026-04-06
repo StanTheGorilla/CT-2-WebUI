@@ -14,11 +14,11 @@
     );
 
     const modes: { key: ModeOverride; label: string }[] = [
-        { key: 'auto', label: 'Auto' },
+        { key: 'chat', label: 'Chat' },
         { key: 'design', label: 'Design' },
         { key: 'code', label: 'Code' },
-        { key: 'chat', label: 'Chat' },
         { key: 'computer', label: 'Computer' },
+        { key: 'auto', label: 'Auto' },
     ];
 
     function submit() {
