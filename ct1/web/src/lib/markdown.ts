@@ -12,7 +12,11 @@ const marked = new Marked({
             const highlighted = language
                 ? hljs.highlight(text, { language }).value
                 : hljs.highlightAuto(text).value;
-            return `<pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre>`;
+            const langBadge = language
+                ? `<span class="cb-lang">${language}</span>`
+                : '<span class="cb-lang"></span>';
+            const copyBtn = `<button class="cb-copy" onclick="var t=this;navigator.clipboard.writeText(t.closest('.cb').querySelector('code').innerText).then(function(){t.textContent='Copied';setTimeout(function(){t.textContent='Copy'},1400)},function(){t.textContent='Failed'})">Copy</button>`;
+            return `<div class="cb"><div class="cb-head">${langBadge}${copyBtn}</div><pre><code class="hljs${language ? ` language-${language}` : ''}">${highlighted}</code></pre></div>`;
         },
     },
 });

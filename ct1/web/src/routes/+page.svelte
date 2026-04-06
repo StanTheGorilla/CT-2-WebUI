@@ -233,7 +233,7 @@
     const routeLabels: Record<string, string> = {
         'ROUTE_DESIGN': 'Design',
         'ROUTE_CODE': 'Code',
-        'ROUTE_DIRECT': 'Direct',
+        'ROUTE_DIRECT': 'Chat',
         'ROUTE_COMPUTER': 'Computer',
     };
     const routeColors: Record<string, string> = {
@@ -1288,15 +1288,68 @@
     .ai-bubble :global(li:last-child) { margin-bottom: 0; }
     .ai-bubble :global(li > ul), .ai-bubble :global(li > ol) { margin: 3px 0; }
     .ai-bubble :global(strong) { font-weight: 600; }
+    /* Bare <pre> (not wrapped by our renderer) */
     .ai-bubble :global(pre) {
         margin: 10px 0; overflow-x: auto;
         background: var(--code-bg);
         border: 1px solid var(--border-subtle);
-        border-radius: 8px; padding: 11px 14px;
+        border-radius: 10px; padding: 11px 14px;
     }
     .ai-bubble :global(code) { font-size: 12.5px; }
     .ai-bubble :global(p code), .ai-bubble :global(li code) {
         background: var(--code-inline-bg); padding: 1px 5px; border-radius: 4px; font-size: 12.5px;
+    }
+    /* ── Code block wrapper (injected by markdown renderer) ── */
+    .ai-bubble :global(.cb) {
+        margin: 12px 0;
+        border: 1px solid var(--border-subtle);
+        border-radius: 10px;
+        overflow: hidden;
+        background: var(--code-bg);
+    }
+    .ai-bubble :global(.cb:first-child) { margin-top: 0; }
+    .ai-bubble :global(.cb:last-child) { margin-bottom: 0; }
+    .ai-bubble :global(.cb pre) {
+        margin: 0;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        padding: 13px 16px;
+        overflow-x: auto;
+    }
+    .ai-bubble :global(.cb-head) {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--border-subtle);
+        background: var(--accent-subtle);
+        min-height: 32px;
+    }
+    .ai-bubble :global(.cb-lang) {
+        font-size: 11px;
+        font-family: var(--font-mono);
+        color: var(--text-secondary);
+        font-weight: 500;
+        letter-spacing: 0.02em;
+    }
+    .ai-bubble :global(.cb-copy) {
+        font-size: 11px;
+        font-weight: 500;
+        padding: 2px 9px;
+        border-radius: 5px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        font-family: inherit;
+        transition: background 0.12s, color 0.12s;
+        line-height: 1.6;
+    }
+    .ai-bubble :global(.cb-copy:hover) {
+        background: var(--surface);
+        color: var(--text);
+        border-color: var(--border-strong);
     }
     .ai-bubble :global(hr) { border: none; border-top: 1px solid var(--border-subtle); margin: 14px 0; }
     .ai-bubble :global(blockquote) {

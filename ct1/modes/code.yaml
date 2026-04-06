@@ -4,15 +4,17 @@ description: Code generation, debugging, refactoring
 priority: 3
 detected_lang: text
 patterns:
-- write\s+a?\s*(?:function|class|script|program|module)
-- implement
-- debug
-- refactor
-- fix\s+(?:this|the)\s+(?:code|bug|error)
-- (?:python|javascript|typescript|java|rust|go|c\+\+|ruby|shell|bash|sql|cpp|golang)\s+(?:script|function|class|program|code)
+- write\s+(?:\w+\s+){0,4}(?:function|class|script|program|module|algorithm|snippet|method|code)
+- implement\s+(?:\w+\s+){0,4}(?:function|class|feature|method|algorithm|interface|struct)
+- implement\b
+- debug\b
+- refactor\b
+- fix\s+(?:\w+\s+){0,3}(?:code|bug|error|issue|function|class)
+- (?:python|java\s*script|javascript|typescript|java|rust|go|c\+\+|ruby|shell|bash|sql|cpp|golang|php|swift|kotlin)\s+(?:script|function|class|program|code|snippet)
 - api\s+endpoint
-- add\s+(?:a\s+)?(?:method|function|test)
-- \b(?:python|javascript|typescript|golang|go\b|rust|c\+\+|cpp|java|ruby|bash|shell|sql|php|swift|kotlin|node(?:\.?js)?)\b
+- add\s+(?:\w+\s+){0,3}(?:method|function|test|class|feature)
+- create\s+(?:a\s+)?(?:\w+\s+){0,3}(?:function|class|script|module|component|api|endpoint|test)
+- \b(?:python|javascript|java\s+script|typescript|golang|go\b|rust|c\+\+|cpp|java|ruby|bash|shell|sql|php|swift|kotlin|node(?:\.?js)?)\b
 lang_patterns:
 - \b(?:python|javascript|typescript|golang|go\b|rust|c\+\+|cpp|java|ruby|bash|shell|sql|php|swift|kotlin|node(?:\.?js)?)\b
 negative_patterns: []
