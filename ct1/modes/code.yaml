@@ -4,19 +4,19 @@ description: Code generation, debugging, refactoring
 priority: 3
 detected_lang: text
 patterns:
-  - "write\\s+a?\\s*(?:function|class|script|program|module)"
-  - "implement"
-  - "debug"
-  - "refactor"
-  - "fix\\s+(?:this|the)\\s+(?:code|bug|error)"
-  - "(?:python|javascript|typescript|java|rust|go|c\\+\\+|ruby|shell|bash|sql|cpp|golang)\\s+(?:script|function|class|program|code)"
-  - "api\\s+endpoint"
-  - "add\\s+(?:a\\s+)?(?:method|function|test)"
-  - "\\b(?:python|javascript|typescript|golang|go\\b|rust|c\\+\\+|cpp|java|ruby|bash|shell|sql|php|swift|kotlin|node(?:\\.?js)?)\\b"
+- write\s+a?\s*(?:function|class|script|program|module)
+- implement
+- debug
+- refactor
+- fix\s+(?:this|the)\s+(?:code|bug|error)
+- (?:python|javascript|typescript|java|rust|go|c\+\+|ruby|shell|bash|sql|cpp|golang)\s+(?:script|function|class|program|code)
+- api\s+endpoint
+- add\s+(?:a\s+)?(?:method|function|test)
+- \b(?:python|javascript|typescript|golang|go\b|rust|c\+\+|cpp|java|ruby|bash|shell|sql|php|swift|kotlin|node(?:\.?js)?)\b
 lang_patterns:
-  - "\\b(?:python|javascript|typescript|golang|go\\b|rust|c\\+\\+|cpp|java|ruby|bash|shell|sql|php|swift|kotlin|node(?:\\.?js)?)\\b"
+- \b(?:python|javascript|typescript|golang|go\b|rust|c\+\+|cpp|java|ruby|bash|shell|sql|php|swift|kotlin|node(?:\.?js)?)\b
 negative_patterns: []
 task_overrides:
-  temperature: 0.25
-  top_p: 0.85
+  temperature: 0
+  top_p: 1
   presence_penalty: 1.3
