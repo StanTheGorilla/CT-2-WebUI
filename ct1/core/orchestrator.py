@@ -222,22 +222,42 @@ class Orchestrator:
 
     @staticmethod
     def _slim_conversation(conversation: list[dict]) -> list[dict]:
-        """Strip full code from assistant turns to prevent context contamination.
+        """Strip large bare code files from assistant turns to prevent style bleeding.
 
-        Keeps user messages intact and replaces long assistant code with a
-        short summary. This frees context for the new generation and stops
-        the model from copying styles/content from prior outputs.
+        Only strips responses that are actual code file outputs (raw HTML pages,
+        Python scripts, etc.) — NOT markdown chat responses that contain code blocks.
+        Markdown responses start with prose text; code files start with <!DOCTYPE,
+        import, def, etc. This distinction prevents the model from losing context
+        of its own previous chat answers.
         """
         slim = []
         for msg in conversation:
             if msg["role"] == "assistant":
                 content = msg.get("content", "")
-                if isinstance(content, str) and len(content) > 300:
-                    # Replace full code with a one-line note
-                    slim.append({
-                        "role": "assistant",
-                        "content": "(Previous code response omitted for brevity.)",
-                    })
+                if isinstance(content, str):
+                    stripped = content.strip()
+                    # Only slim bare code file outputs, not markdown chat responses.
+                    # Markdown always starts with prose; code files start with
+                    # language-specific syntax and have no markdown fences.
+                    is_bare_html = stripped.lower().startswith(
+                        ("<!doctype", "<html")
+                    )
+                    is_bare_script = (
+                        len(stripped) > 800
+                        and stripped.startswith((
+                            "import ", "from ", "#!/",
+                            "def ", "class ",
+                            "const ", "let ", "var ", "function ", "//",
+                        ))
+                        and "```" not in stripped[:400]
+                    )
+                    if is_bare_html or is_bare_script:
+                        slim.append({
+                            "role": "assistant",
+                            "content": "(Previous code output omitted.)",
+                        })
+                    else:
+                        slim.append(msg)
                 else:
                     slim.append(msg)
             else:

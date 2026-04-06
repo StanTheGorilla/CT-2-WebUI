@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { chat, setFeedback, regenerate, undo, setWorkspaceId, stopGeneration } from '$lib/stores/chat';
+    import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration } from '$lib/stores/chat';
     import { getLangMeta } from '$lib/langMap';
     import { render } from '$lib/markdown';
     import hljs from 'highlight.js';
@@ -427,11 +427,14 @@
                                         <path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
-                                <button class="feedback-btn regen" onclick={regenerate} title="Regenerate response">
+                                <button class="feedback-btn regen" onclick={regenerate} title="Retry — get a new response">
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                                         <path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                         <path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
+                                </button>
+                                <button class="feedback-btn copy-resp" onclick={() => copyToClipboard(turn.content)} title="Copy response">
+                                    <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
                                 </button>
                             </div>
                         </div>
@@ -496,12 +499,19 @@
                                     onclick={() => setFeedback(idx, turn.feedback === -1 ? 0 : -1)} title="Bad response">
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                                 </button>
-                                <button class="feedback-btn regen" onclick={regenerate} title="Regenerate">
+                                <button class="feedback-btn regen" onclick={regenerate} title="Retry — get a new response">
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                </button>
+                                <button class="feedback-btn copy-resp" onclick={() => copyToClipboard(turn.content)} title="Copy response">
+                                    <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
                                 </button>
                             </div>
                         </div>
                     {:else}
+                        {@const alts = turn.alternatives ?? []}
+                        {@const currAltIdx = turn.altIndex ?? alts.length}
+                        {@const shownContent = currAltIdx < alts.length ? alts[currAltIdx] : turn.content}
+                        {@const totalVersions = alts.length + 1}
                         <div class="bubble-row">
                             {#if turn.fetchedContent?.length}
                                 {#each turn.fetchedContent as fc}
@@ -519,9 +529,18 @@
                                 {/each}
                             {/if}
                             <div class="ai-bubble" style="animation-delay: {idx * 30}ms">
-                                {@html render(turn.content)}
+                                {@html render(shownContent)}
                             </div>
                             <div class="feedback-row">
+                                {#if alts.length > 0}
+                                    <div class="alt-nav">
+                                        <button class="alt-btn" disabled={currAltIdx === 0}
+                                            onclick={() => setAltIndex(idx, currAltIdx - 1)} title="Previous version">←</button>
+                                        <span class="alt-counter">{currAltIdx + 1}/{totalVersions}</span>
+                                        <button class="alt-btn" disabled={currAltIdx >= alts.length}
+                                            onclick={() => setAltIndex(idx, currAltIdx + 1)} title="Next version">→</button>
+                                    </div>
+                                {/if}
                                 <button
                                     class="feedback-btn"
                                     class:active={turn.feedback === 1}
@@ -542,11 +561,14 @@
                                         <path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
-                                <button class="feedback-btn regen" onclick={regenerate} title="Regenerate response">
+                                <button class="feedback-btn regen" onclick={regenerate} title="Retry — get a new response">
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                                         <path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                         <path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
+                                </button>
+                                <button class="feedback-btn copy-resp" onclick={() => copyToClipboard(shownContent)} title="Copy response">
+                                    <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
                                 </button>
                             </div>
                         </div>
@@ -1302,7 +1324,7 @@
     /* ── Code block wrapper (injected by markdown renderer) ── */
     .ai-bubble :global(.cb) {
         margin: 12px 0;
-        border: 1px solid var(--border-subtle);
+        border: 1px solid var(--border);
         border-radius: 10px;
         overflow: hidden;
         background: var(--code-bg);
@@ -1322,7 +1344,7 @@
         align-items: center;
         justify-content: space-between;
         padding: 6px 12px;
-        border-bottom: 1px solid var(--border-subtle);
+        border-bottom: 1px solid var(--border);
         background: var(--accent-subtle);
         min-height: 32px;
     }
@@ -2044,6 +2066,33 @@
     .feedback-btn.regen:hover {
         color: var(--brain);
         background: rgba(232, 133, 12, 0.08);
+    }
+    .feedback-btn.copy-resp:hover {
+        color: var(--text-secondary);
+        background: var(--accent-subtle);
+    }
+
+    /* ── Alt version navigation (← 1/2 →) ── */
+    .alt-nav {
+        display: flex; align-items: center; gap: 1px;
+        margin-right: 4px;
+    }
+    .alt-btn {
+        background: none; border: none;
+        color: var(--text-muted); cursor: pointer;
+        padding: 3px 5px; border-radius: 5px;
+        font-size: 13px; line-height: 1;
+        transition: color var(--transition), background var(--transition);
+    }
+    .alt-btn:hover:not(:disabled) {
+        background: var(--accent-subtle);
+        color: var(--text-secondary);
+    }
+    .alt-btn:disabled { opacity: 0.25; cursor: default; }
+    .alt-counter {
+        font-size: 10px; font-family: var(--font-mono);
+        color: var(--text-muted);
+        min-width: 26px; text-align: center;
     }
 
     /* ================================================================

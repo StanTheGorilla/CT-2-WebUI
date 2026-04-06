@@ -35,6 +35,10 @@ export interface Turn {
     detectedLang?: string;
     /** Files written to workspace (computer mode) */
     files?: Array<{ path: string; lang: string }>;
+    /** Previous response versions saved on retry (oldest first) */
+    alternatives?: string[];
+    /** Currently displayed version index; alternatives.length = current/latest */
+    altIndex?: number;
 }
 
 export interface Reflection {
@@ -201,6 +205,10 @@ export const chat = writable<ChatState>({ ...initial });
 
 let ws: WS | null = null;
 
+// Saved when regenerate() removes the last assistant turn, attached to the new turn on done.
+let _pendingAlt: string | null = null;
+let _pendingPrevAlts: string[] = [];
+
 function handleEvent(data: Record<string, any>) {
     chat.update((s) => {
         s.events = [...s.events, data];
@@ -309,6 +317,12 @@ function handleEvent(data: Record<string, any>) {
                 if (!s.specialistData) s.specialistData = data.specialist_data || null;
                 s.reflection = data.reflection;
                 const codeRoute = s.route === 'ROUTE_DESIGN' || s.route === 'ROUTE_CODE' || s.route === 'ROUTE_COMPUTER';
+                const newAlts = _pendingAlt !== null
+                    ? [..._pendingPrevAlts, _pendingAlt]
+                    : undefined;
+                const newAltIdx = newAlts ? newAlts.length : undefined;
+                _pendingAlt = null;
+                _pendingPrevAlts = [];
                 s.conversation = [
                     ...s.conversation,
                     {
@@ -325,6 +339,8 @@ function handleEvent(data: Record<string, any>) {
                         fetchedContent: s.fetchedContent.length > 0 ? s.fetchedContent : undefined,
                         detectedLang: data.detected_lang ?? 'text',
                         files: data.files ?? [],
+                        alternatives: newAlts,
+                        altIndex: newAltIdx,
                     },
                 ];
                 break;
@@ -631,13 +647,25 @@ export async function setFeedback(turnIndex: number, feedback: number) {
     });
 }
 
+export function setAltIndex(turnIdx: number, altIdx: number) {
+    chat.update((s) => {
+        if (s.conversation[turnIdx]) {
+            s.conversation[turnIdx] = { ...s.conversation[turnIdx], altIndex: altIdx };
+        }
+        return s;
+    });
+}
+
 export function regenerate() {
     let lastUserMsg = '';
     let lastAttachments: Attachment[] = [];
 
     chat.update((s) => {
-        // Remove last assistant turn
+        // Remove last assistant turn, saving its content for alternatives
         if (s.conversation.length >= 1 && s.conversation[s.conversation.length - 1].role === 'assistant') {
+            const lastAss = s.conversation[s.conversation.length - 1];
+            _pendingPrevAlts = lastAss.alternatives || [];
+            _pendingAlt = lastAss.content;
             s.conversation = s.conversation.slice(0, -1);
         }
         // Get and remove last user turn
