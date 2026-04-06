@@ -82,14 +82,15 @@
     </div>
 
     <div class="content">
-        {#if activeTab === 'preview'}
-            <iframe
-                bind:this={iframe}
-                title="Preview"
-                sandbox="allow-scripts"
-                class="preview-frame"
-            ></iframe>
-        {:else}
+        <!-- Keep iframe always mounted so srcdoc is preserved when switching tabs -->
+        <iframe
+            bind:this={iframe}
+            title="Preview"
+            sandbox="allow-scripts"
+            class="preview-frame"
+            style:display={activeTab === 'preview' ? 'block' : 'none'}
+        ></iframe>
+        {#if activeTab === 'code'}
             <div class="code-view">
                 <button class="copy" class:copied onclick={copyCode}>
                     {copied ? 'Copied' : 'Copy'}
