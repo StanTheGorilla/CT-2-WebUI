@@ -158,6 +158,7 @@
     interface ModeDefinition {
         name: string;
         route_id: string;
+        description: string;
         detected_lang: string;
         priority: number;
         patterns: string[];
@@ -325,26 +326,39 @@
         return m ? m[1] + 'B' : '';
     }
 
+    let promptsOpen = $state(false);
+
     onMount(async () => {
         await Promise.all([loadData(), loadModes(), loadPrompts()]);
     });
 </script>
 
 <div class="settings-page" onclick={() => { if (pickerOpen) pickerOpen = false; }}>
+<div class="settings-content">
 
-    <!-- ─── Model Selection ─── -->
+    <!-- ─── Page Header ─── -->
+    <div class="page-header">
+        <h1 class="page-title">Settings</h1>
+        <p class="page-subtitle">Configure your local AI assistant</p>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════
+         SECTION 1 — AI Model
+         ═══════════════════════════════════════════════ -->
     <section class="section">
-        <div class="section-header">
-            <h2 class="section-title">Model</h2>
+        <div class="section-head">
+            <div class="section-head-text">
+                <h2 class="section-title">AI Model</h2>
+                <p class="section-desc">Choose which AI model runs on your computer. Larger models are smarter but need more memory.</p>
+            </div>
             <button class="scan-btn" onclick={(e) => { e.stopPropagation(); scanModels(); }} disabled={scanning}>
-                {scanning ? 'Scanning…' : 'Scan models'}
+                {scanning ? 'Scanning...' : 'Scan for models'}
             </button>
         </div>
 
         {#if loading}
             <div class="skeleton-card"></div>
         {:else}
-            <!-- Active model display -->
             <div class="model-selector" onclick={(e) => e.stopPropagation()}>
                 <button
                     class="model-box"
@@ -356,7 +370,7 @@
                     <span class="model-dot" class:found={modelFound} class:empty={!activeModel}></span>
                     <span class="model-box-label">
                         {#if switching}
-                            Loading model…
+                            Loading model...
                         {:else if activeModel}
                             {activeModel}
                         {:else}
@@ -379,8 +393,8 @@
                     <div class="model-dropdown" onclick={(e) => e.stopPropagation()}>
                         {#if availableModels.length === 0}
                             <div class="drop-empty">
-                                No .gguf files found in <code>models/</code>.<br>
-                                Add model files there and click "Scan models".
+                                No model files found.<br>
+                                Place <code>.gguf</code> files in the <code>models/</code> folder, then click "Scan for models".
                             </div>
                         {:else}
                             {#each availableModels as m}
@@ -395,7 +409,7 @@
                                             <span class="drop-size">{formatSize(m.size_gb)}</span>
                                             {#if m.context_length}
                                                 <span class="drop-sep"></span>
-                                                <span class="drop-ctx">{formatCtx(m.context_length)} ctx</span>
+                                                <span class="drop-ctx">{formatCtx(m.context_length)} context</span>
                                             {/if}
                                             {#if m.thinking}
                                                 <span class="drop-sep"></span>
@@ -416,7 +430,7 @@
             {#if switching}
                 <div class="switch-banner">
                     <div class="switch-spinner"></div>
-                    <span>Loading model — this may take a minute…</span>
+                    <span>Loading model — this may take a minute...</span>
                 </div>
             {/if}
             {#if switchError}
@@ -425,114 +439,131 @@
         {/if}
     </section>
 
-    <!-- ─── Performance ─── -->
+    <!-- ═══════════════════════════════════════════════
+         SECTION 2 — Hardware
+         ═══════════════════════════════════════════════ -->
     {#if !isMac || (maxContextSize > 0 && activeModel)}
     <section class="section">
-        <h2 class="section-title">Performance</h2>
-
-        {#if !isMac}
-            <div class="setting-row">
-                <label class="setting-label">GPU Backend</label>
-                <div class="backend-picker">
-                    <button
-                        class="backend-btn"
-                        class:active={activeBackend === 'vulkan'}
-                        onclick={() => switchBackend('vulkan')}
-                        disabled={switchingBackend}
-                    >Vulkan</button>
-                    <button
-                        class="backend-btn"
-                        class:active={activeBackend === 'cuda'}
-                        onclick={() => switchBackend('cuda')}
-                        disabled={switchingBackend}
-                    >CUDA</button>
-                </div>
-                {#if backendError}
-                    <p class="error-text">{backendError}</p>
-                {/if}
-                {#if switchingBackend}
-                    <p class="switching-text">Switching backend…</p>
-                {/if}
+        <div class="section-head">
+            <div class="section-head-text">
+                <h2 class="section-title">Hardware</h2>
+                <p class="section-desc">Control how your GPU and memory are used. These settings affect performance and speed.</p>
             </div>
-        {/if}
+        </div>
 
-        {#if maxContextSize > 0 && activeModel}
-            <div class="config-card">
-                <div class="config-row">
-                    <label>
-                        Memory Window
-                        <span class="setting-desc">How much conversation the AI remembers. Larger = richer context but uses more VRAM.</span>
-                    </label>
-                    <div class="slider-container">
+        <div class="card-group">
+            {#if !isMac}
+                <div class="card-item">
+                    <div class="card-item-info">
+                        <span class="card-item-name">GPU Mode</span>
+                        <span class="card-item-hint">Select your graphics card type. Use Vulkan for AMD, CUDA for NVIDIA.</span>
+                    </div>
+                    <div class="backend-picker">
+                        <button
+                            class="backend-btn"
+                            class:active={activeBackend === 'vulkan'}
+                            onclick={() => switchBackend('vulkan')}
+                            disabled={switchingBackend}
+                        >Vulkan (AMD)</button>
+                        <button
+                            class="backend-btn"
+                            class:active={activeBackend === 'cuda'}
+                            onclick={() => switchBackend('cuda')}
+                            disabled={switchingBackend}
+                        >CUDA (NVIDIA)</button>
+                    </div>
+                    {#if backendError}
+                        <p class="inline-error">{backendError}</p>
+                    {/if}
+                    {#if switchingBackend}
+                        <p class="inline-info">Switching...</p>
+                    {/if}
+                </div>
+            {/if}
+
+            {#if maxContextSize > 0 && activeModel}
+                <div class="card-item">
+                    <div class="card-item-info">
+                        <span class="card-item-name">Memory Window</span>
+                        <span class="card-item-hint">How much of the conversation the AI can see at once. Larger values let the AI remember more, but use more GPU memory.</span>
+                    </div>
+                    <div class="slider-row">
                         <input type="range"
                             min={CONTEXT_MIN_FLOOR}
                             max={maxContextSize}
                             bind:value={contextSize}
                         />
-                        <span class="slider-value">{Math.round(contextSize / 1024)}K</span>
+                        <span class="slider-value">{Math.round(contextSize / 1024)}K tokens</span>
                     </div>
                 </div>
-            </div>
-            {#if needsRestart}
-                <div class="restart-notice">
-                    <span>Restart required to apply changes.</span>
-                    <button onclick={restartModel} class="restart-btn" disabled={switching}>Restart Model</button>
-                </div>
             {/if}
+        </div>
+
+        {#if needsRestart}
+            <div class="restart-notice">
+                <span>Restart the model to apply changes.</span>
+                <button onclick={restartModel} class="restart-btn" disabled={switching}>Restart Now</button>
+            </div>
         {/if}
     </section>
     {/if}
 
-    <!-- ─── Modes ─── -->
+    <!-- ═══════════════════════════════════════════════
+         SECTION 3 — Response Tuning (Modes)
+         ═══════════════════════════════════════════════ -->
     {#if modes.length > 0}
     <section class="section">
-        <h2 class="section-title">Response Style</h2>
-        <p class="section-desc">Fine-tune how each mode responds. Changes apply immediately.</p>
+        <div class="section-head">
+            <div class="section-head-text">
+                <h2 class="section-title">Response Tuning</h2>
+                <p class="section-desc">Adjust how the AI behaves in each mode. Move the sliders to change its personality — more creative, more focused, or more varied.</p>
+            </div>
+        </div>
+
         <div class="modes-list">
             {#each modes as mode (mode.name)}
                 <div class="mode-card">
                     <div class="mode-header">
-                        <div class="mode-meta">
-                            <span class="mode-name">{mode.name}</span>
-                            <span class="mode-route">{mode.route_id.replace('ROUTE_', '')}</span>
-                            {#if mode.patterns.length > 0}
-                                <span class="mode-badge">{mode.patterns.length} patterns</span>
-                            {/if}
-                        </div>
+                        <span class="mode-name">{mode.name}</span>
+                        {#if mode.description}
+                            <span class="mode-desc">{mode.description}</span>
+                        {/if}
                     </div>
-                    <div class="mode-overrides">
-                        {#each [['temperature', 0, 2, 0.05, 'Creativity', 'How surprising vs. predictable responses are'], ['top_p', 0, 1, 0.05, 'Focus', 'How broad or precise word choices are'], ['presence_penalty', -2, 2, 0.05, 'Variety', 'How much the AI avoids repeating itself']] as [key, min, max, step, label, desc]}
+
+                    <div class="mode-sliders">
+                        {#each [['temperature', 0, 2, 0.05, 'Creativity', 'More predictable responses on the left, more surprising and original on the right.'], ['top_p', 0, 1, 0.05, 'Focus', 'Narrow, precise word choices on the left, broader and more diverse on the right.'], ['presence_penalty', -2, 2, 0.05, 'Variety', 'Lower values may repeat phrases. Higher values push the AI to use different words.']] as [key, min, max, step, label, desc]}
                             {@const val = (modeEdits[mode.name]?.[key as string] ?? mode.task_overrides[key as string])}
                             {#if val !== undefined}
-                            <div class="override-row">
-                                <span class="override-key">
-                                    {label}
-                                    <span class="setting-desc">{key} — {desc}</span>
-                                </span>
-                                <div class="slider-container">
-                                    <input type="range"
-                                        min={min}
-                                        max={max}
-                                        step={step}
-                                        value={val}
-                                        oninput={(e) => updateModeOverride(mode.name, key as string, Number((e.target as HTMLInputElement).value))}
-                                    />
+                            <div class="slider-block">
+                                <div class="slider-label-row">
+                                    <span class="slider-label">{label}</span>
+                                    <span class="slider-tech">{key}</span>
                                     <span class="slider-value">{(modeEdits[mode.name]?.[key as string] ?? val).toFixed(2)}</span>
                                 </div>
+                                <p class="slider-hint">{desc}</p>
+                                <input type="range"
+                                    class="full-slider"
+                                    min={min}
+                                    max={max}
+                                    step={step}
+                                    value={val}
+                                    oninput={(e) => updateModeOverride(mode.name, key as string, Number((e.target as HTMLInputElement).value))}
+                                />
                             </div>
                             {/if}
                         {/each}
                     </div>
+
                     {#if modesDirty[mode.name] || modesSaveError[mode.name]}
                     <div class="mode-footer">
                         {#if modesSaveError[mode.name]}
-                            <span class="mode-error">{modesSaveError[mode.name]}</span>
+                            <span class="inline-error">{modesSaveError[mode.name]}</span>
                         {/if}
                         <button
-                            class="mode-save-btn"
+                            class="save-btn"
                             onclick={() => saveMode(mode.name)}
                             disabled={modesSaving[mode.name]}
-                        >{modesSaving[mode.name] ? 'Saving…' : 'Save'}</button>
+                        >{modesSaving[mode.name] ? 'Saving...' : 'Save Changes'}</button>
                     </div>
                     {/if}
                 </div>
@@ -541,11 +572,154 @@
     </section>
     {/if}
 
-    <!-- ─── Prompts ─── -->
+    <!-- ═══════════════════════════════════════════════
+         SECTION 4 — Quality Features
+         ═══════════════════════════════════════════════ -->
+    <section class="section">
+        <div class="section-head">
+            <div class="section-head-text">
+                <h2 class="section-title">Quality Features</h2>
+                <p class="section-desc">Optional features that can improve output quality. These may increase generation time.</p>
+            </div>
+        </div>
+
+        <div class="card-group">
+            <label class="toggle-card">
+                <span class="toggle-info">
+                    <span class="toggle-name">Design Refinement</span>
+                    <span class="toggle-hint">When generating websites or designs, the AI will review and polish its output in a second pass. Takes longer, but produces higher quality results.</span>
+                </span>
+                <button
+                    class="toggle-switch"
+                    class:on={$preferences.designRefinement}
+                    onclick={() => preferences.update(p => ({ ...p, designRefinement: !p.designRefinement }))}
+                    role="switch"
+                    aria-checked={$preferences.designRefinement}
+                >
+                    <span class="toggle-knob"></span>
+                </button>
+            </label>
+
+            <label class="toggle-card atlas-master">
+                <span class="toggle-info">
+                    <span class="toggle-name">Atlas Mode <span class="beta-badge">Beta</span></span>
+                    <span class="toggle-hint">The AI generates multiple answers and picks the best one. Significantly improves quality for complex tasks, but takes longer.</span>
+                </span>
+                <button
+                    class="toggle-switch"
+                    class:on={$preferences.atlasMode}
+                    onclick={() => preferences.update(p => ({ ...p, atlasMode: !p.atlasMode }))}
+                    role="switch"
+                    aria-checked={$preferences.atlasMode}
+                >
+                    <span class="toggle-knob"></span>
+                </button>
+            </label>
+
+            {#if $preferences.atlasMode}
+                <div class="atlas-sub-group">
+                    <div class="atlas-row">
+                        <div class="card-item-info">
+                            <span class="card-item-name">Quality vs Speed</span>
+                            <span class="card-item-hint">Let the AI decide how much effort to spend, or set it manually.</span>
+                        </div>
+                        <select
+                            class="atlas-select"
+                            value={$preferences.atlasEffortMode}
+                            onchange={(e) => preferences.update(p => ({ ...p, atlasEffortMode: (e.target as HTMLSelectElement).value as 'auto' | 'manual' }))}
+                        >
+                            <option value="auto">Automatic</option>
+                            <option value="manual">Manual</option>
+                        </select>
+                    </div>
+
+                    {#if $preferences.atlasEffortMode === 'manual'}
+                        <div class="atlas-row">
+                            <div class="card-item-info">
+                                <span class="card-item-name">Quality Level</span>
+                                <span class="card-item-hint">1 = fastest, 5 = highest quality.</span>
+                            </div>
+                            <div class="slider-row compact">
+                                <input type="range"
+                                    min="1"
+                                    max="5"
+                                    value={$preferences.atlasEffortLevel}
+                                    oninput={(e) => preferences.update(p => ({ ...p, atlasEffortLevel: Number((e.target as HTMLInputElement).value) }))}
+                                />
+                                <span class="slider-value">{$preferences.atlasEffortLevel}</span>
+                            </div>
+                        </div>
+                    {/if}
+
+                    <label class="toggle-card sub">
+                        <span class="toggle-info">
+                            <span class="toggle-name">Auto-Check Output</span>
+                            <span class="toggle-hint">Verify the answer meets your request before showing it.</span>
+                        </span>
+                        <button
+                            class="toggle-switch"
+                            class:on={$preferences.atlasSelfVerification}
+                            onclick={() => preferences.update(p => ({ ...p, atlasSelfVerification: !p.atlasSelfVerification }))}
+                            role="switch"
+                            aria-checked={$preferences.atlasSelfVerification}
+                        >
+                            <span class="toggle-knob"></span>
+                        </button>
+                    </label>
+
+                    <label class="toggle-card sub">
+                        <span class="toggle-info">
+                            <span class="toggle-name">Compare Multiple Answers</span>
+                            <span class="toggle-hint">Evaluate answers from different angles before picking the best one.</span>
+                        </span>
+                        <button
+                            class="toggle-switch"
+                            class:on={$preferences.atlasMultiPerspective}
+                            onclick={() => preferences.update(p => ({ ...p, atlasMultiPerspective: !p.atlasMultiPerspective }))}
+                            role="switch"
+                            aria-checked={$preferences.atlasMultiPerspective}
+                        >
+                            <span class="toggle-knob"></span>
+                        </button>
+                    </label>
+
+                    <label class="toggle-card sub">
+                        <span class="toggle-info">
+                            <span class="toggle-name">Auto-Improve</span>
+                            <span class="toggle-hint">Automatically fix and polish the output until it's ready.</span>
+                        </span>
+                        <button
+                            class="toggle-switch"
+                            class:on={$preferences.atlasIterativeRefinement}
+                            onclick={() => preferences.update(p => ({ ...p, atlasIterativeRefinement: !p.atlasIterativeRefinement }))}
+                            role="switch"
+                            aria-checked={$preferences.atlasIterativeRefinement}
+                        >
+                            <span class="toggle-knob"></span>
+                        </button>
+                    </label>
+                </div>
+            {/if}
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════
+         SECTION 5 — System Prompts (Advanced)
+         ═══════════════════════════════════════════════ -->
     {#if Object.keys(prompts).length > 0}
     <section class="section">
-        <h2 class="section-title">Custom Instructions</h2>
-        <p class="section-desc">Built-in instructions for each mode. Advanced — restart required after saving.</p>
+        <div class="section-head">
+            <div class="section-head-text">
+                <h2 class="section-title">System Prompts</h2>
+                <p class="section-desc">Advanced: edit the built-in instructions that guide each mode. Changes require a model restart.</p>
+            </div>
+            <button class="collapse-btn" onclick={() => promptsOpen = !promptsOpen}>
+                {promptsOpen ? 'Hide' : 'Show'}
+                <span class="collapse-chevron" class:open={promptsOpen}></span>
+            </button>
+        </div>
+
+        {#if promptsOpen}
         <div class="prompts-list">
             {#each Object.entries(prompts).sort(([a], [b]) => a.localeCompare(b)) as [name, _content]}
                 <div class="prompt-row" class:expanded={promptsExpanded[name]}>
@@ -568,25 +742,25 @@
                             ></textarea>
                             {#if promptsSaved[name]}
                                 <div class="prompt-restart-notice">
-                                    Saved. Restart the model server to apply changes.
+                                    Saved. Restart the model to apply changes.
                                 </div>
                             {/if}
                             {#if promptsSaveError[name]}
-                                <div class="prompt-error">{promptsSaveError[name]}</div>
+                                <div class="inline-error">{promptsSaveError[name]}</div>
                             {/if}
                             <div class="prompt-actions">
                                 <button
-                                    class="prompt-reset-btn"
+                                    class="btn-outline"
                                     onclick={() => resetPrompt(name)}
                                     disabled={promptsResetting[name] || promptsSaving[name]}
                                     title="Restore original default"
-                                >{promptsResetting[name] ? 'Resetting…' : 'Reset to default'}</button>
+                                >{promptsResetting[name] ? 'Resetting...' : 'Reset to default'}</button>
                                 {#if promptsDirty[name] || promptsSaveError[name]}
                                     <button
-                                        class="prompt-save-btn"
+                                        class="save-btn"
                                         onclick={() => savePrompt(name)}
                                         disabled={promptsSaving[name]}
-                                    >{promptsSaving[name] ? 'Saving…' : 'Save'}</button>
+                                    >{promptsSaving[name] ? 'Saving...' : 'Save'}</button>
                                 {/if}
                             </div>
                         </div>
@@ -594,131 +768,19 @@
                 </div>
             {/each}
         </div>
+        {/if}
     </section>
     {/if}
 
-    <!-- ─── Pipeline ─── -->
-    <section class="section">
-        <h2 class="section-title">Features</h2>
-        <label class="toggle-row">
-            <span class="toggle-label">
-                <span class="toggle-name">Design refinement</span>
-                <span class="toggle-desc">Second pass that reviews and polishes generated websites. Doubles generation time.</span>
-            </span>
-            <button
-                class="toggle-switch"
-                class:on={$preferences.designRefinement}
-                onclick={() => preferences.update(p => ({ ...p, designRefinement: !p.designRefinement }))}
-                role="switch"
-                aria-checked={$preferences.designRefinement}
-            >
-                <span class="toggle-knob"></span>
-            </button>
-        </label>
-    </section>
-
-    <!-- ─── Atlas Mode ─── -->
-    <section class="section">
-        <h2 class="section-title">Atlas Mode <span class="beta-badge">Beta</span></h2>
-        <label class="toggle-row">
-            <span class="toggle-label">
-                <span class="toggle-name">Atlas Mode</span>
-                <span class="toggle-desc">Adaptive test-time compute: generates multiple candidates, selects the best, repairs failures automatically.</span>
-            </span>
-            <button
-                class="toggle-switch"
-                class:on={$preferences.atlasMode}
-                onclick={() => preferences.update(p => ({ ...p, atlasMode: !p.atlasMode }))}
-                role="switch"
-                aria-checked={$preferences.atlasMode}
-            >
-                <span class="toggle-knob"></span>
-            </button>
-        </label>
-
-        {#if $preferences.atlasMode}
-            <div class="atlas-settings">
-                <div class="atlas-row">
-                    <span class="atlas-label">Effort Mode</span>
-                    <select
-                        class="atlas-select"
-                        value={$preferences.atlasEffortMode}
-                        onchange={(e) => preferences.update(p => ({ ...p, atlasEffortMode: (e.target as HTMLSelectElement).value as 'auto' | 'manual' }))}
-                    >
-                        <option value="auto">Auto</option>
-                        <option value="manual">Manual</option>
-                    </select>
-                </div>
-
-                {#if $preferences.atlasEffortMode === 'manual'}
-                    <div class="atlas-row">
-                        <span class="atlas-label">Effort Level</span>
-                        <div class="slider-container">
-                            <input type="range"
-                                min="1"
-                                max="5"
-                                value={$preferences.atlasEffortLevel}
-                                oninput={(e) => preferences.update(p => ({ ...p, atlasEffortLevel: Number((e.target as HTMLInputElement).value) }))}
-                            />
-                            <span class="slider-value">{$preferences.atlasEffortLevel}</span>
-                        </div>
-                    </div>
-                {/if}
-
-                <label class="toggle-row sub-toggle">
-                    <span class="toggle-label">
-                        <span class="toggle-name">Self-Verification</span>
-                        <span class="toggle-desc">Automatically verify outputs against requirements before finalizing.</span>
-                    </span>
-                    <button
-                        class="toggle-switch"
-                        class:on={$preferences.atlasSelfVerification}
-                        onclick={() => preferences.update(p => ({ ...p, atlasSelfVerification: !p.atlasSelfVerification }))}
-                        role="switch"
-                        aria-checked={$preferences.atlasSelfVerification}
-                    >
-                        <span class="toggle-knob"></span>
-                    </button>
-                </label>
-
-                <label class="toggle-row sub-toggle">
-                    <span class="toggle-label">
-                        <span class="toggle-name">Multi-Perspective Review</span>
-                        <span class="toggle-desc">Evaluate candidates from multiple angles before selecting the best.</span>
-                    </span>
-                    <button
-                        class="toggle-switch"
-                        class:on={$preferences.atlasMultiPerspective}
-                        onclick={() => preferences.update(p => ({ ...p, atlasMultiPerspective: !p.atlasMultiPerspective }))}
-                        role="switch"
-                        aria-checked={$preferences.atlasMultiPerspective}
-                    >
-                        <span class="toggle-knob"></span>
-                    </button>
-                </label>
-
-                <label class="toggle-row sub-toggle">
-                    <span class="toggle-label">
-                        <span class="toggle-name">Iterative Refinement</span>
-                        <span class="toggle-desc">Automatically repair and refine outputs through successive iterations.</span>
-                    </span>
-                    <button
-                        class="toggle-switch"
-                        class:on={$preferences.atlasIterativeRefinement}
-                        onclick={() => preferences.update(p => ({ ...p, atlasIterativeRefinement: !p.atlasIterativeRefinement }))}
-                        role="switch"
-                        aria-checked={$preferences.atlasIterativeRefinement}
-                    >
-                        <span class="toggle-knob"></span>
-                    </button>
-                </label>
+    <!-- ═══════════════════════════════════════════════
+         SECTION 6 — Server Status
+         ═══════════════════════════════════════════════ -->
+    <section class="section section-last">
+        <div class="section-head">
+            <div class="section-head-text">
+                <h2 class="section-title">Status</h2>
             </div>
-        {/if}
-    </section>
-
-    <!-- ─── Server Status ─── -->
-    <section class="section">
-        <h2 class="section-title">Server Status</h2>
+        </div>
         {#if loading}
             <div class="skeleton-row"></div>
         {:else}
@@ -728,94 +790,260 @@
         {/if}
     </section>
 
-    <!-- ─── Configuration ─── -->
-    {#if config.preset}
-        <section class="section">
-            <h2 class="section-title">Configuration</h2>
-            <div class="config-card">
-                <div class="config-row"><span class="config-key">model</span><span class="config-val">{config.model || '—'}</span></div>
-                <div class="config-row"><span class="config-key">context size</span><span class="config-val">{formatCtx(config.context_size)}</span></div>
-                <div class="config-row"><span class="config-key">thinking</span><span class="config-val">{config.enable_thinking ? 'enabled' : 'disabled'}</span></div>
-                <div class="config-row"><span class="config-key">temperature</span><span class="config-val">{config.temperature}</span></div>
-                <div class="config-row"><span class="config-key">top p</span><span class="config-val">{config.top_p}</span></div>
-                <div class="config-row"><span class="config-key">presence penalty</span><span class="config-val">{config.presence_penalty}</span></div>
-                <div class="config-row"><span class="config-key">port</span><span class="config-val">{config.port}</span></div>
-            </div>
-        </section>
-    {/if}
+</div>
 </div>
 
 <style>
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       LAYOUT
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
     .settings-page {
-        max-width: 620px;
-        margin: 0 auto;
-        padding: 28px 28px 48px;
+        width: 100%;
         height: 100%;
         overflow-y: auto;
-        scrollbar-width: none;
+        scrollbar-width: thin;
+        scrollbar-color: var(--border) transparent;
     }
-    .settings-page::-webkit-scrollbar { display: none; }
-
-    /* ── Sections ── */
-    .section { margin-bottom: 32px; }
-    .section-title {
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        margin-bottom: 12px;
+    .settings-page::-webkit-scrollbar { width: 6px; }
+    .settings-page::-webkit-scrollbar-track { background: transparent; }
+    .settings-page::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+    }
+    .settings-content {
+        max-width: 680px;
+        margin: 0 auto;
+        padding: 20px 32px 64px;
     }
 
-    /* ── Section header row ── */
-    .section-header {
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       PAGE HEADER
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .page-header {
+        margin-bottom: 36px;
+    }
+    .page-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--text);
+        margin: 0 0 4px;
+        letter-spacing: -0.02em;
+    }
+    .page-subtitle {
+        font-size: 14px;
+        color: var(--text-secondary);
+        margin: 0;
+        line-height: 1.4;
+    }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       SECTIONS
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .section {
+        margin-bottom: 40px;
+        padding-bottom: 40px;
+        border-bottom: 1px solid var(--border-subtle);
+    }
+    .section-last {
+        border-bottom: none;
+        margin-bottom: 0;
+        padding-bottom: 0;
+    }
+    .section-head {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
-        margin-bottom: 12px;
+        gap: 16px;
+        margin-bottom: 20px;
     }
-    .section-header .section-title { margin-bottom: 0; }
-    .scan-btn {
-        font-size: 11px;
-        font-weight: 600;
-        padding: 3px 11px;
-        border-radius: 9999px;
-        border: 1px solid var(--border);
-        background: var(--surface);
-        color: var(--text-muted);
-        cursor: pointer;
-        font-family: inherit;
-        transition: color var(--transition), background var(--transition);
+    .section-head-text {
+        flex: 1;
+        min-width: 0;
     }
-    .scan-btn:hover:not(:disabled) { background: var(--bubble-strong); color: var(--text); }
-    .scan-btn:disabled { opacity: 0.4; cursor: default; }
-
-    /* ── Skeleton loading ── */
-    .skeleton-card {
-        height: 56px;
-        border-radius: var(--radius);
-        background: var(--bubble);
-        animation: breathe 3s ease-in-out infinite;
+    .section-title {
+        font-size: 16px;
+        font-weight: 650;
+        color: var(--text);
+        margin: 0 0 4px;
+        letter-spacing: -0.01em;
     }
-    .skeleton-row {
-        height: 44px;
-        border-radius: var(--radius-sm);
-        background: var(--bubble);
-        animation: breathe 3s ease-in-out infinite;
+    .section-desc {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin: 0;
+        line-height: 1.5;
     }
 
-    /* ── Model Selector ── */
-    .model-selector { position: relative; }
-
-    .model-box {
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       CARD GROUP — vertical stack of setting items
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .card-group {
         display: flex;
-        align-items: center;
+        flex-direction: column;
         gap: 8px;
-        width: 100%;
-        padding: 12px 16px;
+    }
+    .card-item {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 18px 20px;
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-xs);
+    }
+    .card-item-info {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+    }
+    .card-item-name {
+        font-size: 14px;
+        font-weight: 550;
+        color: var(--text);
+    }
+    .card-item-hint {
+        font-size: 12.5px;
+        color: var(--text-secondary);
+        line-height: 1.45;
+    }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       TOGGLE CARD — on/off switch with description
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .toggle-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 18px 20px;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-xs);
+        cursor: pointer;
+    }
+    .toggle-card.sub {
+        padding: 14px 20px;
+    }
+    .toggle-info {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .toggle-name {
+        font-size: 14px;
+        font-weight: 550;
+        color: var(--text);
+    }
+    .toggle-card.sub .toggle-name {
+        font-size: 13px;
+    }
+    .toggle-hint {
+        font-size: 12.5px;
+        color: var(--text-secondary);
+        line-height: 1.45;
+    }
+    .toggle-card.sub .toggle-hint {
+        font-size: 12px;
+    }
+
+    .toggle-switch {
+        position: relative;
+        width: 44px;
+        height: 24px;
+        border-radius: 999px;
+        border: none;
+        background: var(--border);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background 0.2s;
+        padding: 0;
+    }
+    .toggle-switch.on {
+        background: var(--success, #2da44e);
+    }
+    .toggle-knob {
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: white;
+        transition: transform 0.2s;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+    }
+    .toggle-switch.on .toggle-knob {
+        transform: translateX(20px);
+    }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       ATLAS SUB-GROUP
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .atlas-sub-group {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-left: 16px;
+        padding-left: 16px;
+        border-left: 2px solid var(--border-subtle);
+    }
+    .atlas-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 20px;
+        background: var(--bubble);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-xs);
+    }
+    .atlas-select {
+        font-family: inherit;
+        font-size: 13px;
+        color: var(--text);
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 6px 12px;
+        cursor: pointer;
+        outline: none;
+    }
+    .beta-badge {
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--text-muted);
+        background: rgba(210, 153, 34, 0.12);
+        border: 1px solid rgba(210, 153, 34, 0.25);
+        padding: 1px 7px;
+        border-radius: 9999px;
+        vertical-align: middle;
+        margin-left: 4px;
+        text-transform: none;
+        letter-spacing: 0;
+    }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       MODEL SELECTOR
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .model-selector { position: relative; }
+    .model-box {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 14px 18px;
+        background: var(--bubble);
         border: var(--bubble-border);
         border-radius: var(--radius);
         cursor: pointer;
@@ -824,10 +1052,7 @@
         color: var(--text);
         text-align: left;
         box-shadow: var(--shadow-sm);
-        transition:
-            border-color var(--transition),
-            background var(--transition),
-            box-shadow var(--transition);
+        transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
     }
     .model-box:hover:not(:disabled) {
         background: var(--bubble-strong);
@@ -837,10 +1062,7 @@
         border-color: var(--text-muted);
         box-shadow: var(--shadow-md);
     }
-    .model-box:disabled {
-        opacity: 0.55;
-        cursor: wait;
-    }
+    .model-box:disabled { opacity: 0.55; cursor: wait; }
     .model-box-label {
         flex: 1;
         min-width: 0;
@@ -858,7 +1080,6 @@
     }
     .box-chevron.open { transform: rotate(180deg); }
 
-    /* ── Capability badges ── */
     .cap-badge {
         font-size: 10px;
         font-weight: 600;
@@ -880,7 +1101,6 @@
         border: 1px solid rgba(59, 130, 246, 0.18);
     }
 
-    /* ── Model dot ── */
     .model-dot {
         width: 8px;
         height: 8px;
@@ -904,22 +1124,21 @@
         border-radius: var(--radius);
         box-shadow: var(--shadow-lg, var(--shadow-md));
         overflow: hidden;
-        max-height: 300px;
+        max-height: 320px;
         overflow-y: auto;
         scrollbar-width: thin;
     }
     .drop-empty {
-        padding: 16px;
-        font-size: 12.5px;
+        padding: 20px;
+        font-size: 13px;
         color: var(--text-muted);
         line-height: 1.6;
-        font-family: inherit;
     }
     .drop-empty code {
         font-family: var(--font-mono);
-        font-size: 11.5px;
+        font-size: 12px;
         background: var(--surface);
-        padding: 1px 4px;
+        padding: 1px 5px;
         border-radius: 3px;
     }
     .drop-item {
@@ -928,14 +1147,14 @@
         justify-content: space-between;
         gap: 12px;
         width: 100%;
-        padding: 10px 14px;
+        padding: 12px 16px;
         border: none;
         background: none;
         cursor: pointer;
         font-family: inherit;
         text-align: left;
         border-bottom: 1px solid var(--border-subtle);
-        transition: background var(--transition);
+        transition: background 0.15s;
     }
     .drop-item:last-child { border-bottom: none; }
     .drop-item:hover { background: var(--bubble-strong); }
@@ -949,7 +1168,7 @@
     }
     .drop-name {
         font-family: var(--font-mono);
-        font-size: 12.5px;
+        font-size: 13px;
         color: var(--text);
         white-space: nowrap;
         overflow: hidden;
@@ -964,10 +1183,7 @@
     }
     .drop-size { font-family: var(--font-mono); }
     .drop-ctx { font-family: var(--font-mono); }
-    .drop-thinking {
-        color: rgba(139, 92, 246, 0.75);
-        font-weight: 500;
-    }
+    .drop-thinking { color: rgba(139, 92, 246, 0.75); font-weight: 500; }
     .drop-sep {
         width: 3px;
         height: 3px;
@@ -982,14 +1198,16 @@
         flex-shrink: 0;
     }
 
-    /* ── Switch feedback ── */
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       SWITCH / LOADING FEEDBACK
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
     .switch-banner {
         display: flex;
         align-items: center;
         gap: 10px;
-        margin-top: 10px;
-        padding: 10px 16px;
-        border-radius: var(--radius-sm);
+        margin-top: 12px;
+        padding: 12px 18px;
+        border-radius: var(--radius);
         background: var(--accent-subtle);
         font-size: 13px;
         color: var(--text-secondary);
@@ -1009,104 +1227,123 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── Status ── */
-    .status-grid { display: flex; flex-direction: column; gap: 6px; }
-
-    /* ── Config cards ── */
-    .config-card {
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       MODE CARDS — Response Tuning
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .modes-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .mode-card {
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
         border-radius: var(--radius);
-        padding: 14px 18px;
+        padding: 22px 22px 18px;
         box-shadow: var(--shadow-xs);
-        margin-bottom: 8px;
     }
-    .config-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 4px 0;
-        font-size: 13px;
+    .mode-header {
+        margin-bottom: 18px;
     }
-    .config-key {
-        color: var(--text-secondary);
+    .mode-name {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text);
         text-transform: capitalize;
-    }
-    .config-val {
-        color: var(--text);
-        font-family: var(--font-mono);
-        font-size: 12px;
-    }
-
-    /* ── Toggle rows ── */
-    .toggle-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 14px 18px;
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
-        border-radius: var(--radius);
-        box-shadow: var(--shadow-xs);
-        cursor: pointer;
-    }
-    .toggle-label { flex: 1; min-width: 0; }
-    .toggle-name {
         display: block;
-        font-size: 14px;
-        font-weight: 550;
-        color: var(--text);
         margin-bottom: 2px;
     }
-    .toggle-desc {
-        display: block;
+    .mode-desc {
         font-size: 12.5px;
-        color: var(--text-muted);
+        color: var(--text-secondary);
         line-height: 1.4;
     }
-    .toggle-switch {
-        position: relative;
-        width: 40px;
-        height: 22px;
-        border-radius: 999px;
-        border: none;
+
+    .mode-sliders {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+    }
+    .slider-block {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .slider-label-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+    }
+    .slider-label {
+        font-size: 13px;
+        font-weight: 550;
+        color: var(--text);
+    }
+    .slider-tech {
+        font-size: 11px;
+        font-family: var(--font-mono);
+        color: var(--text-secondary);
+        opacity: 0.7;
+    }
+    .slider-hint {
+        font-size: 12px;
+        color: var(--text-secondary);
+        line-height: 1.4;
+        margin: 0 0 4px;
+    }
+    .full-slider {
+        width: 100%;
+        height: 4px;
+        appearance: none;
+        -webkit-appearance: none;
         background: var(--border);
+        border-radius: 2px;
+        outline: none;
         cursor: pointer;
-        flex-shrink: 0;
-        transition: background var(--transition);
-        padding: 0;
     }
-    .toggle-switch.on {
-        background: var(--text-secondary);
-    }
-    .toggle-knob {
-        position: absolute;
-        top: 2px;
-        left: 2px;
+    .full-slider::-webkit-slider-thumb {
+        appearance: none;
+        -webkit-appearance: none;
         width: 18px;
         height: 18px;
         border-radius: 50%;
-        background: var(--bg);
-        transition: transform var(--transition);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        background: var(--text);
+        border: 2px solid var(--bg);
+        box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+        cursor: pointer;
     }
-    .toggle-switch.on .toggle-knob {
-        transform: translateX(18px);
+    .full-slider::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--text);
+        border: 2px solid var(--bg);
+        box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+        cursor: pointer;
     }
 
-    /* ── Context Size Slider ── */
-    .slider-container {
+    .mode-footer {
         display: flex;
         align-items: center;
+        justify-content: flex-end;
         gap: 10px;
-        flex: 1;
-        max-width: 280px;
+        margin-top: 18px;
+        padding-top: 14px;
+        border-top: 1px solid var(--border-subtle);
     }
-    .slider-container input[type="range"] {
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       SLIDERS — generic
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .slider-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+    }
+    .slider-row input[type="range"] {
         flex: 1;
         height: 4px;
         appearance: none;
@@ -1116,25 +1353,28 @@
         outline: none;
         cursor: pointer;
     }
-    .slider-container input[type="range"]::-webkit-slider-thumb {
+    .slider-row input[type="range"]::-webkit-slider-thumb {
         appearance: none;
         -webkit-appearance: none;
-        width: 16px;
-        height: 16px;
+        width: 18px;
+        height: 18px;
         border-radius: 50%;
         background: var(--text);
         border: 2px solid var(--bg);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        box-shadow: 0 1px 4px rgba(0,0,0,0.2);
         cursor: pointer;
     }
-    .slider-container input[type="range"]::-moz-range-thumb {
-        width: 16px;
-        height: 16px;
+    .slider-row input[type="range"]::-moz-range-thumb {
+        width: 18px;
+        height: 18px;
         border-radius: 50%;
         background: var(--text);
         border: 2px solid var(--bg);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        box-shadow: 0 1px 4px rgba(0,0,0,0.2);
         cursor: pointer;
+    }
+    .slider-row.compact {
+        max-width: 200px;
     }
     .slider-value {
         font-family: var(--font-mono);
@@ -1143,17 +1383,44 @@
         color: var(--text);
         min-width: 36px;
         text-align: right;
+        flex-shrink: 0;
     }
 
-    /* ── Restart Notice ── */
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       HARDWARE
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .backend-picker {
+        display: flex;
+        gap: 8px;
+    }
+    .backend-btn {
+        padding: 8px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 13px;
+        font-family: inherit;
+        font-weight: 500;
+        transition: all 0.15s;
+    }
+    .backend-btn.active {
+        color: var(--text);
+        border-color: var(--text-secondary);
+        background: var(--surface);
+        font-weight: 600;
+    }
+    .backend-btn:disabled { cursor: wait; opacity: 0.3; }
+
     .restart-notice {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        margin-top: 8px;
-        padding: 10px 16px;
-        border-radius: var(--radius-sm);
+        margin-top: 12px;
+        padding: 12px 18px;
+        border-radius: var(--radius);
         background: rgba(210, 153, 34, 0.08);
         border: 1px solid rgba(210, 153, 34, 0.2);
         font-size: 13px;
@@ -1161,7 +1428,7 @@
     }
     .restart-btn {
         flex-shrink: 0;
-        padding: 5px 14px;
+        padding: 6px 16px;
         font-size: 12px;
         font-weight: 600;
         font-family: inherit;
@@ -1170,188 +1437,33 @@
         border: none;
         border-radius: 9999px;
         cursor: pointer;
-        transition: opacity var(--transition);
+        transition: opacity 0.15s;
     }
     .restart-btn:hover:not(:disabled) { opacity: 0.85; }
     .restart-btn:disabled { opacity: 0.5; cursor: wait; }
 
-    /* ── Atlas Mode ── */
-    .beta-badge {
-        font-size: 10px;
-        font-weight: 600;
-        color: var(--text-muted);
-        background: rgba(210, 153, 34, 0.12);
-        border: 1px solid rgba(210, 153, 34, 0.25);
-        padding: 1px 6px;
-        border-radius: 9999px;
-        vertical-align: middle;
-        margin-left: 6px;
-        text-transform: none;
-        letter-spacing: 0;
-    }
-    .atlas-settings {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        margin-top: 8px;
-    }
-    .atlas-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 10px 18px;
-        background: var(--bubble);
-        border: var(--bubble-border);
-        border-radius: var(--radius);
-        box-shadow: var(--shadow-xs);
-    }
-    .atlas-label {
-        font-size: 13px;
-        font-weight: 550;
-        color: var(--text);
-    }
-    .atlas-select {
-        font-family: inherit;
-        font-size: 12.5px;
-        color: var(--text);
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        padding: 4px 10px;
-        cursor: pointer;
-        outline: none;
-    }
-    .sub-toggle {
-        padding: 10px 18px;
-    }
-    .sub-toggle .toggle-name {
-        font-size: 13px;
-    }
-    .sub-toggle .toggle-desc {
-        font-size: 11.5px;
-    }
-
-    /* ── Backend switcher ── */
-    .setting-row {
-        margin-bottom: 32px;
-    }
-    .setting-label {
-        display: block;
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        margin-bottom: 12px;
-    }
-    .backend-picker {
-        display: flex;
-        gap: 0.5rem;
-    }
-    .backend-btn {
-        padding: 0.35rem 0.9rem;
-        border: 1px solid var(--border, #444);
-        border-radius: 6px;
-        background: transparent;
-        color: inherit;
-        cursor: pointer;
-        font-size: 0.85rem;
-        opacity: 0.6;
-        transition: opacity 0.15s, border-color 0.15s;
-    }
-    .backend-btn.active {
-        opacity: 1;
-        border-color: var(--accent, #7c6af7);
-    }
-    .backend-btn:disabled { cursor: wait; opacity: 0.3; }
-    .switching-text { font-size: 0.8rem; opacity: 0.6; margin: 0.25rem 0 0; }
-    .error-text { font-size: 0.8rem; color: #e06c75; margin: 0.25rem 0 0; }
-
-    /* ── Modes ── */
-    .modes-list {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
-    .mode-card {
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border);
-        border-radius: var(--radius);
-        padding: 14px 18px;
-        box-shadow: var(--shadow-xs);
-    }
-    .mode-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 12px;
-    }
-    .mode-meta {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .mode-name {
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--text);
-        text-transform: capitalize;
-    }
-    .mode-route {
-        font-size: 11px;
-        font-weight: 600;
-        color: var(--text-muted);
-        font-family: var(--font-mono);
-        background: var(--surface);
-        padding: 2px 8px;
-        border-radius: 9999px;
-        border: 1px solid var(--border-subtle);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-    .mode-badge {
-        font-size: 11px;
-        color: var(--text-muted);
-        background: rgba(59, 130, 246, 0.08);
-        border: 1px solid rgba(59, 130, 246, 0.15);
-        padding: 2px 8px;
-        border-radius: 9999px;
-    }
-    .mode-overrides {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-    .override-row {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-    .override-key {
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       BUTTONS — shared styles
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .scan-btn {
         font-size: 12px;
-        color: var(--text-secondary);
-        min-width: 120px;
+        font-weight: 600;
+        padding: 6px 14px;
+        border-radius: 9999px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-family: inherit;
+        transition: color 0.15s, background 0.15s;
+        white-space: nowrap;
         flex-shrink: 0;
     }
-    .mode-footer {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 10px;
-        margin-top: 12px;
-        padding-top: 10px;
-        border-top: 1px solid var(--border-subtle);
-    }
-    .mode-error {
-        font-size: 12px;
-        color: var(--error, #e06c75);
-        flex: 1;
-    }
-    .mode-save-btn {
-        padding: 5px 16px;
+    .scan-btn:hover:not(:disabled) { background: var(--bubble-strong); color: var(--text); }
+    .scan-btn:disabled { opacity: 0.4; cursor: default; }
+
+    .save-btn {
+        padding: 6px 18px;
         font-size: 12px;
         font-weight: 600;
         font-family: inherit;
@@ -1360,12 +1472,73 @@
         border: none;
         border-radius: 9999px;
         cursor: pointer;
-        transition: opacity var(--transition);
+        transition: opacity 0.15s;
     }
-    .mode-save-btn:hover:not(:disabled) { opacity: 0.85; }
-    .mode-save-btn:disabled { opacity: 0.5; cursor: wait; }
+    .save-btn:hover:not(:disabled) { opacity: 0.85; }
+    .save-btn:disabled { opacity: 0.5; cursor: wait; }
 
-    /* ── Prompts ── */
+    .btn-outline {
+        padding: 6px 14px;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--text-secondary);
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 9999px;
+        cursor: pointer;
+        transition: all 0.15s;
+    }
+    .btn-outline:hover:not(:disabled) {
+        background: var(--surface);
+        color: var(--text);
+    }
+    .btn-outline:disabled { opacity: 0.5; cursor: default; }
+
+    .collapse-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 6px 14px;
+        border-radius: 9999px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text-muted);
+        cursor: pointer;
+        font-family: inherit;
+        transition: color 0.15s, background 0.15s;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+    .collapse-btn:hover { background: var(--bubble-strong); color: var(--text); }
+    .collapse-chevron {
+        width: 0; height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 5px solid currentColor;
+        transition: transform 0.15s;
+    }
+    .collapse-chevron.open { transform: rotate(180deg); }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       INLINE FEEDBACK
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .inline-error {
+        font-size: 12px;
+        color: var(--error, #e06c75);
+        flex: 1;
+    }
+    .inline-info {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin: 4px 0 0;
+    }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       PROMPTS — accordion list
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
     .prompts-list {
         display: flex;
         flex-direction: column;
@@ -1387,13 +1560,13 @@
         align-items: center;
         gap: 10px;
         width: 100%;
-        padding: 11px 16px;
+        padding: 12px 18px;
         background: none;
         border: none;
         cursor: pointer;
         font-family: inherit;
         text-align: left;
-        transition: background var(--transition);
+        transition: background 0.15s;
     }
     .prompt-header:hover { background: var(--bubble-strong); }
     .prompt-name {
@@ -1402,6 +1575,16 @@
         flex-direction: column;
         gap: 2px;
         color: var(--text);
+    }
+    .prompt-label {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text);
+    }
+    .prompt-key {
+        font-size: 11px;
+        font-family: var(--font-mono);
+        color: var(--text-muted);
     }
     .prompt-chars {
         font-size: 11px;
@@ -1418,10 +1601,10 @@
     }
     .prompt-chevron.open { transform: rotate(180deg); }
     .prompt-body {
-        padding: 0 16px 14px;
+        padding: 0 18px 16px;
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 10px;
     }
     .prompt-textarea {
         width: 100%;
@@ -1432,10 +1615,10 @@
         background: var(--surface);
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
-        padding: 10px 12px;
+        padding: 12px 14px;
         resize: vertical;
         outline: none;
-        transition: border-color var(--transition);
+        transition: border-color 0.15s;
         box-sizing: border-box;
     }
     .prompt-textarea:focus { border-color: var(--text-muted); }
@@ -1445,73 +1628,32 @@
         background: rgba(210, 153, 34, 0.07);
         border: 1px solid rgba(210, 153, 34, 0.18);
         border-radius: var(--radius-sm);
-        padding: 7px 12px;
-    }
-    .prompt-error {
-        font-size: 12px;
-        color: var(--error, #e06c75);
-    }
-    .prompt-label {
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--text);
-    }
-    .prompt-key {
-        font-size: 11px;
-        font-family: var(--font-mono);
-        color: var(--text-muted);
+        padding: 8px 14px;
     }
     .prompt-actions {
         display: flex;
         justify-content: flex-end;
         gap: 8px;
     }
-    .prompt-reset-btn {
-        padding: 5px 14px;
-        font-size: 12px;
-        font-weight: 500;
-        font-family: inherit;
-        color: var(--text-secondary);
-        background: transparent;
-        border: 1px solid var(--border);
-        border-radius: 9999px;
-        cursor: pointer;
-        transition: all var(--transition);
-    }
-    .prompt-reset-btn:hover:not(:disabled) {
-        background: var(--surface-hover);
-        color: var(--text);
-        border-color: var(--border-strong);
-    }
-    .prompt-reset-btn:disabled { opacity: 0.5; cursor: default; }
-    .prompt-save-btn {
-        padding: 5px 16px;
-        font-size: 12px;
-        font-weight: 600;
-        font-family: inherit;
-        color: var(--bg);
-        background: var(--text-secondary);
-        border: none;
-        border-radius: 9999px;
-        cursor: pointer;
-        transition: opacity var(--transition);
-    }
-    .prompt-save-btn:hover:not(:disabled) { opacity: 0.85; }
-    .prompt-save-btn:disabled { opacity: 0.5; cursor: wait; }
 
-    .section-desc {
-        font-size: 0.78rem;
-        color: var(--text-muted, #888);
-        margin: 2px 0 10px;
-        line-height: 1.4;
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       LOADING / STATUS
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .skeleton-card {
+        height: 56px;
+        border-radius: var(--radius);
+        background: var(--bubble);
+        animation: breathe 3s ease-in-out infinite;
     }
-
-    .setting-desc {
-        display: block;
-        font-size: 0.72rem;
-        color: var(--text-muted, #888);
-        font-weight: 400;
-        margin-top: 2px;
-        line-height: 1.3;
+    .skeleton-row {
+        height: 44px;
+        border-radius: var(--radius-sm);
+        background: var(--bubble);
+        animation: breathe 3s ease-in-out infinite;
+    }
+    .status-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
     }
 </style>

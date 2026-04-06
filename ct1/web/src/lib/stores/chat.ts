@@ -178,7 +178,7 @@ const initial: ChatState = {
     validationIssues: [],
     editing: false,
     warning: '',
-    modeOverride: 'auto',
+    modeOverride: 'chat',
     undoStack: [],
     terminalOutput: '',
     workspaceId: null,
