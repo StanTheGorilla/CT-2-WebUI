@@ -472,6 +472,9 @@ class Engine:
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
 
+        # Fallback: if model emitted only reasoning (no content), use reasoning as response
+        if not text and thinking:
+            text, thinking = thinking, ""
         return {"text": text.strip(), "thinking": thinking.strip()}
 
     @staticmethod
