@@ -73,3 +73,44 @@ async def test_content_and_thinking_both_present():
 
     assert result["text"] == "The answer is 42."
     assert result["thinking"] == "Let me think..."
+
+
+@pytest.mark.asyncio
+async def test_empty_stream_returns_empty():
+    """When no SSE content arrives, result is empty text and empty thinking."""
+    engine = _make_engine()
+    engine.client = _mock_stream()  # no lines, just [DONE]
+
+    result = await engine._call_stream([{"role": "user", "content": "hi"}], enable_thinking=True)
+
+    assert result["text"] == ""
+    assert result["thinking"] == ""
+
+
+@pytest.mark.asyncio
+async def test_content_only_no_thinking():
+    """Normal non-thinking path: fallback does not fire."""
+    engine = _make_engine()
+    engine.client = _mock_stream(_sse_line(content="Just the answer."))
+
+    result = await engine._call_stream([{"role": "user", "content": "hi"}], enable_thinking=True)
+
+    assert result["text"] == "Just the answer."
+    assert result["thinking"] == ""
+
+
+@pytest.mark.asyncio
+async def test_multi_chunk_accumulation():
+    """Multiple reasoning chunks followed by multiple content chunks accumulate correctly."""
+    engine = _make_engine()
+    engine.client = _mock_stream(
+        _sse_line(reasoning="Thinking "),
+        _sse_line(reasoning="hard..."),
+        _sse_line(content="Answer "),
+        _sse_line(content="here."),
+    )
+
+    result = await engine._call_stream([{"role": "user", "content": "hi"}], enable_thinking=True)
+
+    assert result["text"] == "Answer here."
+    assert result["thinking"] == "Thinking hard..."
