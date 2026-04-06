@@ -537,6 +537,18 @@ async def update_prompt(name: str, body: PromptUpdate):
     return {"ok": True, "name": name, "restart_required": True}
 
 
+@app.post("/api/prompts/{name}/reset")
+async def reset_prompt(name: str):
+    """Reset a prompt to its shipped default content."""
+    pm = _get_pm()
+    try:
+        content = pm.reset(name)
+    except ValueError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, "name": name, "content": content, "restart_required": True}
+
+
 @app.post("/api/model/select")
 async def select_model(body: ModelSelect):
     """Select a model file and restart the server."""

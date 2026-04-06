@@ -67,6 +67,28 @@ class PromptManager:
             raise
         self._prompts[name] = content
 
+    def get_default(self, name: str) -> str | None:
+        """Return the shipped default content for a prompt, or None if no default exists."""
+        default_file = self._dir / "defaults" / f"{name}.txt"
+        if not default_file.exists():
+            return None
+        try:
+            return default_file.read_text(encoding="utf-8")
+        except Exception as e:
+            print(f"[prompts] WARNING: failed to read default for '{name}': {e}")
+            return None
+
+    def reset(self, name: str) -> str:
+        """Reset a prompt to its shipped default. Returns the restored content.
+
+        Raises ValueError if no default exists for the given name.
+        """
+        default = self.get_default(name)
+        if default is None:
+            raise ValueError(f"No default exists for prompt '{name}'")
+        self.save(name, default)
+        return default
+
     def reload(self) -> None:
         """Re-read all *.txt files from disk."""
         self._load()

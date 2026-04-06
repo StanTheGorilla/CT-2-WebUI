@@ -210,6 +210,35 @@
     }
 
     /* ── Prompts state ── */
+    const PROMPT_LABELS: Record<string, string> = {
+        generator_text:        'Chat & Direct Answers',
+        generator_code:        'Code Generator',
+        generator_design:      'Design Generator',
+        generator_computer:    'Computer Mode',
+        generator_edit:        'Code Editor',
+        generator_discuss:     'Code Discussion',
+        generator_patch:       'Patch Editor',
+        generator_section_edit:'Section Editor',
+        code_fewshot:          'Code Examples',
+        design_fewshot:        'Design Examples',
+        design_toolkit:        'Design Toolkit',
+        complexity_brief:      'Brief Response Style',
+        complexity_moderate:   'Moderate Response Style',
+        complexity_deep:       'Detailed Response Style',
+        inline_planning_suffix:'Planning Instructions',
+        inline_verify_suffix:  'Verification Instructions',
+        refine:                'Design Refiner',
+        refine_css:            'CSS Refiner',
+        refine_targeted:       'Targeted Refiner',
+        reflection_prompt:     'Self-Reflection',
+        solo_plan:             'Task Planner',
+        spec_generator:        'Spec Generator',
+        task_plan:             'Task Planning',
+        tension_prompt:        'Design Tension',
+        brain_system:          'Brain System',
+        mind_system:           'Mind System',
+    };
+
     let prompts = $state<Record<string, string>>({});
     let promptsExpanded = $state<Record<string, boolean>>({});
     let promptEdits = $state<Record<string, string>>({});
@@ -217,6 +246,7 @@
     let promptsSaving = $state<Record<string, boolean>>({});
     let promptsSaved = $state<Record<string, boolean>>({});  // shows "restart required" after save
     let promptsSaveError = $state<Record<string, string>>({});
+    let promptsResetting = $state<Record<string, boolean>>({});
 
     async function loadPrompts() {
         try {
@@ -259,6 +289,24 @@
             promptsSaveError[name] = e.message || 'Failed to save';
         } finally {
             promptsSaving[name] = false;
+        }
+    }
+
+    async function resetPrompt(name: string) {
+        promptsResetting[name] = true;
+        promptsSaveError[name] = '';
+        try {
+            const res = await fetch(`/api/prompts/${name}/reset`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Failed to reset');
+            prompts[name] = data.content;
+            promptEdits[name] = data.content;
+            promptsDirty[name] = false;
+            promptsSaved[name] = true;
+        } catch (e: any) {
+            promptsSaveError[name] = e.message || 'Failed to reset';
+        } finally {
+            promptsResetting[name] = false;
         }
     }
 
@@ -502,7 +550,10 @@
             {#each Object.entries(prompts).sort(([a], [b]) => a.localeCompare(b)) as [name, _content]}
                 <div class="prompt-row" class:expanded={promptsExpanded[name]}>
                     <button class="prompt-header" onclick={() => togglePrompt(name)}>
-                        <span class="prompt-name">{name}</span>
+                        <span class="prompt-name">
+                            <span class="prompt-label">{PROMPT_LABELS[name] ?? name}</span>
+                            <span class="prompt-key">{name}</span>
+                        </span>
                         <span class="prompt-chars">{(promptEdits[name] ?? _content).length} chars</span>
                         <span class="prompt-chevron" class:open={promptsExpanded[name]}></span>
                     </button>
@@ -523,15 +574,21 @@
                             {#if promptsSaveError[name]}
                                 <div class="prompt-error">{promptsSaveError[name]}</div>
                             {/if}
-                            {#if promptsDirty[name] || promptsSaveError[name]}
-                                <div class="prompt-actions">
+                            <div class="prompt-actions">
+                                <button
+                                    class="prompt-reset-btn"
+                                    onclick={() => resetPrompt(name)}
+                                    disabled={promptsResetting[name] || promptsSaving[name]}
+                                    title="Restore original default"
+                                >{promptsResetting[name] ? 'Resetting…' : 'Reset to default'}</button>
+                                {#if promptsDirty[name] || promptsSaveError[name]}
                                     <button
                                         class="prompt-save-btn"
                                         onclick={() => savePrompt(name)}
                                         disabled={promptsSaving[name]}
                                     >{promptsSaving[name] ? 'Saving…' : 'Save'}</button>
-                                </div>
-                            {/if}
+                                {/if}
+                            </div>
                         </div>
                     {/if}
                 </div>
@@ -1341,8 +1398,9 @@
     .prompt-header:hover { background: var(--bubble-strong); }
     .prompt-name {
         flex: 1;
-        font-size: 13px;
-        font-family: var(--font-mono);
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
         color: var(--text);
     }
     .prompt-chars {
@@ -1393,10 +1451,39 @@
         font-size: 12px;
         color: var(--error, #e06c75);
     }
+    .prompt-label {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text);
+    }
+    .prompt-key {
+        font-size: 11px;
+        font-family: var(--font-mono);
+        color: var(--text-muted);
+    }
     .prompt-actions {
         display: flex;
         justify-content: flex-end;
+        gap: 8px;
     }
+    .prompt-reset-btn {
+        padding: 5px 14px;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--text-secondary);
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 9999px;
+        cursor: pointer;
+        transition: all var(--transition);
+    }
+    .prompt-reset-btn:hover:not(:disabled) {
+        background: var(--surface-hover);
+        color: var(--text);
+        border-color: var(--border-strong);
+    }
+    .prompt-reset-btn:disabled { opacity: 0.5; cursor: default; }
     .prompt-save-btn {
         padding: 5px 16px;
         font-size: 12px;
