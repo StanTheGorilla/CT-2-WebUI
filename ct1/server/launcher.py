@@ -494,9 +494,15 @@ async def _launch_one(s: dict) -> subprocess.Popen:
     )
     _drain_stderr(proc, label=f"llama:{port}")
     base_url = f"http://localhost:{port}"
-    alive = await wait_for_server(base_url, timeout=90)
+    alive = await wait_for_server(base_url, timeout=90, proc=proc)
     if not alive:
+        exit_code = proc.poll()
         proc.terminate()
+        if exit_code is not None:
+            raise RuntimeError(
+                f"llama-server on port {port} exited immediately (code {exit_code}) — "
+                "model may be incompatible or corrupted"
+            )
         raise RuntimeError(f"llama-server on port {port} failed to start within 90 seconds")
     print(f"[launcher] Server ready at {base_url}")
     return proc

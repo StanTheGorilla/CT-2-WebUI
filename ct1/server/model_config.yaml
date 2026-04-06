@@ -1,7 +1,7 @@
 executable: auto
 backend: vulkan
 models_dir: models
-active_model: null
+active_model: ""
 port: 8080
 n_gpu_layers: 99
 parallel_slots: 1

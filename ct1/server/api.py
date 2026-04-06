@@ -551,7 +551,11 @@ async def reset_prompt(name: str):
 
 @app.post("/api/model/select")
 async def select_model(body: ModelSelect):
-    """Select a model file and restart the server."""
+    """Select a model file and restart the server.
+
+    On failure: reverts config to the previous model and attempts to restart
+    with it, so the server is never left in a permanently broken state.
+    """
     global _raw_cfg, _cfg, _orch, _server_procs, _swapping, _active_think_tasks
 
     # Validate model exists
@@ -560,6 +564,10 @@ async def select_model(body: ModelSelect):
     model_path = models_dir / body.model
     if not model_path.exists():
         return {"error": f"Model file not found: {body.model}"}
+
+    # Save previous config for rollback
+    prev_model = _raw_cfg.get("active_model")
+    prev_context = _raw_cfg.get("context_size")
 
     _swapping = True
     try:
@@ -588,6 +596,7 @@ async def select_model(body: ModelSelect):
             _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
                                   context_size_override=body.context_size)
         except Exception as e:
+            _rollback_model_config(prev_model, prev_context)
             return {"error": str(e)}
 
         # Teardown old orchestrator
@@ -603,7 +612,12 @@ async def select_model(body: ModelSelect):
             _server_procs = await start_server(str(_CONFIG_PATH),
                                                context_size_override=body.context_size)
         except Exception as e:
-            return {"error": f"Failed to start server: {e}"}
+            # Model failed to load — revert config and try to restart with previous model
+            err_msg = str(e)
+            print(f"[api] Model '{body.model}' failed to load: {err_msg}")
+            reverted = await _rollback_and_restart(prev_model, prev_context)
+            suffix = f" Reverted to {prev_model}." if reverted else " No working model available — select a different model."
+            return {"error": f"Model failed to load: {err_msg}.{suffix}"}
 
         # New orchestrator
         _orch = Orchestrator(str(_CONFIG_PATH),
@@ -618,6 +632,39 @@ async def select_model(body: ModelSelect):
         }
     finally:
         _swapping = False
+
+
+def _rollback_model_config(prev_model, prev_context):
+    """Revert model_config.yaml to the previous model."""
+    global _raw_cfg
+    if prev_model:
+        _raw_cfg["active_model"] = prev_model
+    if prev_context is not None:
+        _raw_cfg["context_size"] = prev_context
+    _CONFIG_PATH.write_text(
+        yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    print(f"[api] Config reverted to model: {prev_model}")
+
+
+async def _rollback_and_restart(prev_model, prev_context) -> bool:
+    """Revert config and try to restart llama-server with the previous model.
+    Returns True if recovery succeeded."""
+    global _server_procs, _orch, _cfg
+    _rollback_model_config(prev_model, prev_context)
+    if not prev_model:
+        return False
+    try:
+        _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH))
+        _server_procs = await start_server(str(_CONFIG_PATH))
+        _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
+        await _orch.reset_engine_client()
+        print(f"[api] Recovery successful — running on {prev_model}")
+        return True
+    except Exception as re:
+        print(f"[api] Recovery with previous model also failed: {re}")
+        return False
 
 
 class BackendSelect(BaseModel):

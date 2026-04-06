@@ -13,10 +13,17 @@ async def check_server_health(base_url: str = "http://localhost:8080") -> dict:
     except Exception as e:
         return {"alive": False, "url": base_url, "error": str(e)}
 
-async def wait_for_server(base_url: str = "http://localhost:8080", timeout: int = 60) -> bool:
-    """Poll until server is alive or timeout expires."""
+async def wait_for_server(base_url: str = "http://localhost:8080", timeout: int = 60,
+                          proc=None) -> bool:
+    """Poll until server is alive or timeout expires.
+
+    If proc is provided (subprocess.Popen), bail out immediately when the
+    process exits — no point polling a dead server for 90 seconds.
+    """
     start = time.time()
     while time.time() - start < timeout:
+        if proc is not None and proc.poll() is not None:
+            return False  # Process exited (e.g. model load failure)
         result = await check_server_health(base_url)
         if result["alive"]:
             return True
