@@ -459,7 +459,7 @@
                             <div class="override-row">
                                 <span class="override-key">
                                     {label}
-                                    <span class="setting-desc">{desc}</span>
+                                    <span class="setting-desc">{key} — {desc}</span>
                                 </span>
                                 <div class="slider-container">
                                     <input type="range"
