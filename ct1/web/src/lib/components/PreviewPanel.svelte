@@ -62,11 +62,13 @@
 <div class="preview">
     <div class="toolbar">
         <div class="tab-group">
+            {#if outputType === 'html_page'}
             <button
                 class="tab"
                 class:active={activeTab === 'preview'}
                 onclick={() => activeTab = 'preview'}
             >Preview</button>
+            {/if}
             <button
                 class="tab"
                 class:active={activeTab === 'code'}

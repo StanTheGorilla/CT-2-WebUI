@@ -1,7 +1,7 @@
 executable: auto
 backend: vulkan
 models_dir: models
-active_model: Qwen3.5-4B.Q4_K_S.gguf
+active_model: null
 port: 8080
 n_gpu_layers: 99
 parallel_slots: 1

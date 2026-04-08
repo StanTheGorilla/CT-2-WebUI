@@ -1,6 +1,7 @@
 <script lang="ts">
-    let { workspaceId, onClose, externalOutput = '' }:
-        { workspaceId: string; onClose: () => void; externalOutput?: string } = $props();
+    let { workspaceId, onClose, externalOutput = '', pendingCommands = [], onCommandsConsumed }:
+        { workspaceId: string; onClose: () => void; externalOutput?: string;
+          pendingCommands?: string[]; onCommandsConsumed?: () => void } = $props();
 
     let output = $state('');
     let inputText = $state('');
@@ -10,6 +11,7 @@
     let inputEl: HTMLInputElement;
     let lastExternalLen = 0;
     let cmdCount = $state(0);
+    let lastPendingLen = 0;
 
     $effect(() => {
         if (workspaceId) {
@@ -21,12 +23,30 @@
         };
     });
 
-    // Append new external output (from AI command execution)
+    // Append new external output (from AI auto-run subprocess)
     $effect(() => {
         if (externalOutput && externalOutput.length > lastExternalLen) {
             output += externalOutput.slice(lastExternalLen);
             lastExternalLen = externalOutput.length;
             scrollBottom();
+        }
+    });
+
+    // Run AI-requested commands through the interactive shell
+    $effect(() => {
+        if (pendingCommands.length === 0) {
+            lastPendingLen = 0;  // queue was cleared; reset so next batch works
+        } else if (pendingCommands.length > lastPendingLen && ws && connected) {
+            for (let i = lastPendingLen; i < pendingCommands.length; i++) {
+                const cmd = pendingCommands[i].trim();
+                if (!cmd) continue;
+                output += `\n$ ${cmd}\n`;
+                ws.send(JSON.stringify({ type: 'input', text: cmd + '\n' }));
+                cmdCount++;
+            }
+            lastPendingLen = pendingCommands.length;
+            scrollBottom();
+            onCommandsConsumed?.();  // tell store to clear so next batch gets a fresh start
         }
     });
 

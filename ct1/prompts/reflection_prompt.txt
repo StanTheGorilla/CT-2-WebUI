@@ -1,20 +1,18 @@
-You just completed a code generation task. Write your reflection as JSON.
+You just completed a task. Write a short reflection in JSON.
 
 Task: {goal}
 Complexity: {complexity}
-Your final output: {outcome}
+Output summary: {outcome}
 
-Reflect on the quality of your work:
-- Did the output fully satisfy the request?
-- Were there any issues with the approach?
-- One concrete lesson for future tasks
+Reply with ONLY a valid JSON object — no markdown, no explanation, no extra text.
+Use lowercase true and false. Use double quotes for strings.
 
-Output ONLY a JSON object with this exact structure (no extra text):
-{
-  "goal": "<copy the task>",
-  "complexity": "<brief|moderate|deep>",
-  "outcome": "<one sentence summary of what you produced>",
-  "lesson": "<one specific thing you learned>",
-  "complexity_correct": <true or false>,
-  "self_score": <0.0 to 1.0>
-}
+Example format:
+{"goal":"...","complexity":"moderate","outcome":"...","lesson":"...","self_score":0.8}
+
+Fields:
+- goal: copy the task description exactly
+- complexity: one of "brief", "moderate", or "deep"
+- outcome: one sentence describing what you produced
+- lesson: one specific actionable thing to remember for future similar tasks
+- self_score: number from 0.0 to 1.0 rating how well you did

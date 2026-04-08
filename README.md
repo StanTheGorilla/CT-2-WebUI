@@ -34,7 +34,6 @@ CT-2 wraps a single local GGUF model in a multi-phase pipeline: deterministic ro
 - **llama.cpp server** (`llama-server`) — downloaded automatically on first start
 - **A GGUF model file** — any works, but CT-2 is tested with:
   - [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF) — best balance of speed and quality
-  - [Qwen3-1.7B](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF) — fast, low VRAM
   - [NVIDIA Nemotron-Mini-4B](https://huggingface.co/nvidia/Nemotron-Mini-4B-Instruct-GGUF) — strong reasoning
 
 > **Note:** Models without `<think>` support work but produce less consistent output. Models smaller than ~1B parameters are unreliable.

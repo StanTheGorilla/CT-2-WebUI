@@ -39,6 +39,22 @@ _EXT_TO_LANG = {
     ".c": "c", ".go": "go", ".rs": "rust", ".json": "json", ".sh": "bash",
 }
 
+# Maps detect_output_type() strings → canonical fence/lang name used in prompts & metadata
+_OUTPUT_TYPE_TO_LANG = {
+    "javascript": "javascript", "typescript": "typescript",
+    "python_script": "python", "api": "python",
+    "html_page": "html", "cpp": "cpp", "go": "go",
+    "rust": "rust", "bash": "bash", "css": "css", "json": "json",
+}
+
+# Human-readable label per fence name (for edit prompts)
+_LANG_TO_LABEL = {
+    "javascript": "JavaScript", "typescript": "TypeScript",
+    "python": "Python", "html": "HTML", "cpp": "C++",
+    "go": "Go", "rust": "Rust", "bash": "Bash/Shell",
+    "css": "CSS", "json": "JSON",
+}
+
 
 def _detect_lang_from_response(text: str) -> str:
     """Extract primary language from first fenced code block tag."""
@@ -92,29 +108,6 @@ def _strip_file_context(text: str) -> str:
 # Used by _detect_conversation_mode() to distinguish edits from questions
 # when there's existing code in the conversation.
 
-_QUESTION_STARTS = (
-    "what is", "what are", "what does", "what was", "what do",
-    "explain", "describe", "tell me", "can you explain",
-    "could you explain", "how does", "how do", "how is",
-    "how can i", "how would", "how to",
-    "why is", "why does", "why do", "why are",
-    "who is", "who are", "where is", "where are",
-    "when is", "when does", "what's", "where's",
-    "is there", "is this", "is it", "are there", "are these",
-    "does this", "does it", "do they", "do these",
-    "which", "summarize", "summary", "show me",
-)
-
-
-def _is_question(msg: str) -> bool:
-    """Detect if a message is purely asking for information.
-    Used by _detect_conversation_mode() — NOT for routing."""
-    lower = msg.lower().strip()
-    if lower.startswith(_QUESTION_STARTS):
-        return True
-    if lower.endswith("?"):
-        return True
-    return False
 
 
 _EDIT_INTENT = {
@@ -127,6 +120,7 @@ _EDIT_INTENT = {
     "darker", "lighter", "brighter", "bolder",
     "add a", "add the", "put a", "put the", "insert",
     "delete", "drop", "hide", "show",
+    "rewrite", "refactor", "optimise", "optimize", "improve", "extend",
     # Implicit edit: describing problems / desired state
     "should be", "needs to be", "supposed to",
     "is off", "is wrong", "is broken", "is missing",
@@ -296,19 +290,14 @@ class Orchestrator:
         if not has_code:
             return "new", ""
 
-        # Code exists — check user intent
+        # Code exists — check for clear edit intent via keywords (fast path).
+        # "Is this a question?" is handled separately via LLM in think().
         gl = goal_text.lower().strip()
-
-        # Question detection (check first — questions take priority)
-        if _is_question(gl):
-            return "question", previous_code
-
-        # Edit intent detection
         if any(kw in gl for kw in _EDIT_INTENT):
             return "edit", previous_code
 
-        # Ambiguous — default to new (normal routing)
-        return "new", ""
+        # Ambiguous — caller will use LLM to distinguish question vs. new request
+        return "new", previous_code
 
     @staticmethod
     def _parse_patches(text: str) -> list[tuple[str, str]]:
@@ -630,8 +619,22 @@ class Orchestrator:
         else:
             code_for_prompt = previous_code
 
+        # Infer previous file's language so the model declares its output fence.
+        # Prevents accidental type changes (e.g. JS → TS) across edits.
+        previous_lang = _OUTPUT_TYPE_TO_LANG.get(detect_output_type(previous_code)) if previous_code else None
+        if previous_lang and previous_lang != "html":
+            label = _LANG_TO_LABEL.get(previous_lang, previous_lang.upper())
+            prompt = (
+                f"File language: {label}\n"
+                f"Wrap your entire output in ```{previous_lang} ... ``` fences.\n\n"
+                f"Modify this code:\n{code_for_prompt}\n\n"
+                f"Change requested: {goal}"
+            )
+        else:
+            prompt = f"Modify this code:\n{code_for_prompt}\n\nChange requested: {goal}"
+
         result = await self.engine.generate(
-            f"Modify this code:\n{code_for_prompt}\n\nChange requested: {goal}",
+            prompt,
             route,
             specialist_data=specialist_data,
             plan=None,
@@ -894,6 +897,8 @@ class Orchestrator:
             "plan": None,
             "reflection": None,  # Reflection handled by caller
             "spec": spec,
+            "detected_lang": "html",
+            "files": [],
         }
 
     async def _design_edit_pipeline(
@@ -1016,6 +1021,8 @@ class Orchestrator:
             "plan": None,
             "reflection": None,
             "spec": spec,
+            "detected_lang": "html",
+            "files": [],
         }
 
     async def _self_review(self, code: str, goal: str, route: str,
@@ -1078,7 +1085,8 @@ class Orchestrator:
             if on_event:
                 on_event(event, **data)
 
-        # Detect conversation mode (edit / question / new)
+        # Detect conversation mode (edit / new) via fast keyword check.
+        # "question" detection is now done by LLM below — no keywords.
         mode, previous_code = self._detect_conversation_mode(user_message, conversation)
         is_edit = mode == "edit"
 
@@ -1088,14 +1096,26 @@ class Orchestrator:
         if mode == "new" and conversation:
             conversation = self._slim_conversation(conversation)
 
-        # ── Phase 1: ROUTE (deterministic — _deterministic_route) ──
+        # ── Phase 1: ROUTE ────────────────────────────────────────────
         emit("routing")
         forced_route = self._MODE_ROUTE_MAP.get(mode_override or "")
+
+        # LLM-based question detection: when there's existing code and the
+        # message isn't a clear edit, ask the model if it's an info request.
+        # This works in any language — no keyword dependency.
+        is_question = False
+        if previous_code and not is_edit:
+            is_question = await self._classify_is_question(user_message)
+            if is_question:
+                mode = "question"
+
         if forced_route:
             # User explicitly selected a mode — skip AI routing
             if is_edit:
                 route = forced_route if forced_route != "ROUTE_DIRECT" else "ROUTE_CODE"
-            elif mode == "question" and forced_route == "ROUTE_DIRECT":
+            elif is_question and forced_route != "ROUTE_DESIGN":
+                # Pure info question in code mode → text answer, not a code file.
+                # Design mode: let it fall through — "add a section?" is still a design task.
                 route = "ROUTE_DIRECT"
             else:
                 route = forced_route
@@ -1104,7 +1124,7 @@ class Orchestrator:
             route = "ROUTE_DIRECT"
         elif is_edit:
             route = "ROUTE_CODE"
-        elif mode == "question":
+        elif is_question:
             route = "ROUTE_DIRECT"
         else:
             route = self._deterministic_route(user_message)
@@ -1121,7 +1141,7 @@ class Orchestrator:
             def on_token(token, kind):
                 emit("token", text=token, kind=kind)
 
-            if mode == "question":
+            if is_question:
                 # Questions about design → fall through to normal ROUTE_DIRECT flow
                 pass
             elif is_edit:
@@ -1132,12 +1152,7 @@ class Orchestrator:
                 )
                 # Run reflection
                 if result.get("reflection") is None:
-                    reflection = await self.engine.reflect(
-                        goal_text, "moderate", result["response"],
-                        conversation=conversation,
-                    )
-                    self.journal.write(reflection)
-                    result["reflection"] = reflection
+                    result["reflection"] = await self._write_reflection(goal_text, result["response"])
                 return result
             else:
                 result = await self._design_pipeline(
@@ -1148,12 +1163,7 @@ class Orchestrator:
                 )
                 # Run reflection
                 if result.get("reflection") is None:
-                    reflection = await self.engine.reflect(
-                        goal_text, "moderate", result["response"],
-                        conversation=conversation,
-                    )
-                    self.journal.write(reflection)
-                    result["reflection"] = reflection
+                    result["reflection"] = await self._write_reflection(goal_text, result["response"])
                 return result
 
         # ── Phase 2: PLAN (tier-aware) ──
@@ -1236,7 +1246,7 @@ class Orchestrator:
                 plan=plan,
                 conversation=conversation,
                 on_token=on_token,
-                code_context=previous_code if mode == "question" else None,
+                code_context=previous_code if is_question else None,
                 task_overrides=task_ovr,
                 task_list=task_list if task_list else None,
             )
@@ -1251,7 +1261,7 @@ class Orchestrator:
         # ── Phase 4.1: CHECKLIST (completeness verification) ────────
         checklist = []
         missing_items = []
-        if not is_edit and mode != "question":
+        if not is_edit and not is_question:
             clean_for_check = strip_think_tags(draft)
             clean_for_check = extract_code(clean_for_check)
 
@@ -1260,7 +1270,6 @@ class Orchestrator:
                 lower = clean_for_check.lower()
                 for task in task_list:
                     # Extract key terms (5+ chars) from the task
-                    import re
                     words = [w for w in re.findall(r'[a-zA-Z]{5,}', task.lower())
                              if w not in {"should", "create", "build", "every",
                                           "include", "using", "about", "their",
@@ -1406,7 +1415,7 @@ class Orchestrator:
                  "critical_issues": [], "fix_instructions": ""})
 
         # ── Phase 5.5: SELF-REVIEW (large tier only) ──
-        if self.tier == "large" and is_code and not is_edit and mode != "question":
+        if self.tier == "large" and is_code and not is_edit and not is_question:
             emit("validating")
             review = await self._self_review(
                 final_response, user_message, route, task_ovr
@@ -1432,6 +1441,25 @@ class Orchestrator:
                     print(f"[orch] self-review fix applied")
 
         # ── Phase 6: FORMAT ──────────────────────────────────────────
+        # Capture fence language from raw draft BEFORE Phase 6 strips fences.
+        # This is the authoritative source for new code. Edit prompts tell the model
+        # to output bare code (no fences), so _draft_fence_lang will be None for edits.
+        _draft_fence_lang = None
+        if route == "ROUTE_CODE":
+            _raw_for_lang = strip_think_tags(draft)
+            _draft_fence_lang = _detect_lang_from_response(_raw_for_lang)
+            if _draft_fence_lang == "text":
+                _draft_fence_lang = None
+
+        # For ROUTE_CODE: capture explanation text the model wrote before the code fence.
+        # Phase 6 clean_response() will strip it — grab it now.
+        explanation_text = ""
+        if route == "ROUTE_CODE" and not is_edit:
+            _stripped = strip_think_tags(final_response)
+            _fence = re.search(r'```', _stripped)
+            if _fence and _fence.start() > 20:
+                explanation_text = _stripped[:_fence.start()].strip()
+
         if route == "ROUTE_COMPUTER":
             # Computer mode: only strip thinking tags — _parse_multi_file
             # handles code extraction per-file (extract_code here would
@@ -1501,11 +1529,7 @@ class Orchestrator:
         # ── Reflection (code routes only — skip for direct text) ─────
         if is_code and route != "ROUTE_COMPUTER":
             complexity = plan.get("complexity", "moderate") if plan else "moderate"
-            reflection = await self.engine.reflect(
-                goal_text, complexity, final_response,
-                conversation=conversation,
-            )
-            self.journal.write(reflection)
+            reflection = await self._write_reflection(goal_text, final_response, complexity)
 
             # Auto-cache high-scoring outputs
             if (self.component_cache
@@ -1532,7 +1556,21 @@ class Orchestrator:
             _detected_lang = "html"
             _files: list[dict] = []
         elif route == "ROUTE_CODE":
-            _detected_lang = _detect_lang_from_response(final_response)
+            _resolved_type = plan.get("output_type", "other") if plan else "other"
+            # Priority: 1) fence tag in raw draft (before Phase 6 stripped it)
+            #           2) plan output_type (set from fence in Phase 5 for new code)
+            #           3) fence scan on draft again (redundant but cheap)
+            #           4) original file language for edits (preserve type across edits)
+            #           5) "javascript" fallback (ROUTE_CODE is always code, never text)
+            _detected_lang = (
+                _draft_fence_lang
+                or _OUTPUT_TYPE_TO_LANG.get(_resolved_type)
+                or _detect_lang_from_response(draft)
+            )
+            if is_edit and previous_code and not _detected_lang:
+                _detected_lang = _OUTPUT_TYPE_TO_LANG.get(detect_output_type(previous_code))
+            if not _detected_lang:
+                _detected_lang = "javascript"  # ROUTE_CODE always produces code, never plain text
             _files = []
         elif route == "ROUTE_COMPUTER":
             _detected_lang = "multi"
@@ -1564,7 +1602,41 @@ class Orchestrator:
             "tier": self.tier,
             "detected_lang": _detected_lang,
             "files": _files,
+            "explanation": explanation_text,
         }
+
+    async def _write_reflection(self, goal_text: str, response: str, complexity: str = "moderate") -> dict:
+        """Run reflection, write to journal, and refresh lessons. Returns the reflection dict."""
+        reflection = await self.engine.reflect(goal_text, complexity, response)
+        self.journal.write(reflection)
+        self.engine.lessons = self.journal_reader.get_recent_lessons(10)
+        return reflection
+
+    async def _classify_is_question(self, message: str) -> bool:
+        """Use the LLM to decide if a message is asking for information vs. requesting action.
+
+        Works in any language — no keyword dependency. Returns True if the message
+        is a pure information request (explain, describe, summarize, etc.).
+        Defaults to False (action) on any error so generation is never blocked."""
+        try:
+            prompt = (
+                f'Message: "{message}"\n\n'
+                "Is the user asking for INFORMATION (explanation, description, summary) "
+                "or requesting an ACTION (write, fix, add, change, create, extend)?\n"
+                "Reply with one word only: information or action"
+            )
+            result = await self.engine._call(
+                [{"role": "system", "content": "You classify user intent. Reply with one word only: information or action."},
+                 {"role": "user", "content": prompt}],
+                max_tokens=5,
+                temperature=0.0,
+                enable_thinking=False,
+                conversation=None,
+            )
+            text = (result if isinstance(result, str) else result.get("text", "")).strip().lower()
+            return "information" in text
+        except Exception:
+            return False  # default: treat as action, never silently break generation
 
     async def think(self, goal, on_event=None,
                     conversation: list[dict] = None,

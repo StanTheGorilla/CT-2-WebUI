@@ -29,6 +29,33 @@
     let activeBackend = $state<'vulkan' | 'cuda'>('vulkan');
     let switchingBackend = $state(false);
     let backendError = $state('');
+
+    /* ── llama-server update ── */
+    let updateStatus = $state<Record<string, {status: string; message: string}>>({});
+    let updatePollers = $state<Record<string, ReturnType<typeof setInterval>>>({});
+
+    async function startUpdate(backend: 'vulkan' | 'cuda') {
+        updateStatus[backend] = { status: 'downloading', message: 'Starting...' };
+        try {
+            await fetch(`/api/llama/update/${backend}`, { method: 'POST' });
+        } catch {
+            updateStatus[backend] = { status: 'error', message: 'Request failed' };
+            return;
+        }
+        // Poll until done or error
+        if (updatePollers[backend]) clearInterval(updatePollers[backend]);
+        updatePollers[backend] = setInterval(async () => {
+            try {
+                const res = await fetch(`/api/llama/update/${backend}/status`);
+                const data = await res.json();
+                updateStatus[backend] = data;
+                if (data.status === 'done' || data.status === 'error') {
+                    clearInterval(updatePollers[backend]);
+                    delete updatePollers[backend];
+                }
+            } catch { /* ignore */ }
+        }, 1500);
+    }
     const isMac = $derived(
         typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac')
     );
@@ -328,8 +355,42 @@
 
     let promptsOpen = $state(false);
 
+    /* ── Workspace management ── */
+    interface Workspace { id: string; name: string; created_at: string; file_count: number; }
+    let workspaces = $state<Workspace[]>([]);
+    let deletingWs = $state<string | null>(null);
+
+    async function loadWorkspaces() {
+        try {
+            const res = await fetch('/api/workspaces');
+            workspaces = await res.json();
+        } catch {}
+    }
+
+    async function deleteWorkspace(id: string) {
+        deletingWs = id;
+        try {
+            await fetch(`/api/workspaces/${id}`, { method: 'DELETE' });
+            workspaces = workspaces.filter(w => w.id !== id);
+            // If deleted workspace was the active one, clear from localStorage
+            try {
+                if (localStorage.getItem('ct2_workspace_id') === id) {
+                    localStorage.removeItem('ct2_workspace_id');
+                }
+            } catch {}
+        } finally {
+            deletingWs = null;
+        }
+    }
+
+    function formatWsDate(iso: string): string {
+        if (!iso) return '';
+        try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+        catch { return iso; }
+    }
+
     onMount(async () => {
-        await Promise.all([loadData(), loadModes(), loadPrompts()]);
+        await Promise.all([loadData(), loadModes(), loadPrompts(), loadWorkspaces()]);
     });
 </script>
 
@@ -477,6 +538,56 @@
                     {/if}
                     {#if switchingBackend}
                         <p class="inline-info">Switching...</p>
+                    {/if}
+                </div>
+
+                <div class="card-item">
+                    <div class="card-item-info">
+                        <span class="card-item-name">Update llama-server</span>
+                        <span class="card-item-hint">Download the latest llama.cpp release for each backend. The new version is used next time you restart.</span>
+                    </div>
+                    <div class="backend-picker">
+                        <button
+                            class="backend-btn update-btn"
+                            onclick={() => startUpdate('vulkan')}
+                            disabled={updateStatus['vulkan']?.status === 'downloading'}
+                        >
+                            {#if updateStatus['vulkan']?.status === 'downloading'}
+                                Updating Vulkan...
+                            {:else if updateStatus['vulkan']?.status === 'done'}
+                                ✓ Vulkan updated
+                            {:else}
+                                Update Vulkan (AMD)
+                            {/if}
+                        </button>
+                        <button
+                            class="backend-btn update-btn"
+                            onclick={() => startUpdate('cuda')}
+                            disabled={updateStatus['cuda']?.status === 'downloading'}
+                        >
+                            {#if updateStatus['cuda']?.status === 'downloading'}
+                                Updating CUDA...
+                            {:else if updateStatus['cuda']?.status === 'done'}
+                                ✓ CUDA updated
+                            {:else}
+                                Update CUDA (NVIDIA)
+                            {/if}
+                        </button>
+                    </div>
+                    {#if updateStatus['vulkan']?.message || updateStatus['cuda']?.message}
+                        <p class="inline-info update-msg">
+                            {updateStatus['vulkan']?.message || updateStatus['cuda']?.message}
+                        </p>
+                    {/if}
+                    {#if updateStatus['vulkan']?.status === 'done' || updateStatus['cuda']?.status === 'done'}
+                        <button onclick={restartModel} class="restart-btn update-restart-btn" disabled={switching}>
+                            {switching ? 'Restarting...' : 'Restart Server Now'}
+                        </button>
+                    {/if}
+                    {#if updateStatus['vulkan']?.status === 'error' || updateStatus['cuda']?.status === 'error'}
+                        <p class="inline-error">
+                            {updateStatus['vulkan']?.status === 'error' ? updateStatus['vulkan'].message : updateStatus['cuda']?.message}
+                        </p>
                     {/if}
                 </div>
             {/if}
@@ -773,7 +884,39 @@
     {/if}
 
     <!-- ═══════════════════════════════════════════════
-         SECTION 6 — Server Status
+         SECTION 6 — Computer Mode Workspaces
+         ═══════════════════════════════════════════════ -->
+    <section class="section">
+        <div class="section-head">
+            <div class="section-head-text">
+                <h2 class="section-title">Workspaces</h2>
+                <p class="section-desc">Projects created in Computer mode. Delete old ones to free space.</p>
+            </div>
+        </div>
+        {#if workspaces.length === 0}
+            <p class="ws-empty">No workspaces yet — they are created automatically when you use Computer mode.</p>
+        {:else}
+            <div class="ws-list">
+                {#each workspaces as ws (ws.id)}
+                    <div class="ws-row">
+                        <div class="ws-info">
+                            <span class="ws-name">{ws.name || ws.id}</span>
+                            <span class="ws-meta">{ws.file_count} file{ws.file_count !== 1 ? 's' : ''}{ws.created_at ? ' · ' + formatWsDate(ws.created_at) : ''}</span>
+                        </div>
+                        <button
+                            class="ws-delete"
+                            onclick={() => deleteWorkspace(ws.id)}
+                            disabled={deletingWs === ws.id}
+                            title="Delete workspace"
+                        >{deletingWs === ws.id ? 'Deleting…' : 'Delete'}</button>
+                    </div>
+                {/each}
+            </div>
+        {/if}
+    </section>
+
+    <!-- ═══════════════════════════════════════════════
+         SECTION 7 — Server Status
          ═══════════════════════════════════════════════ -->
     <section class="section section-last">
         <div class="section-head">
@@ -1405,6 +1548,9 @@
         font-weight: 500;
         transition: all 0.15s;
     }
+    .update-btn { color: var(--text-secondary); }
+    .update-btn:disabled { cursor: wait; opacity: 0.6; }
+    .update-msg { font-size: 11px; color: var(--text-muted); margin-top: 4px; font-family: var(--font-mono, monospace); }
     .backend-btn.active {
         color: var(--text);
         border-color: var(--text-secondary);
@@ -1441,6 +1587,7 @@
     }
     .restart-btn:hover:not(:disabled) { opacity: 0.85; }
     .restart-btn:disabled { opacity: 0.5; cursor: wait; }
+    .update-restart-btn { margin-top: 10px; width: 100%; }
 
     /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
        BUTTONS — shared styles
@@ -1635,6 +1782,46 @@
         justify-content: flex-end;
         gap: 8px;
     }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       WORKSPACES
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .ws-empty {
+        font-size: 13px;
+        color: var(--text-muted);
+        padding: 8px 0;
+    }
+    .ws-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .ws-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        background: var(--accent-subtle);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+    }
+    .ws-info { display: flex; flex-direction: column; gap: 2px; }
+    .ws-name { font-size: 13px; font-weight: 500; color: var(--text); font-family: var(--font-mono); }
+    .ws-meta { font-size: 11px; color: var(--text-muted); }
+    .ws-delete {
+        font-size: 12px;
+        font-weight: 500;
+        padding: 5px 14px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-pill);
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: all var(--transition);
+        font-family: var(--font-body);
+    }
+    .ws-delete:hover { background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.4); color: #ef4444; }
+    .ws-delete:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
        LOADING / STATUS

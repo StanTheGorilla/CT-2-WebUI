@@ -205,6 +205,54 @@ async def get_status():
     return {"model": model}
 
 
+## ── llama-server update ──────────────────────────────────────────────────────
+
+_update_state: dict[str, dict] = {}  # backend → {status, message, log}
+
+def _run_update(backend: str, project_root):
+    from pathlib import Path
+    from ct1.server.downloader import download_llama_server
+    from ct1.server.launcher import stop_server
+    _update_state[backend] = {"status": "downloading", "message": "Starting download...", "log": []}
+    log = _update_state[backend]["log"]
+    def _cb(msg: str):
+        log.append(msg)
+        _update_state[backend]["message"] = msg
+    try:
+        # Stop the running server so Windows releases the DLL file locks
+        if _server_procs:
+            _cb("[update] Stopping llama-server to release file locks...")
+            stop_server(_server_procs)
+
+        download_llama_server(
+            Path(project_root), backends=[backend], force=True, progress_cb=_cb
+        )
+        _update_state[backend]["status"] = "done"
+        _update_state[backend]["message"] = f"{backend.upper()} updated successfully. Reload a model in Settings to restart."
+    except Exception as e:
+        _update_state[backend]["status"] = "error"
+        _update_state[backend]["message"] = str(e)
+
+
+@app.post("/api/llama/update/{backend}")
+async def start_llama_update(backend: str):
+    if backend not in ("vulkan", "cuda"):
+        from fastapi import HTTPException
+        raise HTTPException(400, "backend must be 'vulkan' or 'cuda'")
+    if _update_state.get(backend, {}).get("status") == "downloading":
+        return {"error": "Update already in progress"}
+    import threading
+    project_root = Path(__file__).parent.parent.parent
+    t = threading.Thread(target=_run_update, args=(backend, project_root), daemon=True)
+    t.start()
+    return {"started": True, "backend": backend}
+
+
+@app.get("/api/llama/update/{backend}/status")
+async def get_llama_update_status(backend: str):
+    return _update_state.get(backend, {"status": "idle", "message": "", "log": []})
+
+
 @app.get("/api/journal")
 async def get_journal(limit: int = 50):
     journal_path = _cfg.get("journal", {}).get("path", "ct1/data/journals")
@@ -943,6 +991,29 @@ async def ws_think(websocket: WebSocket):
                     skip_refinement = msg.get("skip_refinement", False)
                     atlas_settings = msg.get("atlas")
                     actual_goal = goal
+                    ws_id = msg.get("workspace_id")
+
+                    # ── Computer mode: inject existing workspace files into context ──
+                    if mode_override == "computer" and ws_id and _workspace:
+                        try:
+                            tree = _workspace.get_file_tree(ws_id)
+                            existing = [f["path"] for f in tree if not f["is_dir"]]
+                            if existing:
+                                file_list = "\n".join(f"  - {p}" for p in existing[:60])
+                                ctx_prefix = (
+                                    f"[EXISTING WORKSPACE FILES]\n{file_list}\n\n"
+                                    "Only output files that need to be created or changed. "
+                                    "Files not listed in your output remain unchanged.\n\n"
+                                )
+                                if isinstance(actual_goal, str):
+                                    actual_goal = ctx_prefix + actual_goal
+                                elif isinstance(actual_goal, list):
+                                    for part in actual_goal:
+                                        if part.get("type") == "text":
+                                            part["text"] = ctx_prefix + part["text"]
+                                            break
+                        except Exception as ws_ctx_err:
+                            print(f"[api] workspace context inject error: {ws_ctx_err}")
 
                     # ── URL content fetching ──
                     from ct1.core.web_fetcher import extract_urls, fetch_url as _fetch_url, URL_PATTERN, MAX_URLS_PER_MESSAGE
@@ -1046,7 +1117,7 @@ async def ws_think(websocket: WebSocket):
                     )
                     # Computer mode: save files → run → inspect → fix loop
                     if result.get("route") == "ROUTE_COMPUTER" and _workspace:
-                        ws_id = msg.get("workspace_id")
+                        # ws_id already resolved above for workspace context injection
                         if not ws_id:
                             try:
                                 queue.put_nowait({"event": "warning", "message": "No workspace — files not saved. Switch to Computer mode first."})
@@ -1223,7 +1294,12 @@ async def ws_think(websocket: WebSocket):
                                             pass  # Client not consuming events (likely disconnected)
                                         break
                                 else:
-                                    # No errors or out of iterations
+                                    # No errors or out of iterations — replay commands in interactive terminal
+                                    if commands:
+                                        try:
+                                            queue.put_nowait({"event": "run_commands", "commands": commands})
+                                        except asyncio.QueueFull:
+                                            pass
                                     break
 
                     await queue.put({

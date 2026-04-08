@@ -33,6 +33,8 @@ export interface Turn {
                        contentLength: number; truncated: boolean }[];
     /** Detected language identifier from backend (e.g. 'python', 'html') */
     detectedLang?: string;
+    /** Explanation text written before the code fence (code mode only) */
+    explanation?: string;
     /** Files written to workspace (computer mode) */
     files?: Array<{ path: string; lang: string }>;
     /** Previous response versions saved on retry (oldest first) */
@@ -135,6 +137,7 @@ interface ChatState {
     modeOverride: ModeOverride;
     undoStack: string[];
     terminalOutput: string;
+    pendingCommands: string[];
     workspaceId: string | null;
     phase: 'idle' | 'routing' | 'planning' | 'generating'
          | 'polishing' | 'refining' | 'validating' | 'fixing' | 'done'
@@ -185,6 +188,7 @@ const initial: ChatState = {
     modeOverride: 'chat',
     undoStack: [],
     terminalOutput: '',
+    pendingCommands: [],
     workspaceId: null,
     phase: 'idle',
     designSpec: null,
@@ -316,7 +320,11 @@ function handleEvent(data: Record<string, any>) {
                 if (!s.route) s.route = data.route || '';
                 if (!s.specialistData) s.specialistData = data.specialist_data || null;
                 s.reflection = data.reflection;
-                const codeRoute = s.route === 'ROUTE_DESIGN' || s.route === 'ROUTE_CODE' || s.route === 'ROUTE_COMPUTER';
+                // Only treat as code file if the route is code-type AND actual code was detected
+                // (detected_lang 'text' means the AI answered in prose — show it as a chat bubble)
+                const _detectedLang = data.detected_lang ?? 'text';
+                const codeRoute = (s.route === 'ROUTE_DESIGN' || s.route === 'ROUTE_CODE' || s.route === 'ROUTE_COMPUTER')
+                    && _detectedLang !== 'text';
                 const newAlts = _pendingAlt !== null
                     ? [..._pendingPrevAlts, _pendingAlt]
                     : undefined;
@@ -337,7 +345,8 @@ function handleEvent(data: Record<string, any>) {
                         thinking: s.thinking,
                         draftThinking: s.draftThinking,
                         fetchedContent: s.fetchedContent.length > 0 ? s.fetchedContent : undefined,
-                        detectedLang: data.detected_lang ?? 'text',
+                        detectedLang: _detectedLang,
+                        explanation: data.explanation || undefined,
                         files: data.files ?? [],
                         alternatives: newAlts,
                         altIndex: newAltIdx,
@@ -419,6 +428,12 @@ function handleEvent(data: Record<string, any>) {
             case 'terminal_output':
                 // Computer mode: command execution output
                 s.terminalOutput += data.text || '';
+                break;
+            case 'run_commands':
+                // Computer mode: AI wants to run these commands in the interactive terminal
+                if (Array.isArray(data.commands) && data.commands.length > 0) {
+                    s.pendingCommands = [...s.pendingCommands, ...data.commands];
+                }
                 break;
             case 'url_fetching':
                 s.fetchingUrls = [...s.fetchingUrls, { url: data.url, status: 'fetching' }];
@@ -656,25 +671,30 @@ export function setAltIndex(turnIdx: number, altIdx: number) {
     });
 }
 
-export function regenerate() {
+export function regenerate(assistantTurnIdx?: number) {
     let lastUserMsg = '';
     let lastAttachments: Attachment[] = [];
 
     chat.update((s) => {
-        // Remove last assistant turn, saving its content for alternatives
-        if (s.conversation.length >= 1 && s.conversation[s.conversation.length - 1].role === 'assistant') {
-            const lastAss = s.conversation[s.conversation.length - 1];
-            _pendingPrevAlts = lastAss.alternatives || [];
-            _pendingAlt = lastAss.content;
-            s.conversation = s.conversation.slice(0, -1);
-        }
-        // Get and remove last user turn
-        const lastUser = s.conversation[s.conversation.length - 1];
-        if (lastUser && lastUser.role === 'user') {
-            lastUserMsg = lastUser.content;
-            lastAttachments = lastUser.attachments || [];
-            s.conversation = s.conversation.slice(0, -1);
-        }
+        // Find the assistant turn to regenerate (default: last one)
+        let assIdx = assistantTurnIdx !== undefined ? assistantTurnIdx : s.conversation.length - 1;
+        while (assIdx >= 0 && s.conversation[assIdx].role !== 'assistant') assIdx--;
+        if (assIdx < 0) return s;
+
+        const assTurn = s.conversation[assIdx];
+        _pendingPrevAlts = assTurn.alternatives || [];
+        _pendingAlt = assTurn.content;
+
+        // Find the preceding user turn
+        let userIdx = assIdx - 1;
+        while (userIdx >= 0 && s.conversation[userIdx].role !== 'user') userIdx--;
+        if (userIdx < 0) return s;
+
+        lastUserMsg = s.conversation[userIdx].content;
+        lastAttachments = s.conversation[userIdx].attachments || [];
+
+        // Truncate conversation to just before the user turn
+        s.conversation = s.conversation.slice(0, userIdx);
         return s;
     });
 
@@ -685,6 +705,20 @@ export function regenerate() {
 
 export function setWorkspaceId(id: string) {
     chat.update((s) => { s.workspaceId = id; return s; });
+    try { localStorage.setItem('ct2_workspace_id', id); } catch {}
+}
+
+/** Restore workspace ID from localStorage after a server restart. */
+export function restoreWorkspace() {
+    try {
+        const id = localStorage.getItem('ct2_workspace_id');
+        if (id) chat.update(s => { if (!s.workspaceId) s.workspaceId = id; return s; });
+    } catch {}
+}
+
+/** Clear the pending command queue (called after TerminalPanel has consumed them). */
+export function clearPendingCommands() {
+    chat.update(s => { s.pendingCommands = []; return s; });
 }
 
 export function stopGeneration() {
@@ -732,12 +766,14 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
     let conv: Turn[] = [];
     let mode: ModeOverride = 'auto';
     let wsId: string | null = null;
-    const unsub = chat.subscribe((s) => { conv = s.conversation; mode = s.modeOverride; wsId = s.workspaceId; });
-    unsub();
-
     let convId: string | null = null;
-    const unsub2 = chat.subscribe((s) => { convId = s.conversationId; });
-    unsub2();
+    const unsub = chat.subscribe((s) => {
+        conv = s.conversation;
+        mode = s.modeOverride;
+        wsId = s.workspaceId;
+        convId = s.conversationId;
+    });
+    unsub();
 
     chat.update((s) => {
         s.conversation = [...s.conversation, {

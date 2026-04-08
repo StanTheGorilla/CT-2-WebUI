@@ -334,10 +334,11 @@ class Engine:
     def _detect_repetition(text: str, window: int = 40) -> bool:
         """Detect if the model is stuck in a repetition loop.
 
-        Catches three patterns:
+        Catches four patterns:
         1. Exact chunk repetition (same 40 chars 3+ times)
         2. Line repetition (same line 4+ times in last 30 lines)
         3. Paragraph repetition (similar paragraphs keep appearing)
+        4. Long-pattern repetition (SVG paths, base64, etc. — 80-200 char cycles)
         """
         if len(text) < 500:
             return False
@@ -345,7 +346,7 @@ class Engine:
 
         tail = text[-window * 4:]
 
-        # 1. Exact chunk repetition
+        # 1. Exact chunk repetition (short patterns)
         pattern = tail[-window:]
         if tail.count(pattern) >= 3:
             return True
@@ -380,6 +381,19 @@ class Engine:
                 if prefixes and prefixes.most_common(1)[0][1] >= 5:
                     return True
 
+        # 4. Long-pattern repetition — catches SVG path data, base64 strings,
+        #    and any other dense single-line repeating content (cycle ~150-300 chars)
+        #    Only activates after 5000+ chars to avoid false-positives on Tailwind config,
+        #    CSS variables, and other structured but legitimate repeated content.
+        if len(text) > 5000:
+            last_chunk = text[-4000:]
+            for pat_len in (150, 200, 250, 300):
+                if len(last_chunk) < pat_len * 4:
+                    continue
+                pat = last_chunk[-pat_len:]
+                if last_chunk.count(pat) >= 4:
+                    return True
+
         return False
 
     async def _call_stream(self, messages: list[dict], on_token=None,
@@ -389,7 +403,8 @@ class Engine:
                            top_p: float = None,
                            conversation: list[dict] = None,
                            enable_thinking: bool = True,
-                           thinking_budget: int = None):
+                           thinking_budget: int = None,
+                           check_repetition: bool = True):
         """Streaming call with token-by-token callback."""
         if conversation:
             system_prompt = messages[0].get("content", "") if messages else ""
@@ -452,23 +467,26 @@ class Engine:
                         if on_token:
                             on_token(token, "content")
                         # Check content for repetition every 150 tokens
-                        content_token_count += 1
-                        if content_token_count >= 150:
-                            content_token_count = 0
-                            if self._detect_repetition(text):
-                                text = self._trim_repetition(text)
-                                break
+                        # (disabled for design/code routes — HTML/CSS has legitimate repetition)
+                        if check_repetition:
+                            content_token_count += 1
+                            if content_token_count >= 150:
+                                content_token_count = 0
+                                if self._detect_repetition(text):
+                                    text = self._trim_repetition(text)
+                                    break
                     if reason:
                         thinking += reason
                         if on_token:
                             on_token(reason, "thinking")
                         # Check thinking for repetition every 200 tokens
-                        thinking_token_count += 1
-                        if thinking_token_count >= 200:
-                            thinking_token_count = 0
-                            if self._detect_repetition(thinking):
-                                thinking = self._trim_repetition(thinking)
-                                break
+                        if check_repetition:
+                            thinking_token_count += 1
+                            if thinking_token_count >= 200:
+                                thinking_token_count = 0
+                                if self._detect_repetition(thinking):
+                                    thinking = self._trim_repetition(thinking)
+                                    break
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
 
@@ -724,6 +742,8 @@ class Engine:
                 conversation=conversation,
                 enable_thinking=thinking,
                 thinking_budget=ovr_budget,
+                # HTML/CSS/code has legitimate repetition — disable the heuristic check
+                check_repetition=not is_code,
             )
 
         return await self._call(
@@ -797,23 +817,34 @@ class Engine:
             lines = [l for l in text.split("\n") if not l.strip().startswith("```")]
             text = "\n".join(lines).strip()
 
-        # Extract JSON object
+        # Extract the first syntactically complete JSON object.
+        # Scan every '{' position — raw_decode stops at the matching '}' and
+        # ignores any trailing text, so "Extra data" errors are impossible.
+        decoder = _json.JSONDecoder()
+        for i, ch in enumerate(text):
+            if ch != '{':
+                continue
+            try:
+                obj, _ = decoder.raw_decode(text, i)
+                return obj
+            except _json.JSONDecodeError:
+                continue
+
+        # Last-resort: repair Python-style booleans / trailing commas, then retry
         start = text.find("{")
         end = text.rfind("}") + 1
         if start < 0 or end <= start:
             raise ValueError(f"No JSON object found in Engine output: {text[:300]!r}")
-
-        raw_json = text[start:end]
-
-        # Try strict parse first
-        try:
-            return _json.loads(raw_json)
-        except _json.JSONDecodeError:
-            pass
-
-        # Repair common LLM JSON mistakes and retry
-        repaired = _repair_json(raw_json)
-        return _json.loads(repaired)
+        repaired = _repair_json(text[start:end])
+        for i, ch in enumerate(repaired):
+            if ch != '{':
+                continue
+            try:
+                obj, _ = decoder.raw_decode(repaired, i)
+                return obj
+            except _json.JSONDecodeError:
+                continue
+        raise ValueError(f"Could not parse spec JSON after repair: {repaired[:200]!r}")
 
     # ── Self-refinement pass (design mode) ─────────────────────────────
 
@@ -1325,26 +1356,36 @@ class Engine:
                   .replace("{complexity}", str(complexity))
                   .replace("{outcome}", outcome_for_prompt))
         messages = [
-            {"role": "system", "content": self._personality_prompt()},
+            {"role": "system", "content": "You are a helpful assistant that outputs valid JSON only."},
             {"role": "user", "content": prompt},
         ]
+        # No conversation context — reflection is a standalone structured task.
+        # Low temperature for reliable JSON output.
         raw = await self._call(
-            messages, max_tokens=512,
-            conversation=conversation,
+            messages, max_tokens=300,
+            temperature=0.1,
+            conversation=None,
             enable_thinking=False,
         )
         if isinstance(raw, dict):
             raw = raw.get("text", "")
+        # Fix common LLM JSON formatting issues
+        fixed = (raw
+                 .replace("True", "true")
+                 .replace("False", "false")
+                 .replace("None", "null"))
         try:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            return json.loads(raw[start:end])
+            start = fixed.find("{")
+            end = fixed.rfind("}") + 1
+            if start >= 0 and end > start:
+                return json.loads(fixed[start:end])
         except Exception:
-            return {
-                "goal": goal, "complexity": complexity,
-                "lesson": "reflection parse failed",
-                "self_score": 0.5,
-            }
+            pass
+        return {
+            "goal": goal, "complexity": complexity,
+            "lesson": "reflection parse failed",
+            "self_score": 0.5,
+        }
 
     async def summarize_session(self, conversation: list[dict]) -> str | None:
         if not conversation:

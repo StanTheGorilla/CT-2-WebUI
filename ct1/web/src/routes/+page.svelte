@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration } from '$lib/stores/chat';
+    import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, clearPendingCommands } from '$lib/stores/chat';
     import { getLangMeta } from '$lib/langMap';
     import { render } from '$lib/markdown';
     import hljs from 'highlight.js';
@@ -49,16 +49,34 @@
     let previewEntered = $state(false);
 
     // Computer mode state
-    let activeWorkspaceId = $state<string | null>(null);
+    // Derive from the chat store so workspace ID survives navigation (settings → chat → back)
+    let activeWorkspaceId = $derived($chat.workspaceId);
     let showTerminal = $state(false);
     let fileTreeRef = $state<FileTree>();
     let viewingFile = $state<{ path: string; content: string } | null>(null);
     let computerTab = $state<'files' | 'terminal'>('files');
 
     $effect(() => {
-        // Auto-create workspace when entering computer mode
-        if (isComputerMode && !activeWorkspaceId) {
+        // On mount: try to restore workspace from localStorage (survives server restarts)
+        restoreWorkspace();
+    });
+
+    $effect(() => {
+        // Auto-create workspace when entering computer mode for the first time
+        if (isComputerMode && !$chat.workspaceId) {
             createDefaultWorkspace();
+        }
+        // Restore terminal panel when navigating back to an existing workspace
+        if ($chat.workspaceId && isComputerMode && !showTerminal) {
+            showTerminal = true;
+        }
+    });
+
+    // Auto-switch to terminal tab when AI sends commands to run
+    $effect(() => {
+        if ($chat.pendingCommands.length > 0 && isComputerMode) {
+            computerTab = 'terminal';
+            showTerminal = true;
         }
     });
 
@@ -71,9 +89,8 @@
             });
             const data = await res.json();
             if (data.id) {
-                activeWorkspaceId = data.id;
                 showTerminal = true;
-                setWorkspaceId(data.id);
+                setWorkspaceId(data.id); // persists to chat store → activeWorkspaceId updates
             }
         } catch (e) {
             console.error('Workspace create error:', e);
@@ -119,7 +136,7 @@
         if (!code) return;
         if (lang === 'multi') return; // multi-file: already saved to workspace
         const [ext, mime] = getLangMeta(lang);
-        const filename = lang === 'html' ? 'index.html' : `response${ext}`;
+        const filename = lang === 'html' ? 'index.html' : `output${ext}`;
         const blob = new Blob([code], { type: mime });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -134,9 +151,19 @@
         downloadBlob($chat.response, lang);
     }
 
-    function previewHistoryCode(code: string) {
+    let previewOutputType = $state<string>('other');
+    function previewHistoryCode(code: string, outputType: string = 'other') {
         previewOverride = code;
+        previewOutputType = outputType;
         showPreview = true;
+    }
+
+    // Per-history-card inline code expansion
+    let expandedHistoryCards = $state(new Set<number>());
+    function toggleHistoryCard(idx: number) {
+        const next = new Set(expandedHistoryCards);
+        if (next.has(idx)) next.delete(idx); else next.add(idx);
+        expandedHistoryCards = next;
     }
 
     let didGenerate = $state(false);
@@ -177,6 +204,7 @@
 
     function previewCurrentCode() {
         previewOverride = null;
+        previewOutputType = 'other';
         showPreview = !showPreview;
     }
 
@@ -374,14 +402,20 @@
                                     </details>
                                 {/each}
                             {/if}
+                            {#if turn.explanation}
+                                <div class="code-explanation">{turn.explanation}</div>
+                            {/if}
                             <div class="output-card" style="animation-delay: {idx * 30}ms">
                                 <div class="output-bar">
                                     <span class="ext-badge" style="--ec: {extColor(hExt)}">{hExt.toUpperCase()}</span>
                                     <span class="output-name">output.{hExt}</span>
                                     <span class="output-meta">{formatChars(turn.content.length)}</span>
                                     <div class="output-actions">
+                                        <button class="act-btn" onclick={() => toggleHistoryCard(idx)} title="View code" class:active={expandedHistoryCards.has(idx)}>
+                                            <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M5.5 3.5L2.5 7.5l3 4M9.5 3.5l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                        </button>
                                         {#if hExt === 'html'}
-                                        <button class="act-btn" onclick={() => previewHistoryCode(turn.content)} title="Preview">
+                                        <button class="act-btn" onclick={() => previewHistoryCode(turn.content, 'html_page')} title="Preview">
                                             <svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M2 3.5A1.5 1.5 0 013.5 2h8A1.5 1.5 0 0113 3.5v8a1.5 1.5 0 01-1.5 1.5h-8A1.5 1.5 0 012 11.5v-8z" stroke="currentColor" stroke-width="1.1"/><path d="M6 6l3 1.5-3 1.5V6z" fill="currentColor" opacity="0.6"/></svg>
                                         </button>
                                         {/if}
@@ -395,6 +429,9 @@
                                         {/if}
                                     </div>
                                 </div>
+                                {#if expandedHistoryCards.has(idx)}
+                                    <pre class="output-source"><code class="hljs">{@html highlightCode(turn.content, hExt)}</code></pre>
+                                {/if}
                             </div>
                             {#if turn.reflection && turn.reflection.self_score > 0}
                                 {@const hsc = turn.reflection.self_score ?? 0.5}
@@ -427,7 +464,7 @@
                                         <path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
-                                <button class="feedback-btn regen" onclick={regenerate} title="Retry — get a new response">
+                                <button class="feedback-btn regen" onclick={() => regenerate(idx)} title="Retry — get a new response">
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                                         <path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                         <path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -499,7 +536,7 @@
                                     onclick={() => setFeedback(idx, turn.feedback === -1 ? 0 : -1)} title="Bad response">
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                                 </button>
-                                <button class="feedback-btn regen" onclick={regenerate} title="Retry — get a new response">
+                                <button class="feedback-btn regen" onclick={() => regenerate(idx)} title="Retry — get a new response">
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                                 </button>
                                 <button class="feedback-btn copy-resp" onclick={() => copyToClipboard(turn.content)} title="Copy response">
@@ -561,7 +598,7 @@
                                         <path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                                     </svg>
                                 </button>
-                                <button class="feedback-btn regen" onclick={regenerate} title="Retry — get a new response">
+                                <button class="feedback-btn regen" onclick={() => regenerate(idx)} title="Retry — get a new response">
                                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                                         <path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                         <path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -885,7 +922,7 @@
                     <div class="output-card">
                         <div class="output-bar">
                             <span class="ext-badge" style="--ec: {extColor(ext)}">{ext.toUpperCase()}</span>
-                            <span class="output-name">{_respLang === 'html' ? 'index.html' : `response.${ext}`}</span>
+                            <span class="output-name">{_respLang === 'html' ? 'index.html' : `output.${ext}`}</span>
                             <span class="output-meta">
                                 {formatChars($chat.response.length)}{#if $chat.tokenCount > 0}&ensp;·&ensp;{$chat.tokenCount} tok{#if $chat.tokensPerSec > 0} · {$chat.tokensPerSec}/s{/if}{/if}
                             </span>
@@ -958,6 +995,30 @@
                         {#if codeExpanded}
                             <pre class="output-source"><code class="hljs">{@html highlightCode($chat.response, 'html')}</code></pre>
                         {/if}
+                    </div>
+                {/if}
+
+                <!-- Feedback row for the active (most recent) response -->
+                {#if $chat.phase === 'done' && $chat.response}
+                    {@const _lastIdx = $chat.conversation.length - 1}
+                    {@const _lastTurn = $chat.conversation[_lastIdx]}
+                    <div class="bubble-row">
+                        <div class="feedback-row" style="opacity:1">
+                            <button class="feedback-btn" class:active={_lastTurn?.feedback === 1}
+                                onclick={() => setFeedback(_lastIdx, _lastTurn?.feedback === 1 ? 0 : 1)} title="Good response">
+                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 9.5h2V14H2zM4 9.5l2.5-7A1.5 1.5 0 018 1.5v0a1.5 1.5 0 011.5 1.5V6h3.84a1.5 1.5 0 011.48 1.75l-.93 5.5A1.5 1.5 0 0112.41 14.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </button>
+                            <button class="feedback-btn bad" class:active={_lastTurn?.feedback === -1}
+                                onclick={() => setFeedback(_lastIdx, _lastTurn?.feedback === -1 ? 0 : -1)} title="Bad response">
+                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 6.5h2V1.5H2zM4 6.5l2.5 7A1.5 1.5 0 008 14.5v0a1.5 1.5 0 001.5-1.5V10h3.84a1.5 1.5 0 001.48-1.75l-.93-5.5A1.5 1.5 0 0012.41 1.5H4z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </button>
+                            <button class="feedback-btn regen" onclick={() => regenerate(_lastIdx)} title="Retry — get a new response">
+                                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1 8a7 7 0 0112.3-4.5M15 8a7 7 0 01-12.3 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M13 1v3h-3M3 15v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </button>
+                            <button class="feedback-btn copy-resp" onclick={() => copyToClipboard($chat.response)} title="Copy response">
+                                <svg width="14" height="14" viewBox="0 0 15 15" fill="none"><rect x="5" y="5" width="7.5" height="7.5" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3 10V3.5A.5.5 0 013.5 3H10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
+                            </button>
+                        </div>
                     </div>
                 {/if}
 
@@ -1073,7 +1134,7 @@
             ></div>
             <PreviewPanel
                 code={previewCode}
-                outputType={$chat.plan?.output_type ?? 'other'}
+                outputType={previewOverride ? previewOutputType : ($chat.plan?.output_type ?? 'other')}
                 onClose={() => { showPreview = false; userClosedPreview = true; }}
             />
         </div>
@@ -1150,6 +1211,8 @@
                         workspaceId={activeWorkspaceId}
                         onClose={() => { showTerminal = false; }}
                         externalOutput={$chat.terminalOutput}
+                        pendingCommands={$chat.pendingCommands}
+                        onCommandsConsumed={clearPendingCommands}
                     />
                 {/if}
             </div>
@@ -1634,6 +1697,14 @@
         background: rgba(239, 68, 68, 0.18);
         border-color: rgba(239, 68, 68, 0.30);
     }
+    .stop-row {
+        display: flex; justify-content: flex-end;
+        margin-top: 6px;
+    }
+    .stop-global {
+        width: auto; gap: 6px; padding: 0 10px;
+        font-size: 11px; font-weight: 500; letter-spacing: 0.02em;
+    }
 
     /* ================================================================
        REFINE CARD
@@ -1860,6 +1931,13 @@
     /* ================================================================
        OUTPUT FILE CARD
        ================================================================ */
+    .code-explanation {
+        font-size: 13.5px;
+        line-height: 1.6;
+        color: var(--text-primary);
+        padding: 4px 2px 8px;
+        white-space: pre-wrap;
+    }
     .output-card {
         background: var(--surface);
         border: 1px solid var(--border);

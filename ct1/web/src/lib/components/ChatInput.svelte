@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { chat, sendThink, setMode, type Attachment, type ModeOverride } from '$lib/stores/chat';
+    import { chat, sendThink, setMode, stopGeneration, type Attachment, type ModeOverride } from '$lib/stores/chat';
 
     let input = $state('');
     let textarea: HTMLTextAreaElement;
@@ -234,11 +234,19 @@
         ></textarea>
         <div class="island-actions">
             <span class="hint">Ctrl+Enter</span>
-            <button class="send" onclick={submit} {disabled} aria-label="Send message">
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                    <path d="M3.5 9h11M10 4.5L14.5 9 10 13.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-            </button>
+            {#if disabled}
+                <button class="send send-stop" onclick={stopGeneration} aria-label="Stop generation" title="Stop">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor"/>
+                    </svg>
+                </button>
+            {:else}
+                <button class="send" onclick={submit} aria-label="Send message">
+                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                        <path d="M3.5 9h11M10 4.5L14.5 9 10 13.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            {/if}
         </div>
     </div>
 </div>
@@ -520,5 +528,14 @@
     .send:disabled {
         opacity: 0.15;
         cursor: not-allowed;
+    }
+    .send-stop {
+        background: rgba(239, 68, 68, 0.12);
+        color: var(--error, #ef4444);
+        border: 1px solid rgba(239, 68, 68, 0.25);
+    }
+    .send-stop:hover {
+        background: rgba(239, 68, 68, 0.22);
+        transform: scale(1.05);
     }
 </style>
