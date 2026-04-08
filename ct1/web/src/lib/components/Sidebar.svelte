@@ -15,6 +15,7 @@
 
     interface Workspace { id: string; name: string; file_count: number; }
     let workspaces = $state<Workspace[]>([]);
+    let workspacesCollapsed = $state(false);
 
     onMount(() => {
         loadConversations();
@@ -81,6 +82,8 @@
             activeConversationId.set(id);
             loadFromHistory(conv);
         }
+        setWorkspaceId(null);
+        setMode('chat');
         sidebarOpen.set(false);
     }
 
@@ -134,7 +137,12 @@
 
         <!-- ── Workspaces ── -->
         <div class="section-header">
-            <span class="section-title">Workspaces</span>
+            <button class="section-toggle" onclick={() => workspacesCollapsed = !workspacesCollapsed}>
+                <svg class="section-chevron" class:collapsed={workspacesCollapsed} width="10" height="10" viewBox="0 0 16 16" fill="none">
+                    <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span class="section-title">Workspaces</span>
+            </button>
             <button class="new-chat-btn" onclick={createWorkspace} title="New workspace">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                     <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
@@ -142,6 +150,7 @@
             </button>
         </div>
 
+        {#if !workspacesCollapsed}
         <div class="workspace-list">
             {#if workspaces.length === 0}
                 <div class="section-empty">No workspaces yet</div>
@@ -168,6 +177,7 @@
                 {/each}
             {/if}
         </div>
+        {/if}
 
         <div class="section-divider"></div>
 
@@ -289,12 +299,32 @@
         padding: 14px 20px 6px;
     }
 
+    .section-toggle {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+        color: inherit;
+    }
+    .section-toggle:hover .section-title { color: var(--text-secondary); }
+
+    .section-chevron {
+        color: var(--text-muted);
+        transition: transform 200ms ease;
+        flex-shrink: 0;
+    }
+    .section-chevron.collapsed { transform: rotate(-90deg); }
+
     .section-title {
         font-size: 11px;
         font-weight: 600;
         color: var(--text-muted);
         letter-spacing: 0.06em;
         text-transform: uppercase;
+        transition: color 150ms ease;
     }
 
     .section-divider {

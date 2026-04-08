@@ -52,6 +52,8 @@
     // Derive from the chat store so workspace ID survives navigation (settings → chat → back)
     let activeWorkspaceId = $derived($chat.workspaceId);
     let showTerminal = $state(false);
+    let panelUserClosed = $state(false);   // user explicitly closed via arrow — don't auto-reopen
+    let lastPanelWorkspaceId = $state<string | null>(null); // track workspace changes to reset flag
     let fileTreeRef = $state<FileTree>();
     let viewingFile = $state<{ path: string; content: string } | null>(null);
     let computerTab = $state<'files' | 'terminal'>('files');
@@ -66,8 +68,14 @@
         if (isComputerMode && !$chat.workspaceId) {
             createDefaultWorkspace();
         }
-        // Restore terminal panel when navigating back to an existing workspace
-        if ($chat.workspaceId && isComputerMode && !showTerminal) {
+        const wsId = $chat.workspaceId;
+        // Reset user-close flag whenever the workspace changes (different workspace or cleared)
+        if (wsId !== lastPanelWorkspaceId) {
+            lastPanelWorkspaceId = wsId;
+            if (wsId) panelUserClosed = false;
+        }
+        // Restore terminal panel on navigation back — but not if user manually closed it
+        if (wsId && isComputerMode && !showTerminal && !panelUserClosed) {
             showTerminal = true;
         }
     });
@@ -1173,7 +1181,7 @@
                     Terminal
                 </button>
                 <div class="tab-spacer"></div>
-                <button class="computer-tab-action" onclick={() => { showTerminal = false; }} title="Close panel">
+                <button class="computer-tab-action" onclick={() => { showTerminal = false; panelUserClosed = true; }} title="Close panel">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
                         <path d="M10 3l-7 5 7 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
