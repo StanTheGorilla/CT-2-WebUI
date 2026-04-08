@@ -1015,6 +1015,30 @@ async def ws_think(websocket: WebSocket):
                         except Exception as ws_ctx_err:
                             print(f"[api] workspace context inject error: {ws_ctx_err}")
 
+                    # ── User-selected context files: inject full content ──
+                    context_files = msg.get("context_files", [])
+                    if context_files and ws_id and _workspace:
+                        blocks = []
+                        for path in context_files[:20]:  # hard cap: 20 files
+                            try:
+                                content = _workspace.read_file(ws_id, path)
+                                if len(content) > 8000:
+                                    content = content[:8000] + "\n... [truncated]"
+                                blocks.append(
+                                    f"[CONTEXT FILE: {path}]\n{content}\n[END CONTEXT FILE]"
+                                )
+                            except Exception:
+                                pass  # file missing or unreadable — skip silently
+                        if blocks:
+                            file_ctx = "\n\n".join(blocks) + "\n\n"
+                            if isinstance(actual_goal, str):
+                                actual_goal = file_ctx + actual_goal
+                            elif isinstance(actual_goal, list):
+                                for part in actual_goal:
+                                    if part.get("type") == "text":
+                                        part["text"] = file_ctx + part["text"]
+                                        break
+
                     # ── URL content fetching ──
                     from ct1.core.web_fetcher import extract_urls, fetch_url as _fetch_url, URL_PATTERN, MAX_URLS_PER_MESSAGE
 

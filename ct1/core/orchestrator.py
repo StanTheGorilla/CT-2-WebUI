@@ -93,12 +93,15 @@ def _extract_text(goal) -> str:
 
 
 def _strip_file_context(text: str) -> str:
-    """Strip inlined [File: ...] and [Workspace file: ...] blocks,
-    keeping only the user's own message.
+    """Strip inlined file/context blocks, keeping only the user's own message.
     Used for routing/classification so file content doesn't pollute intent detection."""
     text = re.sub(r'\[WORKSPACE FILES[^\]]*\].*?\n\n(?=\S)', '', text, count=1, flags=re.DOTALL)
     text = re.sub(
         r'\[FETCHED CONTENT FROM:[^\]]*\].*?\[END FETCHED CONTENT\]\s*',
+        '', text, flags=re.DOTALL,
+    )
+    text = re.sub(
+        r'\[CONTEXT FILE:[^\]]*\].*?\[END CONTEXT FILE\]\s*',
         '', text, flags=re.DOTALL,
     )
     return re.sub(r'\[(?:Workspace )?[Ff]ile: [^\]]+\]\n.*?\n\n', '', text, flags=re.DOTALL).strip()
