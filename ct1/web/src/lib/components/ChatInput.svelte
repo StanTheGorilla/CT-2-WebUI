@@ -19,7 +19,6 @@
         { key: 'chat', label: 'Chat' },
         { key: 'design', label: 'Design' },
         { key: 'code', label: 'Code' },
-        { key: 'computer', label: 'Computer' },
         { key: 'auto', label: 'Auto' },
     ];
 
