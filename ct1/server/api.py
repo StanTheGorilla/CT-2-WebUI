@@ -1017,6 +1017,8 @@ async def ws_think(websocket: WebSocket):
 
                     # ── User-selected context files: inject full content ──
                     context_files = msg.get("context_files", [])
+                    if not isinstance(context_files, list):
+                        context_files = []
                     if context_files and ws_id and _workspace:
                         blocks = []
                         for path in context_files[:20]:  # hard cap: 20 files
@@ -1027,8 +1029,8 @@ async def ws_think(websocket: WebSocket):
                                 blocks.append(
                                     f"[CONTEXT FILE: {path}]\n{content}\n[END CONTEXT FILE]"
                                 )
-                            except Exception:
-                                pass  # file missing or unreadable — skip silently
+                            except Exception as _cf_err:
+                                print(f"[api] context file read failed ({path}): {_cf_err}")
                         if blocks:
                             file_ctx = "\n\n".join(blocks) + "\n\n"
                             if isinstance(actual_goal, str):
