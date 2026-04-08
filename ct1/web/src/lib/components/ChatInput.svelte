@@ -1,17 +1,19 @@
 <script lang="ts">
-    import { chat, sendThink, setMode, stopGeneration, type Attachment, type ModeOverride } from '$lib/stores/chat';
+    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, type Attachment, type ModeOverride } from '$lib/stores/chat';
 
     let input = $state('');
     let textarea: HTMLTextAreaElement;
     let fileInput: HTMLInputElement;
     let attachments = $state<Attachment[]>([]);
     let dragOver = $state(false);
+    let popoverOpen = $state(false);
+    let fileList = $state<string[]>([]);
+    let fileListLoading = $state(false);
 
     const disabled = $derived($chat.phase !== 'idle' && $chat.phase !== 'done');
     const currentMode = $derived($chat.modeOverride);
-    const hasWorkspaceContext = $derived(
-        !!$chat.workspaceId && $chat.modeOverride !== 'computer'
-    );
+    const hasWorkspaceContext = $derived(!!$chat.workspaceId);
+    const contextCount = $derived($chat.contextFiles.length);
 
     const modes: { key: ModeOverride; label: string }[] = [
         { key: 'chat', label: 'Chat' },
@@ -28,6 +30,32 @@
         input = '';
         attachments = [];
         if (textarea) textarea.style.height = 'auto';
+    }
+
+    async function openPopover() {
+        if (!$chat.workspaceId) return;
+        popoverOpen = !popoverOpen;
+        if (popoverOpen && fileList.length === 0) {
+            fileListLoading = true;
+            try {
+                const res = await fetch(`/api/workspaces/${$chat.workspaceId}/files`);
+                const data = await res.json();
+                fileList = (data as Array<{ path: string; is_dir: boolean }>)
+                    .filter(f => !f.is_dir)
+                    .map(f => f.path);
+            } catch {
+                fileList = [];
+            } finally {
+                fileListLoading = false;
+            }
+        }
+    }
+
+    function handleOutsideClick(e: MouseEvent) {
+        const target = e.target as HTMLElement;
+        if (!target.closest('.ctx-popover') && !target.closest('.workspace-ctx-badge')) {
+            popoverOpen = false;
+        }
     }
 
     function onKeydown(e: KeyboardEvent) {
@@ -130,6 +158,8 @@
     }
 </script>
 
+<svelte:window onclick={handleOutsideClick} />
+
 <div
     class="input-dock"
     ondrop={onDrop}
@@ -194,11 +224,49 @@
     </div>
 
     {#if hasWorkspaceContext}
-        <div class="workspace-ctx-badge">
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                <path d="M2 5V3a1 1 0 011-1h4l2 2h4a1 1 0 011 1v7a1 1 0 01-1 1H3a1 1 0 01-1-1V5z" stroke="currentColor" stroke-width="1.2"/>
-            </svg>
-            Workspace files attached as context
+        <div class="ctx-anchor">
+            <button
+                class="workspace-ctx-badge"
+                class:active={contextCount > 0}
+                onclick={openPopover}
+                type="button"
+            >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                    <path d="M2 5V3a1 1 0 011-1h4l2 2h4a1 1 0 011 1v7a1 1 0 01-1 1H3a1 1 0 01-1-1V5z" stroke="currentColor" stroke-width="1.2"/>
+                </svg>
+                {contextCount > 0 ? `${contextCount} file${contextCount === 1 ? '' : 's'} in context` : 'Attach files to context'}
+            </button>
+
+            {#if popoverOpen}
+                <div class="ctx-popover" role="dialog">
+                    <div class="ctx-popover-header">
+                        <span>Workspace files</span>
+                        {#if contextCount > 0}
+                            <button class="ctx-clear" onclick={clearContextFiles} type="button">Clear all</button>
+                        {/if}
+                    </div>
+                    {#if fileListLoading}
+                        <div class="ctx-empty">Loading...</div>
+                    {:else if fileList.length === 0}
+                        <div class="ctx-empty">No files in workspace</div>
+                    {:else}
+                        <ul class="ctx-file-list">
+                            {#each fileList as path}
+                                <li>
+                                    <label class="ctx-file-row">
+                                        <input
+                                            type="checkbox"
+                                            checked={$chat.contextFiles.includes(path)}
+                                            onchange={() => toggleContextFile(path)}
+                                        />
+                                        <span class="ctx-file-path">{path}</span>
+                                    </label>
+                                </li>
+                            {/each}
+                        </ul>
+                    {/if}
+                </div>
+            {/if}
         </div>
     {/if}
 
@@ -397,19 +465,104 @@
         opacity: 1;
     }
 
-    /* ---- Workspace context badge ---- */
+    /* ---- Workspace context badge + popover ---- */
+    .ctx-anchor {
+        position: relative;
+        max-width: 720px;
+        margin: 0 auto 6px;
+    }
+
     .workspace-ctx-badge {
         display: flex;
         align-items: center;
         gap: 5px;
-        max-width: 720px;
-        margin: 0 auto 6px;
-        padding: 4px 12px;
-        font-family: var(--font-body);
+        padding: 3px 8px;
+        border-radius: 6px;
         font-size: 11px;
+        color: var(--text-secondary);
+        background: transparent;
+        border: 1px solid var(--border-subtle);
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+        font-family: var(--font-body);
         font-weight: 500;
-        color: var(--text-muted);
-        opacity: 0.7;
+    }
+    .workspace-ctx-badge:hover,
+    .workspace-ctx-badge.active {
+        background: var(--accent-subtle);
+        color: var(--text);
+        border-color: var(--border);
+    }
+
+    .ctx-popover {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 0;
+        min-width: 240px;
+        max-width: 340px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+        z-index: 100;
+        overflow: hidden;
+    }
+
+    .ctx-popover-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 12px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        border-bottom: 1px solid var(--border-subtle);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .ctx-clear {
+        font-size: 11px;
+        color: var(--accent);
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+    }
+    .ctx-clear:hover { text-decoration: underline; }
+
+    .ctx-file-list {
+        list-style: none;
+        margin: 0;
+        padding: 4px 0;
+        max-height: 220px;
+        overflow-y: auto;
+    }
+
+    .ctx-file-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 12px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text);
+    }
+    .ctx-file-row:hover { background: var(--hover); }
+
+    .ctx-file-path {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-family: var(--font-mono, monospace);
+        font-size: 11px;
+    }
+
+    .ctx-empty {
+        padding: 12px;
+        font-size: 12px;
+        color: var(--text-secondary);
+        text-align: center;
     }
 
     /* ---- Input island ---- */
