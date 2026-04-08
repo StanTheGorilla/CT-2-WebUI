@@ -4,7 +4,7 @@
         loadConversations, deleteConversation, renameConversation,
         loadConversation,
     } from '$lib/stores/conversations';
-    import { loadFromHistory, newConversation } from '$lib/stores/chat';
+    import { chat, loadFromHistory, newConversation, setWorkspaceId, setMode } from '$lib/stores/chat';
     import { exportMarkdown, downloadText } from '$lib/export';
     import SearchBar from '$lib/components/SearchBar.svelte';
     import { onMount } from 'svelte';
@@ -13,9 +13,43 @@
     let renameValue = $state('');
     let renameInput = $state<HTMLInputElement | null>(null);
 
+    interface Workspace { id: string; name: string; file_count: number; }
+    let workspaces = $state<Workspace[]>([]);
+
     onMount(() => {
         loadConversations();
+        loadWorkspaces();
     });
+
+    async function loadWorkspaces() {
+        try {
+            const res = await fetch('/api/workspaces');
+            workspaces = await res.json();
+        } catch {
+            workspaces = [];
+        }
+    }
+
+    function openWorkspace(id: string) {
+        setWorkspaceId(id);
+        setMode('computer');
+        sidebarOpen.set(false);
+    }
+
+    async function createWorkspace() {
+        const name = window.prompt('Workspace name:');
+        if (name === null) return;
+        try {
+            const res = await fetch('/api/workspaces', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name.trim() }),
+            });
+            const ws: Workspace = await res.json();
+            workspaces = [ws, ...workspaces];
+            openWorkspace(ws.id);
+        } catch { /* ignore */ }
+    }
 
     function formatRelativeDate(dateStr: string): string {
         const date = new Date(dateStr);
@@ -36,6 +70,8 @@
     function startNew() {
         newConversation();
         activeConversationId.set(null);
+        setWorkspaceId(null);
+        setMode('chat');
         sidebarOpen.set(false);
     }
 
@@ -95,8 +131,49 @@
 
 <aside class="sidebar" class:open={$sidebarOpen}>
     <div class="sidebar-inner">
-        <div class="sidebar-header">
-            <span class="sidebar-title">History</span>
+
+        <!-- ── Workspaces ── -->
+        <div class="section-header">
+            <span class="section-title">Workspaces</span>
+            <button class="new-chat-btn" onclick={createWorkspace} title="New workspace">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
+
+        <div class="workspace-list">
+            {#if workspaces.length === 0}
+                <div class="section-empty">No workspaces yet</div>
+            {:else}
+                {#each workspaces as ws (ws.id)}
+                    <div
+                        class="conversation-item"
+                        class:active={$chat.workspaceId === ws.id}
+                        role="button"
+                        tabindex="0"
+                        onclick={() => openWorkspace(ws.id)}
+                        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') openWorkspace(ws.id); }}
+                    >
+                        <div class="conv-content">
+                            <span class="conv-title">
+                                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" style="opacity:0.5;flex-shrink:0;margin-right:5px">
+                                    <path d="M2 5V3a1 1 0 011-1h4l2 2h4a1 1 0 011 1v7a1 1 0 01-1 1H3a1 1 0 01-1-1V5z" stroke="currentColor" stroke-width="1.3"/>
+                                </svg>
+                                {ws.name}
+                            </span>
+                            <span class="conv-time">{ws.file_count} file{ws.file_count === 1 ? '' : 's'}</span>
+                        </div>
+                    </div>
+                {/each}
+            {/if}
+        </div>
+
+        <div class="section-divider"></div>
+
+        <!-- ── Chats ── -->
+        <div class="section-header">
+            <span class="section-title">Chats</span>
             <button class="new-chat-btn" onclick={startNew} title="New conversation">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                     <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
@@ -204,20 +281,43 @@
         overflow: hidden;
     }
 
-    /* ---- Header ---- */
-    .sidebar-header {
+    /* ── Section headers (workspaces / chats) ── */
+    .section-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 18px 20px 10px;
+        padding: 14px 20px 6px;
     }
 
-    .sidebar-title {
-        font-size: 13px;
+    .section-title {
+        font-size: 11px;
         font-weight: 600;
         color: var(--text-muted);
-        letter-spacing: 0.04em;
+        letter-spacing: 0.06em;
         text-transform: uppercase;
+    }
+
+    .section-divider {
+        height: 1px;
+        background: var(--border-subtle);
+        margin: 6px 12px;
+    }
+
+    /* ── Workspace list (reuses .conversation-item styles) ── */
+    .workspace-list {
+        padding: 0 8px 4px;
+    }
+
+    .section-empty {
+        font-size: 12px;
+        color: var(--text-muted);
+        padding: 8px 12px 10px;
+    }
+
+    /* conv-title in workspace rows needs flex for the folder icon */
+    .workspace-list .conv-title {
+        display: flex;
+        align-items: center;
     }
 
     .new-chat-btn {
