@@ -138,6 +138,7 @@ interface ChatState {
     undoStack: string[];
     terminalOutput: string;
     pendingCommands: string[];
+    contextFiles: string[];
     workspaceId: string | null;
     phase: 'idle' | 'routing' | 'planning' | 'generating'
          | 'polishing' | 'refining' | 'validating' | 'fixing' | 'done'
@@ -189,6 +190,7 @@ const initial: ChatState = {
     undoStack: [],
     terminalOutput: '',
     pendingCommands: [],
+    contextFiles: [],
     workspaceId: null,
     phase: 'idle',
     designSpec: null,
@@ -721,6 +723,20 @@ export function clearPendingCommands() {
     chat.update(s => { s.pendingCommands = []; return s; });
 }
 
+export function toggleContextFile(path: string) {
+    chat.update((s) => {
+        const idx = s.contextFiles.indexOf(path);
+        s.contextFiles = idx >= 0
+            ? s.contextFiles.filter((p) => p !== path)
+            : [...s.contextFiles, path];
+        return s;
+    });
+}
+
+export function clearContextFiles() {
+    chat.update((s) => { s.contextFiles = []; return s; });
+}
+
 export function stopGeneration() {
     ws?.send({ type: 'cancel' });
     chat.update((s) => {
@@ -767,11 +783,13 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
     let mode: ModeOverride = 'auto';
     let wsId: string | null = null;
     let convId: string | null = null;
+    let s_contextFiles: string[] = [];
     const unsub = chat.subscribe((s) => {
         conv = s.conversation;
         mode = s.modeOverride;
         wsId = s.workspaceId;
         convId = s.conversationId;
+        s_contextFiles = s.contextFiles;
     });
     unsub();
 
@@ -876,5 +894,6 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         ...(wsId ? { workspace_id: wsId } : {}),
         ...(!prefs.designRefinement ? { skip_refinement: true } : {}),
         ...(atlasSettings ? { atlas: atlasSettings } : {}),
+        ...(s_contextFiles.length > 0 ? { context_files: s_contextFiles } : {}),
     });
 }
