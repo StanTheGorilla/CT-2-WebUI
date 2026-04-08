@@ -708,7 +708,7 @@ export function regenerate(assistantTurnIdx?: number) {
 export function setWorkspaceId(id: string | null) {
     chat.update((s) => { s.workspaceId = id; return s; });
     try {
-        if (id) {
+        if (id) { // falsy covers null and "" — neither is a valid workspace id
             localStorage.setItem('ct2_workspace_id', id);
         } else {
             localStorage.removeItem('ct2_workspace_id');
