@@ -705,9 +705,15 @@ export function regenerate(assistantTurnIdx?: number) {
     }
 }
 
-export function setWorkspaceId(id: string) {
+export function setWorkspaceId(id: string | null) {
     chat.update((s) => { s.workspaceId = id; return s; });
-    try { localStorage.setItem('ct2_workspace_id', id); } catch {}
+    try {
+        if (id) {
+            localStorage.setItem('ct2_workspace_id', id);
+        } else {
+            localStorage.removeItem('ct2_workspace_id');
+        }
+    } catch {}
 }
 
 /** Restore workspace ID from localStorage after a server restart. */
