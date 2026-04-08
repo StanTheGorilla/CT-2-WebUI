@@ -35,7 +35,7 @@
     async function openPopover() {
         if (!$chat.workspaceId) return;
         popoverOpen = !popoverOpen;
-        if (popoverOpen && fileList.length === 0) {
+        if (popoverOpen) {
             fileListLoading = true;
             try {
                 const res = await fetch(`/api/workspaces/${$chat.workspaceId}/files`);
@@ -56,6 +56,10 @@
         if (!target.closest('.ctx-popover') && !target.closest('.workspace-ctx-badge')) {
             popoverOpen = false;
         }
+    }
+
+    function handleKeydown(e: KeyboardEvent) {
+        if (e.key === 'Escape' && popoverOpen) popoverOpen = false;
     }
 
     function onKeydown(e: KeyboardEvent) {
@@ -158,7 +162,7 @@
     }
 </script>
 
-<svelte:window onclick={handleOutsideClick} />
+<svelte:window onclick={handleOutsideClick} onkeydown={handleKeydown} />
 
 <div
     class="input-dock"
@@ -238,7 +242,7 @@
             </button>
 
             {#if popoverOpen}
-                <div class="ctx-popover" role="dialog">
+                <div class="ctx-popover" role="dialog" aria-modal="true" aria-label="Workspace files">
                     <div class="ctx-popover-header">
                         <span>Workspace files</span>
                         {#if contextCount > 0}
