@@ -7,6 +7,7 @@ export interface ConversationSummary {
     created_at: string;
     updated_at: string;
     message_count: number;
+    last_route: string | null;
 }
 
 export const conversations = writable<ConversationSummary[]>([]);
@@ -57,4 +58,10 @@ export async function loadConversation(id: string) {
     const res = await fetch(`/api/conversations/${id}`);
     if (!res.ok) return null;
     return await res.json();
+}
+
+export function updateConversationTitle(id: string, title: string) {
+    conversations.update(list =>
+        list.map(c => c.id === id ? { ...c, title } : c)
+    );
 }
