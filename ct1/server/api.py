@@ -1,6 +1,8 @@
 import asyncio
 import json
+import re as _re
 import yaml
+import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -20,6 +22,57 @@ from ct1.memory.session_store import SessionStore
 from ct1.memory.conversation_db import ConversationDB
 from ct1.memory.component_cache import ComponentCache
 from ct1.server.workspace import WorkspaceManager, is_command_safe
+
+_TITLE_STRIP = _re.compile(
+    r'^(?:(?:can\s+you|please|could\s+you|i(?:\'d)?\s+(?:like|want|need)(?:\s+you)?\s+to|'
+    r'generate|create|make|build|write|design|implement|develop|add|fix|update|'
+    r'show(?:\s+me)?|give\s+me|help\s+(?:me\s+)?(?:with\s+)?|explain|describe)\s+)+',
+    _re.IGNORECASE,
+)
+_TITLE_ARTICLE = _re.compile(r'^\s*(?:a|an|the)\s+', _re.IGNORECASE)
+
+def _heuristic_title(msg: str) -> str:
+    """Strip common filler prefixes and return a concise title (max 6 words)."""
+    text = (msg.strip() if isinstance(msg, str) else str(msg))[:300]
+    text = _TITLE_STRIP.sub('', text).strip()
+    text = _TITLE_ARTICLE.sub('', text).strip()
+    first_line = _re.split(r'[.!?\n]', text)[0].strip()
+    words = first_line.split()[:6]
+    result = ' '.join(words).capitalize()
+    fallback = msg.strip()[:40] if isinstance(msg, str) else ''
+    return result or fallback or 'New chat'
+
+async def _refine_title(conv_id: str, first_msg: str, websocket: WebSocket) -> None:
+    """Call llama-server directly for a short AI-generated title, then update DB + notify frontend."""
+    try:
+        port = _raw_cfg.get("llama_server", {}).get("port", 8080)
+        prompt = (
+            f"Respond with only a 4-6 word title for this message. "
+            f"No punctuation, no quotes, no explanation.\n\nMessage: {first_msg[:200]}"
+        )
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                f"http://localhost:{port}/v1/chat/completions",
+                json={
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 20,
+                    "temperature": 0.3,
+                    "stream": False,
+                },
+            )
+        if resp.status_code == 200:
+            raw = resp.json()["choices"][0]["message"]["content"].strip().strip('"\'')
+            words = raw.split()
+            if 2 <= len(words) <= 8:
+                title = ' '.join(words).capitalize()
+                if _db and getattr(_db, '_conn', None):
+                    await _db.rename_conversation(conv_id, title)
+                try:
+                    await websocket.send_json({"event": "title_update", "id": conv_id, "title": title})
+                except Exception:
+                    pass  # WS may be closed — DB is already updated
+    except Exception as e:
+        print(f"[api] title refinement skipped: {e}")
 
 _CONFIG_PATH = Path(__file__).parent.parent.parent / "ct1" / "server" / "model_config.yaml"
 _MODES_DIR = Path(__file__).parent.parent / "modes"
@@ -1342,16 +1395,16 @@ async def ws_think(websocket: WebSocket):
                     })
 
                     # Auto-persist conversation
+                    _is_new_conv = False
                     if _db and getattr(_db, '_conn', None):
                         try:
                             conv_id = msg.get("conversation_id")
                             if not conv_id:
                                 title_text = goal if isinstance(goal, str) else (goal[0].get("text", "") if isinstance(goal, list) else str(goal))
-                                title = title_text[:40].strip()
-                                if len(title_text) > 40:
-                                    title += "..."
+                                title = _heuristic_title(title_text)
                                 conv_id = await _db.create_conversation(title, _raw_cfg.get("active_preset", ""))
                                 await websocket.send_json({"event": "conversation_id", "id": conv_id})
+                                _is_new_conv = True
 
                             position = msg.get("position", 0)
                             user_content = goal if isinstance(goal, str) else json.dumps(goal)
@@ -1364,7 +1417,13 @@ async def ws_think(websocket: WebSocket):
                                 route=result.get("route", ""),
                                 specialist_data=json.dumps(result.get("specialist_data") or {}),
                                 reflection=json.dumps(result.get("reflection") or {}),
+                                detected_lang=result.get("detected_lang", ""),
                             )
+
+                            # Refine title with LLM for new conversations
+                            if _is_new_conv:
+                                first_msg_text = goal if isinstance(goal, str) else (goal[0].get("text", "") if isinstance(goal, list) else str(goal))
+                                asyncio.create_task(_refine_title(conv_id, first_msg_text, websocket))
                         except Exception as db_err:
                             print(f"[api] conversation save error: {db_err}")  # non-fatal
 
