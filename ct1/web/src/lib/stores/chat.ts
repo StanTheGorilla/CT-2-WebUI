@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store';
 import { WS } from '$lib/ws';
 import { preferences } from '$lib/stores/preferences';
+import { updateConversationTitle } from '$lib/stores/conversations';
 
 export interface Attachment {
     type: 'image' | 'file';
@@ -222,6 +223,9 @@ function handleEvent(data: Record<string, any>) {
         switch (data.event) {
             case 'conversation_id':
                 s.conversationId = data.id;
+                break;
+            case 'title_update':
+                updateConversationTitle(data.id, data.title);
                 break;
             case 'routing':
                 s.phase = 'routing';
@@ -559,6 +563,7 @@ export function loadFromHistory(conv: {
         specialist_data?: string;
         reflection?: string;
         feedback?: number;
+        detected_lang?: string;
     }>;
 }) {
     chat.update((s) => {
@@ -568,6 +573,12 @@ export function loadFromHistory(conv: {
             // Derive isCode from route, or detect HTML for old messages without route
             const isCode = route === 'ROUTE_DESIGN' || route === 'ROUTE_CODE' || route === 'ROUTE_COMPUTER'
                 || (m.role === 'assistant' && /^<!doctype\s/i.test(m.content.trim()));
+
+            // Derive detectedLang: use saved value, or fall back from route for older messages
+            const detectedLang = m.detected_lang || (
+                route === 'ROUTE_DESIGN' ? 'html' :
+                route === 'ROUTE_COMPUTER' ? 'multi' : undefined
+            );
 
             // Safe JSON parsing — malformed data must not crash the load
             let specialistData;
@@ -585,6 +596,7 @@ export function loadFromHistory(conv: {
                 thinking: m.thinking || undefined,
                 route,
                 isCode,
+                detectedLang,
                 specialistData,
                 reflection,
                 feedback: m.feedback,
