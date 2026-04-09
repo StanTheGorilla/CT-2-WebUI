@@ -226,9 +226,11 @@
                         <div class="time-label">{group.label}</div>
 
                         {#each group.items as conv (conv.id)}
+                            {@const badge = routeBadge(conv.last_route)}
                             <div
                                 class="row conv-row"
                                 class:active={$activeConversationId === conv.id}
+                                class:renaming={renamingId === conv.id}
                                 role="button"
                                 tabindex="0"
                                 onclick={() => selectConversation(conv.id)}
@@ -244,31 +246,32 @@
                                         onclick={(e) => e.stopPropagation()}
                                     />
                                 {:else}
-                                    <span class="row-text">{conv.title}</span>
+                                    <span class="row-text" title={conv.title}>{conv.title}</span>
                                 {/if}
 
-                                {#if routeBadge(conv.last_route)}
-                                    {@const badge = routeBadge(conv.last_route)}
-                                    <span class="mode-badge {badge!.cls}">{badge!.label}</span>
-                                {/if}
+                                <div class="meta-slot">
+                                    {#if badge}
+                                        <span class="mode-badge {badge.cls}">{badge.label}</span>
+                                    {/if}
 
-                                <div class="actions" onclick={(e) => e.stopPropagation()}>
-                                    <button class="act" title="Rename" onclick={() => startRename(conv.id, conv.title)}>
-                                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                                            <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                                        </svg>
-                                    </button>
-                                    <button class="act" title="Export" onclick={() => handleExport(conv.id, conv.title)}>
-                                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                                            <path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                                        </svg>
-                                    </button>
-                                    <button class="act del" title="Delete" onclick={() => handleDelete(conv.id)}>
-                                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                                            <path d="M2 4h12M5 4V2.5a.5.5 0 01.5-.5h5a.5.5 0 01.5.5V4M3.5 4l.75 9.5a1 1 0 001 .9h5.5a1 1 0 001-.9L12.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                                            <path d="M6.5 7v4.5M9.5 7v4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-                                        </svg>
-                                    </button>
+                                    <div class="actions">
+                                        <button class="act" title="Rename" onclick={(e) => { e.stopPropagation(); startRename(conv.id, conv.title); }}>
+                                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                                <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                            </svg>
+                                        </button>
+                                        <button class="act" title="Export" onclick={(e) => { e.stopPropagation(); handleExport(conv.id, conv.title); }}>
+                                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                                <path d="M8 2v8M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                            </svg>
+                                        </button>
+                                        <button class="act del" title="Delete" onclick={(e) => { e.stopPropagation(); handleDelete(conv.id); }}>
+                                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                                <path d="M2 4h12M5 4V2.5a.5.5 0 01.5-.5h5a.5.5 0 01.5.5V4M3.5 4l.75 9.5a1 1 0 001 .9h5.5a1 1 0 001-.9L12.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                                                <path d="M6.5 7v4.5M9.5 7v4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                            </svg>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         {/each}
@@ -297,13 +300,13 @@
        ═══════════════════════════════════════════════ */
     .sidebar {
         position: fixed;
-        top: 68px;
-        left: 12px;
-        bottom: 12px;
-        width: 300px;
+        top: 64px;
+        left: 16px;
+        bottom: 16px;
+        width: min(352px, calc(100vw - 32px));
         z-index: 91;
         pointer-events: none;
-        transform: translateX(-320px);
+        transform: translateX(calc(-100% - 28px));
         opacity: 0;
         transition:
             transform 250ms cubic-bezier(0.4, 0, 0.2, 1),
@@ -319,24 +322,41 @@
     }
 
     .sidebar-inner {
+        position: relative;
+        isolation: isolate;
         height: 100%;
         display: flex;
         flex-direction: column;
-        background: var(--bubble-strong);
+        background: color-mix(in srgb, var(--surface-solid) 76%, var(--bubble-strong));
         backdrop-filter: var(--bubble-blur-heavy);
         -webkit-backdrop-filter: var(--bubble-blur-heavy);
-        border: var(--bubble-border);
-        border-radius: 20px;
+        border: 1px solid color-mix(in srgb, var(--surface-solid) 34%, var(--border));
+        border-radius: 24px;
         box-shadow:
-            var(--bubble-glow-strong),
-            0 24px 80px rgba(0, 0, 0, 0.08);
+            0 18px 42px rgba(0, 0, 0, 0.08),
+            0 6px 16px rgba(0, 0, 0, 0.04),
+            inset 0 1px 0 rgba(255, 255, 255, 0.22);
         overflow: hidden;
+    }
+    .sidebar-inner::before {
+        content: none;
+    }
+    :global([data-theme="dark"]) .sidebar-inner {
+        background: rgba(13, 13, 18, 0.88);
+        border-color: rgba(255, 255, 255, 0.10);
+        box-shadow:
+            0 22px 52px rgba(0, 0, 0, 0.42),
+            0 8px 20px rgba(0, 0, 0, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.05);
     }
 
     /* ─── Top: New Chat + Search ─── */
     .top-area {
+        position: relative;
         flex-shrink: 0;
-        padding: 20px 18px 12px;
+        padding: 22px 20px 16px;
+        border-bottom: 1px solid var(--border-subtle);
+        background: color-mix(in srgb, var(--surface-solid) 18%, transparent);
     }
 
     .new-chat {
@@ -344,29 +364,33 @@
         align-items: center;
         gap: 10px;
         width: 100%;
-        height: 44px;
-        padding: 0 16px;
-        margin-bottom: 14px;
+        min-height: 48px;
+        padding: 0 18px;
+        margin-bottom: 16px;
         border: 1px solid var(--border);
-        border-radius: 14px;
-        background: var(--surface);
+        border-radius: 16px;
+        background: color-mix(in srgb, var(--surface-solid) 58%, var(--surface));
         color: var(--text);
         font-family: var(--font-body);
         font-size: 14px;
-        font-weight: 500;
+        font-weight: 600;
         cursor: pointer;
-        transition: all 180ms ease;
-        letter-spacing: -0.01em;
+        transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+        letter-spacing: -0.015em;
+        box-shadow: none;
     }
     .new-chat:hover {
         background: var(--surface-hover);
         border-color: var(--border-strong);
-        box-shadow: var(--shadow-sm);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
     }
     .new-chat:active {
         transform: scale(0.98);
     }
     .new-chat svg {
+        width: 30px;
+        height: 30px;
+        padding: 0;
         color: var(--text-muted);
         flex-shrink: 0;
     }
@@ -375,7 +399,7 @@
     .scroll-area {
         flex: 1;
         overflow-y: auto;
-        padding: 0 10px 20px;
+        padding: 8px 12px 24px;
         scrollbar-width: none;
     }
     .scroll-area::-webkit-scrollbar { display: none; }
@@ -384,23 +408,23 @@
     .section-head {
         display: flex;
         align-items: center;
-        padding: 8px 8px 6px;
+        padding: 10px 10px 8px;
     }
 
     .section-toggle {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
         flex: 1;
         background: none;
         border: none;
         cursor: pointer;
         padding: 0;
         font-family: var(--font-body);
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
         color: var(--text-muted);
-        letter-spacing: 0.03em;
+        letter-spacing: 0.09em;
         text-transform: uppercase;
         transition: color 150ms ease;
     }
@@ -424,7 +448,7 @@
         border-radius: 8px;
         color: var(--text-muted);
         cursor: pointer;
-        opacity: 0;
+        opacity: 0.5;
         transition: all 150ms ease;
     }
     .section-head:hover .section-plus { opacity: 1; }
@@ -437,22 +461,35 @@
     .row {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
         width: 100%;
-        padding: 10px 12px;
+        min-height: 50px;
+        padding: 12px 14px;
         border: none;
-        border-radius: 12px;
+        border-radius: 14px;
         background: none;
         cursor: pointer;
         text-align: left;
         position: relative;
         overflow: hidden;
-        transition: background 150ms ease;
+        transition: background 150ms ease, box-shadow 150ms ease;
         font-family: var(--font-body);
-        margin-bottom: 2px;
+        margin-bottom: 4px;
+        box-shadow: inset 0 0 0 1px transparent;
     }
-    .row:hover { background: var(--surface); }
-    .row.active { background: var(--surface-hover); }
+    .row:hover {
+        background: color-mix(in srgb, var(--surface-solid) 46%, var(--surface));
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--surface-solid) 18%, transparent);
+    }
+    .row.active {
+        background: color-mix(in srgb, var(--surface-hover) 90%, var(--accent-subtle));
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+    }
+    .row:focus-visible {
+        outline: none;
+        background: color-mix(in srgb, var(--surface-solid) 46%, var(--surface));
+        box-shadow: inset 0 0 0 1px var(--border-strong);
+    }
     .row::before {
         content: '';
         position: absolute;
@@ -466,7 +503,8 @@
         transition: height 150ms ease;
     }
     .row.active::before {
-        height: 55%;
+        height: 62%;
+        box-shadow: none;
     }
 
     .row-icon {
@@ -480,13 +518,13 @@
         flex: 1;
         min-width: 0;
         font-size: 14px;
-        font-weight: 500;
+        font-weight: 550;
         color: var(--text);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        line-height: 1.4;
-        letter-spacing: -0.01em;
+        line-height: 1.45;
+        letter-spacing: -0.015em;
     }
 
     .badge {
@@ -495,108 +533,152 @@
         color: var(--text-muted);
         background: var(--accent-subtle);
         padding: 2px 8px;
-        border-radius: 10px;
+        border-radius: 999px;
         flex-shrink: 0;
+        border: 1px solid transparent;
     }
 
     .mode-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         font-size: 10px;
         font-weight: 600;
-        padding: 2px 7px;
-        border-radius: 8px;
+        min-width: 0;
+        max-width: 100%;
+        padding: 4px 8px;
+        border-radius: 999px;
         flex-shrink: 0;
-        letter-spacing: 0.02em;
+        letter-spacing: 0.06em;
         opacity: 0.8;
+        text-transform: uppercase;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        transition: opacity 150ms ease, transform 150ms ease;
+        border: 1px solid transparent;
+        box-shadow: none;
     }
     .badge-code {
         color: rgb(59, 130, 246);
         background: rgba(59, 130, 246, 0.12);
+        border-color: transparent;
     }
     .badge-design {
         color: rgb(139, 92, 246);
         background: rgba(139, 92, 246, 0.12);
+        border-color: transparent;
     }
     .badge-computer {
         color: rgb(34, 197, 94);
         background: rgba(34, 197, 94, 0.12);
+        border-color: transparent;
     }
 
     /* ─── Divider ─── */
     .divider {
         height: 1px;
         background: var(--border-subtle);
-        margin: 8px 8px 4px;
+        margin: 12px 10px 6px;
     }
 
     /* ─── Time groups ─── */
     .time-group {
-        margin-top: 4px;
+        margin-top: 6px;
     }
     .time-group:not(.first) {
-        margin-top: 12px;
+        margin-top: 16px;
         border-top: 1px solid var(--border-subtle);
-        padding-top: 4px;
+        padding-top: 8px;
     }
     .time-group.first {
         margin-top: 0;
     }
 
     .time-label {
-        font-size: 11px;
-        font-weight: 500;
+        font-size: 10px;
+        font-weight: 700;
         color: var(--text-muted);
-        padding: 8px 12px 4px;
-        letter-spacing: 0.06em;
+        padding: 8px 14px 6px;
+        letter-spacing: 0.12em;
         text-transform: uppercase;
     }
 
     /* ─── Conversation rows ─── */
     .conv-row {
-        gap: 0;
+        gap: 12px;
     }
 
     .project-row {
-        background: var(--accent-subtle);
+        background: color-mix(in srgb, var(--accent-subtle) 92%, transparent);
+        box-shadow: inset 0 0 0 1px transparent;
     }
     .project-row:hover {
-        background: var(--surface-hover);
+        background: color-mix(in srgb, var(--surface-hover) 90%, var(--accent-subtle));
     }
     .project-row.active {
-        background: var(--surface-hover);
+        background: color-mix(in srgb, var(--surface-hover) 94%, var(--accent-subtle));
     }
 
     /* ─── Hover action buttons ─── */
+    .meta-slot {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        width: 92px;
+        min-width: 92px;
+        margin-left: auto;
+    }
+
     .actions {
-        display: none;
+        position: absolute;
+        right: 0;
+        top: 50%;
+        display: flex;
         align-items: center;
         gap: 1px;
-        margin-left: auto;
         flex-shrink: 0;
-        background: var(--surface);
+        background: color-mix(in srgb, var(--surface-solid) 78%, var(--surface));
         border: 1px solid var(--border);
-        border-radius: 8px;
+        border-radius: 10px;
         padding: 2px;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(-50%) translateX(6px);
+        transition: opacity 150ms ease, transform 150ms ease;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.10);
     }
-    .conv-row:hover .actions { display: flex; }
-    .conv-row:hover .row-text { max-width: calc(100% - 90px); }
-    .conv-row:hover .mode-badge { display: none; }
+    .conv-row:not(.renaming):hover .actions,
+    .conv-row:not(.renaming):focus-within .actions {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateY(-50%) translateX(0);
+    }
+    .conv-row:hover .mode-badge,
+    .conv-row:focus-within .mode-badge,
+    .conv-row.renaming .mode-badge {
+        opacity: 0;
+        transform: translateY(-2px);
+    }
 
     .act {
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 26px;
-        height: 26px;
+        width: 27px;
+        height: 27px;
         background: none;
         border: none;
         border-radius: 6px;
         color: var(--text-muted);
         cursor: pointer;
-        transition: color 150ms ease, background 150ms ease;
+        transition: color 150ms ease, background 150ms ease, transform 150ms ease;
     }
     .act:hover {
         color: var(--text);
         background: var(--surface-hover);
+        transform: none;
     }
     .act.del:hover {
         color: var(--error);
@@ -646,27 +728,29 @@
     /* ─── Bottom bar ─── */
     .bottom-bar {
         flex-shrink: 0;
-        padding: 10px 18px 18px;
+        padding: 14px 20px 20px;
         border-top: 1px solid var(--border-subtle);
+        background: transparent;
     }
     .bottom-link {
         display: flex;
         align-items: center;
         gap: 10px;
         width: 100%;
-        padding: 10px 12px;
-        border: none;
-        border-radius: 12px;
+        padding: 12px 14px;
+        border: 1px solid transparent;
+        border-radius: 14px;
         background: none;
         color: var(--text-muted);
         font-family: var(--font-body);
         font-size: 13px;
-        font-weight: 500;
+        font-weight: 600;
         cursor: pointer;
         transition: all 150ms ease;
     }
     .bottom-link:hover {
         color: var(--text-secondary);
-        background: var(--surface);
+        background: color-mix(in srgb, var(--surface-solid) 40%, var(--surface));
+        border-color: var(--border);
     }
 </style>

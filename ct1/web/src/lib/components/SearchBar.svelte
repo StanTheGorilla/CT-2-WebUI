@@ -58,36 +58,46 @@
 <style>
     .search-wrap {
         position: relative;
-        padding: 0 12px 6px;
+        padding: 0;
     }
     .search-field {
         position: relative;
         display: flex;
         align-items: center;
     }
+    .search-field::before {
+        content: none;
+    }
     .search-icon {
         position: absolute;
-        left: 10px;
+        left: 14px;
         color: var(--text-muted);
         pointer-events: none;
+        transition: color 180ms ease;
     }
     .search-input {
         width: 100%;
-        padding: 7px 10px 7px 30px;
-        font-size: 12px;
+        min-height: 42px;
+        padding: 10px 14px 10px 38px;
+        font-size: 13px;
         font-family: inherit;
-        font-weight: 400;
+        font-weight: 500;
         letter-spacing: 0.01em;
         border: 1px solid var(--border);
-        border-radius: 10px;
-        background: var(--surface);
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--surface-solid) 50%, var(--surface));
         color: var(--text);
         outline: none;
-        transition: border-color 200ms ease, background 200ms ease;
+        transition: border-color 200ms ease, background 200ms ease, box-shadow 200ms ease;
+        box-shadow: none;
     }
     .search-input:focus {
         border-color: var(--border-strong);
         background: var(--surface-hover);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+    }
+    .search-field:focus-within .search-icon {
+        color: var(--text-secondary);
     }
     .search-input::placeholder {
         color: var(--text-muted);
@@ -96,19 +106,19 @@
     .search-results {
         position: absolute;
         top: calc(100% + 4px);
-        left: 12px;
-        right: 12px;
-        background: var(--bubble-strong);
+        left: 0;
+        right: 0;
+        background: color-mix(in srgb, var(--surface-solid) 78%, var(--bubble-strong));
         backdrop-filter: var(--bubble-blur);
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
-        border-radius: 12px;
-        box-shadow: var(--shadow-md);
+        border-radius: 14px;
+        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.08);
         z-index: 10;
-        max-height: 220px;
+        max-height: 260px;
         overflow-y: auto;
         scrollbar-width: none;
-        padding: 4px;
+        padding: 6px;
     }
     .search-results::-webkit-scrollbar {
         display: none;
@@ -116,36 +126,37 @@
     .search-result {
         display: flex;
         flex-direction: column;
-        gap: 2px;
+        gap: 4px;
         width: 100%;
         text-align: left;
-        padding: 8px 10px;
+        padding: 10px 12px;
         border: none;
         background: transparent;
         cursor: pointer;
         font-family: inherit;
         color: inherit;
-        border-radius: 8px;
-        transition: background 150ms ease;
+        border-radius: 10px;
+        transition: background 150ms ease, box-shadow 150ms ease;
     }
     .search-result:hover {
-        background: var(--surface);
+        background: color-mix(in srgb, var(--surface-solid) 40%, var(--surface));
+        box-shadow: none;
     }
     .result-title {
-        font-size: 12px;
+        font-size: 12.5px;
         font-weight: 600;
         color: var(--text);
         letter-spacing: -0.01em;
     }
     .result-snippet {
-        font-size: 11px;
+        font-size: 11.5px;
         color: var(--text-muted);
         line-height: 1.4;
     }
     .result-snippet :global(mark) {
-        background: rgba(232, 133, 12, 0.2);
+        background: rgba(232, 133, 12, 0.18);
         color: var(--text);
-        border-radius: 2px;
-        padding: 0 2px;
+        border-radius: 4px;
+        padding: 0 3px;
     }
 </style>
