@@ -55,6 +55,16 @@ class ConversationDB:
         )
         await self._conn.commit()
 
+        # Migrations — add columns introduced after initial schema
+        for migration in [
+            "ALTER TABLE messages ADD COLUMN detected_lang TEXT",
+        ]:
+            try:
+                await self._conn.execute(migration)
+                await self._conn.commit()
+            except Exception:
+                pass  # Column already exists
+
         await self._conn.executescript(
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -99,7 +109,10 @@ class ConversationDB:
         cursor = await self._conn.execute(
             """
             SELECT c.id, c.title, c.preset, c.created_at, c.updated_at,
-                   COUNT(m.id) AS message_count
+                   COUNT(m.id) AS message_count,
+                   (SELECT route FROM messages
+                    WHERE conversation_id = c.id AND role = 'assistant'
+                    ORDER BY position DESC LIMIT 1) AS last_route
             FROM conversations c
             LEFT JOIN messages m ON m.conversation_id = c.id
             GROUP BY c.id
@@ -117,6 +130,7 @@ class ConversationDB:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "message_count": row["message_count"],
+                "last_route": row["last_route"],
             }
             for row in rows
         ]
@@ -142,7 +156,7 @@ class ConversationDB:
 
         msg_cursor = await self._conn.execute(
             "SELECT id, role, content, thinking, draft, route, "
-            "specialist_data, reflection, feedback, created_at, position "
+            "specialist_data, reflection, feedback, created_at, position, detected_lang "
             "FROM messages WHERE conversation_id = ? ORDER BY position",
             (conv_id,),
         )
@@ -160,6 +174,7 @@ class ConversationDB:
                 "feedback": m["feedback"],
                 "created_at": m["created_at"],
                 "position": m["position"],
+                "detected_lang": m["detected_lang"] or "",
             }
             for m in msg_rows
         ]
@@ -194,6 +209,7 @@ class ConversationDB:
         route: str = "",
         specialist_data: str = "",
         reflection: str = "",
+        detected_lang: str = "",
     ) -> str:
         """Add a message to a conversation. Returns the message UUID.
         Also bumps the conversation's updated_at timestamp."""
@@ -202,8 +218,8 @@ class ConversationDB:
         await self._conn.execute(
             "INSERT INTO messages "
             "(id, conversation_id, role, content, thinking, draft, route, "
-            "specialist_data, reflection, feedback, created_at, position) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+            "specialist_data, reflection, feedback, created_at, position, detected_lang) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
             (
                 msg_id,
                 conv_id,
@@ -216,6 +232,7 @@ class ConversationDB:
                 reflection,
                 now,
                 position,
+                detected_lang,
             ),
         )
         await self._conn.execute(
