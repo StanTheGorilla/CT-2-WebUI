@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onMount } from 'svelte';
     import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, type Attachment, type ModeOverride } from '$lib/stores/chat';
 
     let input = $state('');
@@ -9,11 +10,20 @@
     let popoverOpen = $state(false);
     let fileList = $state<string[]>([]);
     let fileListLoading = $state(false);
+    let lastWorkspaceId = $state<string | null>(null);
+    let fileListRequest = 0;
+    let didInitialFocus = $state(false);
+    let wasDisabled = $state(true);
+    let visionSupported = $state(false);
+    const TEXT_FILE_ACCEPT = '.txt,.html,.htm,.css,.js,.ts,.py,.json,.md,.csv,.xml,.yaml,.yml,.svg,.sh,.bat,.sql,.rb,.go,.rs,.java,.c,.cpp,.h,.hpp,.toml,.ini,.cfg';
 
     const disabled = $derived($chat.phase !== 'idle' && $chat.phase !== 'done');
     const currentMode = $derived($chat.modeOverride);
+    const isWorkspaceSession = $derived(!!$chat.workspaceId);
     const hasWorkspaceContext = $derived(!!$chat.workspaceId);
     const contextCount = $derived($chat.contextFiles.length);
+    const attachAccept = $derived(`${visionSupported ? 'image/*,' : ''}${TEXT_FILE_ACCEPT}`);
+    const attachLabel = $derived(visionSupported ? 'Attach file or image' : 'Attach file (current model has no vision)');
 
     const modes: { key: ModeOverride; label: string }[] = [
         { key: 'chat', label: 'Chat' },
@@ -32,19 +42,29 @@
     }
 
     async function openPopover() {
-        if (!$chat.workspaceId) return;
+        const workspaceId = $chat.workspaceId;
+        if (!workspaceId) return;
         popoverOpen = !popoverOpen;
-        if (popoverOpen) {
-            fileListLoading = true;
-            try {
-                const res = await fetch(`/api/workspaces/${$chat.workspaceId}/files`);
-                const data = await res.json();
-                fileList = (data as Array<{ path: string; is_dir: boolean }>)
-                    .filter(f => !f.is_dir)
-                    .map(f => f.path);
-            } catch {
+        if (!popoverOpen) return;
+
+        const requestId = ++fileListRequest;
+        fileList = [];
+        fileListLoading = true;
+        try {
+            const res = await fetch(`/api/workspaces/${workspaceId}/files`);
+            const data = await res.json();
+            if (requestId !== fileListRequest || workspaceId !== $chat.workspaceId || !popoverOpen) {
+                return;
+            }
+            fileList = (data as Array<{ path: string; is_dir: boolean }>)
+                .filter(f => !f.is_dir)
+                .map(f => f.path);
+        } catch {
+            if (requestId === fileListRequest) {
                 fileList = [];
-            } finally {
+            }
+        } finally {
+            if (requestId === fileListRequest) {
                 fileListLoading = false;
             }
         }
@@ -80,17 +100,32 @@
         'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'toml', 'ini', 'cfg',
     ]);
 
+    async function loadModelCapabilities() {
+        try {
+            const res = await fetch('/api/model');
+            const data = await res.json();
+            visionSupported = data.vision_supported ?? false;
+        } catch {
+            visionSupported = false;
+        }
+    }
+
     function getExtension(name: string): string {
         const i = name.lastIndexOf('.');
         return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
     }
 
     function readFiles(files: FileList | File[]) {
-        for (const file of files) {
-            if (attachments.length >= 4) break;
+        const remainingSlots = Math.max(0, 4 - attachments.length);
+        if (remainingSlots === 0) return;
+
+        let acceptedCount = 0;
+        for (const file of Array.from(files)) {
+            if (acceptedCount >= remainingSlots) break;
             const ext = getExtension(file.name);
 
             if (file.type.startsWith('image/')) {
+                if (!visionSupported) continue;
                 const reader = new FileReader();
                 reader.onload = () => {
                     attachments = [...attachments, {
@@ -100,6 +135,7 @@
                     }];
                 };
                 reader.readAsDataURL(file);
+                acceptedCount += 1;
             } else if (TEXT_EXTENSIONS.has(ext) || file.type.startsWith('text/')) {
                 const reader = new FileReader();
                 reader.onload = () => {
@@ -115,6 +151,7 @@
                     }];
                 };
                 reader.readAsText(file);
+                acceptedCount += 1;
             }
         }
     }
@@ -154,11 +191,40 @@
                 if (file) images.push(file);
             }
         }
-        if (images.length > 0) {
+        if (images.length > 0 && visionSupported) {
             e.preventDefault();
             readFiles(images);
         }
     }
+
+    onMount(() => {
+        void loadModelCapabilities();
+    });
+
+    $effect(() => {
+        const workspaceId = $chat.workspaceId;
+        if (workspaceId !== lastWorkspaceId) {
+            lastWorkspaceId = workspaceId;
+            fileListRequest += 1;
+            fileList = [];
+            fileListLoading = false;
+            popoverOpen = false;
+        }
+    });
+
+    $effect(() => {
+        if (!didInitialFocus && textarea && !disabled) {
+            didInitialFocus = true;
+            requestAnimationFrame(() => textarea?.focus());
+        }
+    });
+
+    $effect(() => {
+        if (wasDisabled && !disabled && textarea) {
+            requestAnimationFrame(() => textarea?.focus());
+        }
+        wasDisabled = disabled;
+    });
 </script>
 
 <svelte:window onclick={handleOutsideClick} onkeydown={handleKeydown} />
@@ -198,33 +264,35 @@
         </div>
     {/if}
 
-    <div class="mode-bar">
-        {#each modes as m}
-            <button
-                class="mode-pill"
-                class:active={currentMode === m.key}
-                onclick={() => setMode(m.key)}
-                {disabled}
-            >
-                <svg class="mode-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
-                    {#if m.key === 'auto'}
-                        <path d="M8 2l1.5 3.5L13 7l-3.5 1.5L8 12l-1.5-3.5L3 7l3.5-1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                    {:else if m.key === 'design'}
-                        <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2"/>
-                        <circle cx="8" cy="8" r="2" fill="currentColor" opacity="0.4"/>
-                    {:else if m.key === 'code'}
-                        <path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                    {:else if m.key === 'chat'}
-                        <path d="M3 4.5A1.5 1.5 0 014.5 3h7A1.5 1.5 0 0113 4.5v5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5V11H4.5A1.5 1.5 0 013 9.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                    {:else if m.key === 'computer'}
-                        <rect x="2" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-                        <path d="M5.5 14h5M8 11v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                    {/if}
-                </svg>
-                {m.label}
-            </button>
-        {/each}
-    </div>
+    {#if !isWorkspaceSession}
+        <div class="mode-bar">
+            {#each modes as m}
+                <button
+                    class="mode-pill"
+                    class:active={currentMode === m.key}
+                    onclick={() => setMode(m.key)}
+                    {disabled}
+                >
+                    <svg class="mode-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+                        {#if m.key === 'auto'}
+                            <path d="M8 2l1.5 3.5L13 7l-3.5 1.5L8 12l-1.5-3.5L3 7l3.5-1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                        {:else if m.key === 'design'}
+                            <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2"/>
+                            <circle cx="8" cy="8" r="2" fill="currentColor" opacity="0.4"/>
+                        {:else if m.key === 'code'}
+                            <path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                        {:else if m.key === 'chat'}
+                            <path d="M3 4.5A1.5 1.5 0 014.5 3h7A1.5 1.5 0 0113 4.5v5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5V11H4.5A1.5 1.5 0 013 9.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                        {:else if m.key === 'computer'}
+                            <rect x="2" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+                            <path d="M5.5 14h5M8 11v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                        {/if}
+                    </svg>
+                    {m.label}
+                </button>
+            {/each}
+        </div>
+    {/if}
 
     {#if hasWorkspaceContext}
         <div class="ctx-anchor">
@@ -273,11 +341,11 @@
         </div>
     {/if}
 
-    <div class="island" class:drag-over={dragOver}>
+    <div class="island" class:drag-over={dragOver} class:is-busy={disabled}>
         <input
             bind:this={fileInput}
             type="file"
-            accept="image/*,.txt,.html,.htm,.css,.js,.ts,.py,.json,.md,.csv,.xml,.yaml,.yml,.svg,.sh,.sql,.go,.rs,.java,.c,.cpp,.h,.toml,.ini"
+            accept={attachAccept}
             multiple
             onchange={onFileSelect}
             class="file-hidden"
@@ -286,8 +354,8 @@
             class="attach-btn"
             onclick={() => fileInput?.click()}
             {disabled}
-            aria-label="Attach file"
-            title="Attach file"
+            aria-label={attachLabel}
+            title={attachLabel}
         >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                 <path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.1 2.1 0 013 3L7.2 12.8a.7.7 0 01-1-1l5.3-5.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -324,7 +392,8 @@
 
 <style>
     .input-dock {
-        padding: 8px 32px 28px;
+        --composer-max: 860px;
+        padding: 10px clamp(20px, 3vw, 36px) 28px;
         flex-shrink: 0;
         position: relative;
         z-index: 2;
@@ -334,7 +403,8 @@
     .attachments-bar {
         display: flex;
         gap: 8px;
-        max-width: 720px;
+        width: min(100%, var(--composer-max));
+        max-width: none;
         margin: 0 auto 8px;
         padding: 0 4px;
         flex-wrap: wrap;
@@ -418,8 +488,8 @@
     .mode-bar {
         display: flex;
         gap: 2px;
-        max-width: 720px;
-        margin: 0 auto 10px;
+        max-width: min(100%, var(--composer-max));
+        margin: 0 auto 8px;
         justify-content: center;
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
@@ -471,7 +541,8 @@
     /* ---- Workspace context badge + popover ---- */
     .ctx-anchor {
         position: relative;
-        max-width: 720px;
+        width: min(100%, var(--composer-max));
+        max-width: none;
         margin: 0 auto 6px;
     }
 
@@ -573,19 +644,25 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        max-width: 720px;
+        width: min(100%, var(--composer-max));
+        max-width: none;
         margin: 0 auto;
         background: var(--bubble-strong);
         backdrop-filter: var(--bubble-blur-heavy);
         -webkit-backdrop-filter: var(--bubble-blur-heavy);
         border: var(--bubble-border);
         border-radius: var(--radius-lg);
-        padding: 10px 12px 10px 12px;
+        min-height: 58px;
+        padding: 12px 15px;
         box-shadow: var(--bubble-glow);
         transition: box-shadow var(--transition-slow), border-color var(--transition);
     }
     .island:focus-within {
         box-shadow: var(--bubble-glow-strong);
+    }
+    .island.is-busy {
+        border-color: var(--border);
+        box-shadow: var(--bubble-glow);
     }
     .island.drag-over {
         border-color: var(--accent);
@@ -617,8 +694,8 @@
         background: var(--accent-subtle);
     }
     .attach-btn:disabled {
-        opacity: 0.3;
-        cursor: not-allowed;
+        opacity: 0.5;
+        cursor: default;
     }
 
     textarea {
@@ -629,6 +706,7 @@
         font-family: var(--font-body);
         font-size: 15px;
         line-height: 1.5;
+        min-height: 24px;
         resize: none;
         outline: none;
         padding: 4px 0;
@@ -638,8 +716,8 @@
         font-weight: 400;
     }
     textarea:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
+        opacity: 0.82;
+        cursor: default;
     }
 
     .island-actions {

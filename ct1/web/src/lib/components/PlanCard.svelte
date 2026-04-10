@@ -64,7 +64,7 @@
         overflow: hidden;
         box-shadow: var(--bubble-glow);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 520px;
+        max-width: min(760px, 92%);
     }
     .plan-header {
         display: flex;

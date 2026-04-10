@@ -2,7 +2,7 @@
     import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, clearPendingCommands } from '$lib/stores/chat';
     import { getLangMeta } from '$lib/langMap';
     import { render } from '$lib/markdown';
-    import hljs from 'highlight.js';
+    import hljs from '$lib/highlight';
     import ChatInput from '$lib/components/ChatInput.svelte';
     import SpecialistCard from '$lib/components/SpecialistCard.svelte';
 
@@ -22,7 +22,7 @@
         $chat.route === 'ROUTE_DESIGN' || $chat.plan?.output_type === 'html_page'
     );
     let isComputerMode = $derived(
-        $chat.modeOverride === 'computer' || isComputerRoute
+        !!$chat.workspaceId || $chat.modeOverride === 'computer' || isComputerRoute
     );
 
     let showPreview = $state(false);
@@ -42,6 +42,8 @@
     function toggleTrace(key: string) { traceOpen = traceOpen === key ? null : key; }
     let hasThinking = $derived(!!$chat.thinking || !!$chat.draftThinking);
 
+    type WorkspaceFileView = { path: string; content: string };
+
     let hasValidation = $derived(!!$chat.review || $chat.validationIssues.length > 0);
 
     let previewWidth = $state(Math.min(Math.round(window.innerWidth * 0.44), 700));
@@ -55,8 +57,10 @@
     let panelUserClosed = $state(false);   // user explicitly closed via arrow — don't auto-reopen
     let lastPanelWorkspaceId = $state<string | null>(null); // track workspace changes to reset flag
     let fileTreeRef = $state<FileTree>();
-    let viewingFile = $state<{ path: string; content: string } | null>(null);
+    let viewingFile = $state<WorkspaceFileView | null>(null);
+    let activeWorkspaceFile = $derived(((viewingFile as WorkspaceFileView | null)?.path) ?? '');
     let computerTab = $state<'files' | 'terminal'>('files');
+    let fileRequestId = $state(0);
 
     $effect(() => {
         // On mount: try to restore workspace from localStorage (survives server restarts)
@@ -72,7 +76,15 @@
         // Reset user-close flag whenever the workspace changes (different workspace or cleared)
         if (wsId !== lastPanelWorkspaceId) {
             lastPanelWorkspaceId = wsId;
-            if (wsId) panelUserClosed = false;
+            fileRequestId += 1;
+            viewingFile = null;
+            computerTab = 'files';
+            if (wsId) {
+                panelUserClosed = false;
+                showTerminal = true;
+            } else {
+                showTerminal = false;
+            }
         }
         // Restore terminal panel on navigation back — but not if user manually closed it
         if (wsId && isComputerMode && !showTerminal && !panelUserClosed) {
@@ -114,9 +126,13 @@
     });
 
     function onFileSelect(path: string) {
-        fetch(`/api/workspaces/${activeWorkspaceId}/files/${path}`)
+        const wsId = activeWorkspaceId;
+        if (!wsId) return;
+        const requestId = ++fileRequestId;
+        fetch(`/api/workspaces/${wsId}/files/${path}`)
             .then(r => r.json())
             .then(data => {
+                if (requestId !== fileRequestId || wsId !== activeWorkspaceId) return;
                 if (data.content == null) return;
                 viewingFile = { path, content: data.content };
                 computerTab = 'files';
@@ -1142,7 +1158,7 @@
             ></div>
             <PreviewPanel
                 code={previewCode}
-                outputType={previewOverride ? previewOutputType : ($chat.plan?.output_type ?? 'other')}
+                outputType={previewOverride ? previewOutputType : (isHtmlOutput ? 'html_page' : ($chat.plan?.output_type ?? 'other'))}
                 onClose={() => { showPreview = false; userClosedPreview = true; }}
             />
         </div>
@@ -1211,13 +1227,13 @@
                         bind:this={fileTreeRef}
                         workspaceId={activeWorkspaceId}
                         {onFileSelect}
-                        activeFile={''}
+                        activeFile={activeWorkspaceFile}
 
                     />
                 {:else}
                     <TerminalPanel
                         workspaceId={activeWorkspaceId}
-                        onClose={() => { showTerminal = false; }}
+                        onClose={() => { showTerminal = false; panelUserClosed = true; }}
                         externalOutput={$chat.terminalOutput}
                         pendingCommands={$chat.pendingCommands}
                         onCommandsConsumed={clearPendingCommands}
@@ -1283,8 +1299,10 @@
 
     .messages-inner {
         display: flex; flex-direction: column; gap: 12px;
-        max-width: 780px; margin: 0 auto;
-        padding: 28px 28px 24px;
+        width: min(100%, 1040px);
+        max-width: none;
+        margin: 0 auto;
+        padding: 30px clamp(20px, 3vw, 40px) 24px;
     }
 
     /* ================================================================
@@ -1294,10 +1312,10 @@
         align-self: flex-end;
         background: #1A1A1A;
         color: #FAFAF9;
-        padding: 11px 20px;
+        padding: 12px 20px;
         border-radius: 20px 20px 6px 20px;
-        max-width: 60%;
-        font-size: 14.5px;
+        max-width: min(68%, 720px);
+        font-size: 15px;
         font-weight: 400;
         line-height: 1.55;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.10), 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -1360,11 +1378,11 @@
         -webkit-backdrop-filter: var(--bubble-blur);
         border: var(--bubble-border);
         border-radius: 6px 20px 20px 20px;
-        padding: 16px 20px;
+        padding: 17px 22px;
         color: var(--text);
-        font-size: 14.5px;
+        font-size: 15px;
         line-height: 1.7;
-        max-width: 85%;
+        max-width: min(92%, 860px);
         box-shadow: var(--bubble-glow);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
@@ -1492,15 +1510,6 @@
         animation: springPop var(--spring-duration) var(--spring) both;
     }
 
-    .warning-banner {
-        max-width: 520px; margin: 4px auto;
-        padding: 8px 14px;
-        background: rgba(255, 180, 50, 0.10);
-        border: 1px solid rgba(255, 180, 50, 0.20);
-        border-radius: 10px;
-        font-size: 12.5px; color: var(--text-secondary); text-align: center;
-    }
-
     /* ================================================================
        PIPELINE STEPS (slim inline indicators)
        ================================================================ */
@@ -1513,16 +1522,14 @@
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
         align-self: flex-start;
-        max-width: 300px;
+        max-width: min(420px, 82%);
     }
-    .step.specialist { border-left: 2px solid var(--specialist); }
     .step.polish { border-left: 2px solid var(--success); }
 
     .step-dot {
         width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
         background: var(--brain);
     }
-    .step-dot.specialist { background: var(--specialist); }
     .step-dot.polish { background: var(--success); }
     .step-dot.pulse { animation: pulse 6s ease-in-out infinite; }
 
@@ -1554,7 +1561,7 @@
         border-radius: var(--radius);
         padding: 10px 14px;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 340px;
+        max-width: min(520px, 84%);
     }
     .comp-header {
         display: flex; align-items: center; justify-content: space-between;
@@ -1603,7 +1610,7 @@
         overflow: hidden;
         box-shadow: var(--bubble-glow);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 560px;
+        max-width: min(760px, 92%);
     }
     .gen-card.fixing { border-left-color: var(--warning); }
 
@@ -1705,15 +1712,6 @@
         background: rgba(239, 68, 68, 0.18);
         border-color: rgba(239, 68, 68, 0.30);
     }
-    .stop-row {
-        display: flex; justify-content: flex-end;
-        margin-top: 6px;
-    }
-    .stop-global {
-        width: auto; gap: 6px; padding: 0 10px;
-        font-size: 11px; font-weight: 500; letter-spacing: 0.02em;
-    }
-
     /* ================================================================
        REFINE CARD
        ================================================================ */
@@ -1724,7 +1722,7 @@
         border-radius: 12px;
         overflow: hidden;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 360px;
+        max-width: min(520px, 84%);
     }
     .refine-bar {
         display: flex; align-items: center; gap: 8px;
@@ -1778,7 +1776,7 @@
         border-radius: 14px;
         overflow: hidden;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 480px;
+        max-width: min(640px, 88%);
     }
     .checklist-card.all-done { border-left-color: var(--success); }
 
@@ -1860,7 +1858,7 @@
         border-radius: 12px;
         overflow: hidden;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 560px;
+        max-width: min(760px, 92%);
     }
     .think-header {
         display: flex; align-items: center; gap: 8px;
@@ -1906,7 +1904,7 @@
         border-radius: 12px;
         padding: 12px 16px;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 520px;
+        max-width: min(760px, 92%);
     }
     .issues-header {
         display: flex; align-items: center; gap: 10px;
@@ -1953,7 +1951,7 @@
         overflow: hidden;
         box-shadow: var(--bubble-glow);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 520px;
+        max-width: min(760px, 92%);
     }
     .output-bar {
         display: flex; align-items: center; gap: 10px;
@@ -2073,7 +2071,7 @@
         border-radius: 12px;
         overflow: hidden;
         animation: slideUpSpring 280ms var(--spring-soft) both;
-        max-width: 560px;
+        max-width: min(760px, 92%);
     }
     .trace-section { padding: 12px 16px; }
     .trace-section + .trace-section { border-top: 1px solid var(--border-subtle); }
@@ -2127,6 +2125,11 @@
     .bubble-row:hover .feedback-row,
     .feedback-row:has(.active) {
         opacity: 1;
+    }
+    @media (hover: none) {
+        .feedback-row {
+            opacity: 1;
+        }
     }
     .feedback-btn {
         background: none;
@@ -2390,7 +2393,7 @@
         overflow: hidden;
         box-shadow: var(--bubble-glow);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 520px;
+        max-width: min(760px, 92%);
     }
     .computer-result-header {
         display: flex;

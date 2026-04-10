@@ -42,11 +42,13 @@
     async function createWorkspace() {
         const name = window.prompt('Project name:');
         if (name === null) return;
+        const trimmed = name.trim();
+        if (!trimmed) return;
         try {
             const res = await fetch('/api/workspaces', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name.trim() }),
+                body: JSON.stringify({ name: trimmed }),
             });
             const ws: Workspace = await res.json();
             workspaces = [ws, ...workspaces];
@@ -96,14 +98,14 @@
     }
 
     async function selectConversation(id: string) {
-        const conv = await loadConversation(id);
-        if (conv) {
-            activeConversationId.set(id);
-            loadFromHistory(conv);
-        }
         setWorkspaceId(null);
         setMode('chat');
+        activeConversationId.set(id);
         sidebarOpen.set(false);
+        const conv = await loadConversation(id);
+        if (conv) {
+            loadFromHistory(conv);
+        }
     }
 
     function startRename(id: string, currentTitle: string) {

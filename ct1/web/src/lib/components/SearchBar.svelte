@@ -3,7 +3,7 @@
     let results = $state<any[]>([]);
     let debounceTimer: ReturnType<typeof setTimeout>;
 
-    import { loadFromHistory } from '$lib/stores/chat';
+    import { loadFromHistory, setMode, setWorkspaceId } from '$lib/stores/chat';
     import { activeConversationId, loadConversation } from '$lib/stores/conversations';
 
     function onInput() {
@@ -19,9 +19,11 @@
     }
 
     async function selectResult(convId: string) {
+        setWorkspaceId(null);
+        setMode('chat');
+        activeConversationId.set(convId);
         const conv = await loadConversation(convId);
         if (conv) {
-            activeConversationId.set(convId);
             loadFromHistory(conv);
         }
         query = '';

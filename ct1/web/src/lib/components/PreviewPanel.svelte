@@ -1,28 +1,11 @@
 <script lang="ts">
-    import hljs from 'highlight.js/lib/core';
-    import xml from 'highlight.js/lib/languages/xml';
-    import css from 'highlight.js/lib/languages/css';
-    import javascript from 'highlight.js/lib/languages/javascript';
-
-    hljs.registerLanguage('xml', xml);
-    hljs.registerLanguage('css', css);
-    hljs.registerLanguage('javascript', javascript);
-
     let { code, outputType = 'html_page', onClose }:
         { code: string; outputType?: string; onClose: () => void } = $props();
 
-    let activeTab = $state<'preview' | 'code'>(outputType === 'html_page' ? 'preview' : 'code');
+    let activeTab = $state<'preview' | 'code'>('code');
     let copied = $state(false);
     let iframe = $state<HTMLIFrameElement>();
-
-    let highlighted = $derived(() => {
-        if (!code) return '';
-        try {
-            return hljs.highlight(code, { language: 'xml' }).value;
-        } catch {
-            return code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
-    });
+    let lastOutputType = $state('');
 
     let lines = $derived(() => {
         return code ? code.split('\n') : [];
@@ -45,17 +28,30 @@
     }
 
     $effect(() => {
-        if (iframe && code && activeTab === 'preview') {
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                if (code !== lastRendered) {
-                    const navGuard = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a){e.preventDefault();}});<\/script>`;
-                    const safeHtml = wrapPartialHtml(code);
-                    iframe.srcdoc = navGuard + safeHtml;
-                    lastRendered = code;
-                }
-            }, 500);
+        if (outputType !== lastOutputType) {
+            lastOutputType = outputType;
+            activeTab = outputType === 'html_page' ? 'preview' : 'code';
+            lastRendered = '';
         }
+    });
+
+    $effect(() => {
+        const frame = iframe;
+        clearTimeout(debounceTimer);
+        if (!frame || !code || activeTab !== 'preview') return;
+
+        debounceTimer = setTimeout(() => {
+            if (code !== lastRendered) {
+                const navGuard = `<script>document.addEventListener('click',function(e){var a=e.target.closest('a');if(a){e.preventDefault();}});<\/script>`;
+                const safeHtml = wrapPartialHtml(code);
+                frame.srcdoc = navGuard + safeHtml;
+                lastRendered = code;
+            }
+        }, 500);
+
+        return () => {
+            clearTimeout(debounceTimer);
+        };
     });
 </script>
 

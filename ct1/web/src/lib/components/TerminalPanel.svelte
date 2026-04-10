@@ -12,11 +12,23 @@
     let lastExternalLen = 0;
     let cmdCount = $state(0);
     let lastPendingLen = 0;
+    let lastWorkspaceId: string | null = null;
 
     $effect(() => {
-        if (workspaceId) {
-            connectTerminal();
+        if (!workspaceId) {
+            lastWorkspaceId = null;
+            return;
         }
+        if (workspaceId !== lastWorkspaceId) {
+            lastWorkspaceId = workspaceId;
+            output = '';
+            inputText = '';
+            connected = false;
+            lastExternalLen = 0;
+            lastPendingLen = 0;
+            cmdCount = 0;
+        }
+        connectTerminal();
         return () => {
             ws?.close();
             ws = null;
@@ -25,6 +37,9 @@
 
     // Append new external output (from AI auto-run subprocess)
     $effect(() => {
+        if (externalOutput.length < lastExternalLen) {
+            lastExternalLen = 0;
+        }
         if (externalOutput && externalOutput.length > lastExternalLen) {
             output += externalOutput.slice(lastExternalLen);
             lastExternalLen = externalOutput.length;
@@ -107,6 +122,7 @@
             sendCommand();
         }
     }
+
 </script>
 
 <div class="terminal">

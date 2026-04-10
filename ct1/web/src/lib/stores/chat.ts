@@ -119,6 +119,7 @@ interface ChatState {
     conversationId: string | null;
     conversation: Turn[];
     events: Record<string, any>[];
+    cancelRequested: boolean;
     route: string;
     plan: Plan | null;
     specialistData: SpecialistData | null;
@@ -171,6 +172,7 @@ const initial: ChatState = {
     conversationId: null,
     conversation: [],
     events: [],
+    cancelRequested: false,
     route: '',
     plan: null,
     specialistData: null,
@@ -216,9 +218,62 @@ let ws: WS | null = null;
 let _pendingAlt: string | null = null;
 let _pendingPrevAlts: string[] = [];
 
+const ALLOWED_CANCEL_EVENTS = new Set([
+    'conversation_id',
+    'title_update',
+    'file_saved',
+    'terminal_output',
+]);
+
+function clearWorkspaceSessionState(s: ChatState) {
+    s.contextFiles = [];
+    s.pendingCommands = [];
+    s.savedFiles = [];
+    s.terminalOutput = '';
+}
+
+function applyWorkspaceId(s: ChatState, id: string | null) {
+    if (s.workspaceId !== id) {
+        clearWorkspaceSessionState(s);
+    }
+    s.workspaceId = id;
+    if (id) {
+        s.modeOverride = 'computer';
+    }
+}
+
+function clearTransientTurnState(s: ChatState) {
+    s.streamingText = '';
+    s.streamingThinking = '';
+    s.checklist = [];
+    s.validationIssues = [];
+    s.review = null;
+    s.reflection = null;
+    s.warning = '';
+    s.fetchingUrls = [];
+    s.fetchedContent = [];
+    s.pendingCommands = [];
+    s.designSpec = null;
+    s.componentProgress = [];
+    s.editing = false;
+    s.draft = '';
+    s.draftThinking = '';
+    s.tokenCount = 0;
+    s.genStartTime = 0;
+    s.tokensPerSec = 0;
+    s.atlasActive = false;
+    s.atlasCandidates = [];
+    s.atlasPhase = null;
+    s.atlasEffort = null;
+}
+
 function handleEvent(data: Record<string, any>) {
     chat.update((s) => {
         s.events = [...s.events, data];
+
+        if (s.cancelRequested && !ALLOWED_CANCEL_EVENTS.has(data.event)) {
+            return s;
+        }
 
         switch (data.event) {
             case 'conversation_id':
@@ -602,6 +657,7 @@ export function loadFromHistory(conv: {
                 feedback: m.feedback,
             };
         });
+        s.cancelRequested = false;
         s.phase = 'idle';
         s.events = [];
         s.route = '';
@@ -619,6 +675,7 @@ export function loadFromHistory(conv: {
         s.editing = false;
         s.warning = '';
         s.undoStack = [];
+        clearWorkspaceSessionState(s);
         s.atlasActive = false;
         s.atlasCandidates = [];
         s.atlasPhase = null;
@@ -632,7 +689,11 @@ export function newConversation() {
 }
 
 export function setMode(mode: ModeOverride) {
-    chat.update((s) => { s.modeOverride = mode; return s; });
+    chat.update((s) => {
+        if (s.workspaceId && mode !== 'computer') return s;
+        s.modeOverride = s.workspaceId ? 'computer' : mode;
+        return s;
+    });
 }
 
 export function undo() {
@@ -718,7 +779,10 @@ export function regenerate(assistantTurnIdx?: number) {
 }
 
 export function setWorkspaceId(id: string | null) {
-    chat.update((s) => { s.workspaceId = id; return s; });
+    chat.update((s) => {
+        applyWorkspaceId(s, id);
+        return s;
+    });
     try {
         if (id) { // falsy covers null and "" — neither is a valid workspace id
             localStorage.setItem('ct2_workspace_id', id);
@@ -732,7 +796,14 @@ export function setWorkspaceId(id: string | null) {
 export function restoreWorkspace() {
     try {
         const id = localStorage.getItem('ct2_workspace_id');
-        if (id) chat.update(s => { if (!s.workspaceId) s.workspaceId = id; return s; });
+        if (id) {
+            chat.update((s) => {
+                if (!s.workspaceId) {
+                    applyWorkspaceId(s, id);
+                }
+                return s;
+            });
+        }
     } catch {}
 }
 
@@ -759,9 +830,13 @@ export function stopGeneration() {
     ws?.send({ type: 'cancel' });
     chat.update((s) => {
         const partial = s.streamingText || '';
-        s.thinking = s.streamingThinking || '';
+        const thinking = s.streamingThinking || '';
+        const fetchedContent = s.fetchedContent.length > 0 ? s.fetchedContent : undefined;
+        const preserveSavedFiles = s.route === 'ROUTE_COMPUTER' ? [...s.savedFiles] : [];
+        const lastTurn = s.conversation[s.conversation.length - 1];
+        s.cancelRequested = true;
 
-        if (!partial && s.conversation.length > 0 && s.conversation[s.conversation.length - 1].role === 'user') {
+        if (!partial && lastTurn?.role === 'user') {
             // Nothing generated yet — remove the user turn, go back to idle
             s.conversation = s.conversation.slice(0, -1);
             s.phase = 'idle';
@@ -778,20 +853,32 @@ export function stopGeneration() {
                     route: s.route,
                     plan: s.plan,
                     specialistData: s.specialistData,
-                    thinking: s.thinking,
-                    draftThinking: s.draftThinking,
-                    fetchedContent: s.fetchedContent.length > 0 ? s.fetchedContent : undefined,
+                    thinking: thinking || undefined,
+                    fetchedContent,
                 },
             ];
             s.response = partial;
+            s.thinking = thinking;
             s.phase = 'done';
         } else {
             s.phase = 'idle';
         }
 
-        // Reset streaming state
-        s.streamingText = '';
-        s.streamingThinking = '';
+        clearTransientTurnState(s);
+
+        if (partial) {
+            s.response = partial;
+            s.thinking = thinking;
+            s.savedFiles = preserveSavedFiles;
+        } else {
+            s.route = '';
+            s.plan = null;
+            s.specialistData = null;
+            s.response = '';
+            s.thinking = '';
+            s.savedFiles = [];
+        }
+
         return s;
     });
 }
@@ -816,6 +903,7 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
             role: 'user', content: goal,
             attachments: attachments.length > 0 ? attachments : undefined,
         }];
+        s.cancelRequested = false;
         s.events = [];
         s.route = '';
         s.plan = null;
@@ -893,6 +981,7 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
     }
 
     const prefs = get(preferences);
+    const effectiveMode: ModeOverride = wsId ? 'computer' : mode;
     const atlasSettings = prefs.atlasMode ? {
         atlasMode: true,
         effortMode: prefs.atlasEffortMode,
@@ -908,7 +997,7 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         conversation: backendConv,
         conversation_id: convId,
         position: conv.length,
-        ...(mode !== 'auto' ? { mode_override: mode } : {}),
+        ...(effectiveMode !== 'auto' ? { mode_override: effectiveMode } : {}),
         ...(wsId ? { workspace_id: wsId } : {}),
         ...(!prefs.designRefinement ? { skip_refinement: true } : {}),
         ...(atlasSettings ? { atlas: atlasSettings } : {}),

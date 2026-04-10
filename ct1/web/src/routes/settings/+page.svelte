@@ -14,12 +14,14 @@
         name: string;
         size_gb: number;
         thinking: boolean;
+        vision: boolean;
         context_length: number | null;
     }
     let availableModels = $state<ModelFile[]>([]);
     let activeModel = $state('');
     let modelFound = $state(false);
     let modelThinking = $state(false);
+    let modelVision = $state(false);
     let scanning = $state(false);
     let switching = $state(false);
     let switchError = $state('');
@@ -85,6 +87,7 @@
             activeModel = modelData.active_model || '';
             modelFound = modelData.model_found ?? false;
             modelThinking = modelData.enable_thinking ?? false;
+            modelVision = modelData.vision_supported ?? false;
 
             const ggufCtx = modelData.gguf_context_length;
             const yamlCtx = modelData.context_size;
@@ -389,12 +392,20 @@
         catch { return iso; }
     }
 
+    function handleWindowClick(e: MouseEvent) {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('.model-selector')) return;
+        if (pickerOpen) pickerOpen = false;
+    }
+
     onMount(async () => {
         await Promise.all([loadData(), loadModes(), loadPrompts(), loadWorkspaces()]);
     });
 </script>
 
-<div class="settings-page" onclick={() => { if (pickerOpen) pickerOpen = false; }}>
+<svelte:window onclick={handleWindowClick} />
+
+<div class="settings-page">
 <div class="settings-content">
 
     <!-- ─── Page Header ─── -->
@@ -420,7 +431,7 @@
         {#if loading}
             <div class="skeleton-card"></div>
         {:else}
-            <div class="model-selector" onclick={(e) => e.stopPropagation()}>
+            <div class="model-selector">
                 <button
                     class="model-box"
                     class:open={pickerOpen}
@@ -441,6 +452,9 @@
                     {#if activeModel && modelThinking}
                         <span class="cap-badge thinking">thinking</span>
                     {/if}
+                    {#if activeModel && modelVision}
+                        <span class="cap-badge vision">vision</span>
+                    {/if}
                     {#if activeModel}
                         {@const params = extractParams(activeModel)}
                         {#if params}
@@ -451,7 +465,7 @@
                 </button>
 
                 {#if pickerOpen}
-                    <div class="model-dropdown" onclick={(e) => e.stopPropagation()}>
+                    <div class="model-dropdown">
                         {#if availableModels.length === 0}
                             <div class="drop-empty">
                                 No model files found.<br>
@@ -475,6 +489,10 @@
                                             {#if m.thinking}
                                                 <span class="drop-sep"></span>
                                                 <span class="drop-thinking">thinking</span>
+                                            {/if}
+                                            {#if m.vision}
+                                                <span class="drop-sep"></span>
+                                                <span class="drop-vision">vision</span>
                                             {/if}
                                         </div>
                                     </div>
@@ -706,6 +724,8 @@
                     onclick={() => preferences.update(p => ({ ...p, designRefinement: !p.designRefinement }))}
                     role="switch"
                     aria-checked={$preferences.designRefinement}
+                    aria-label="Toggle design refinement"
+                    title="Toggle design refinement"
                 >
                     <span class="toggle-knob"></span>
                 </button>
@@ -722,6 +742,8 @@
                     onclick={() => preferences.update(p => ({ ...p, atlasMode: !p.atlasMode }))}
                     role="switch"
                     aria-checked={$preferences.atlasMode}
+                    aria-label="Toggle Atlas mode"
+                    title="Toggle Atlas mode"
                 >
                     <span class="toggle-knob"></span>
                 </button>
@@ -773,6 +795,8 @@
                             onclick={() => preferences.update(p => ({ ...p, atlasSelfVerification: !p.atlasSelfVerification }))}
                             role="switch"
                             aria-checked={$preferences.atlasSelfVerification}
+                            aria-label="Toggle Atlas self verification"
+                            title="Toggle Atlas self verification"
                         >
                             <span class="toggle-knob"></span>
                         </button>
@@ -789,6 +813,8 @@
                             onclick={() => preferences.update(p => ({ ...p, atlasMultiPerspective: !p.atlasMultiPerspective }))}
                             role="switch"
                             aria-checked={$preferences.atlasMultiPerspective}
+                            aria-label="Toggle Atlas multi perspective"
+                            title="Toggle Atlas multi perspective"
                         >
                             <span class="toggle-knob"></span>
                         </button>
@@ -805,6 +831,8 @@
                             onclick={() => preferences.update(p => ({ ...p, atlasIterativeRefinement: !p.atlasIterativeRefinement }))}
                             role="switch"
                             aria-checked={$preferences.atlasIterativeRefinement}
+                            aria-label="Toggle Atlas iterative refinement"
+                            title="Toggle Atlas iterative refinement"
                         >
                             <span class="toggle-knob"></span>
                         </button>
@@ -890,11 +918,11 @@
         <div class="section-head">
             <div class="section-head-text">
                 <h2 class="section-title">Workspaces</h2>
-                <p class="section-desc">Projects created in Computer mode. Delete old ones to free space.</p>
+                <p class="section-desc">Project workspaces created from the sidebar. Delete old ones to free space.</p>
             </div>
         </div>
         {#if workspaces.length === 0}
-            <p class="ws-empty">No workspaces yet — they are created automatically when you use Computer mode.</p>
+            <p class="ws-empty">No workspaces yet — create one from the sidebar when you want to work inside a project.</p>
         {:else}
             <div class="ws-list">
                 {#each workspaces as ws (ws.id)}
@@ -1238,6 +1266,11 @@
         background: rgba(139, 92, 246, 0.12);
         border: 1px solid rgba(139, 92, 246, 0.2);
     }
+    .cap-badge.vision {
+        color: #0f766e;
+        background: rgba(20, 184, 166, 0.12);
+        border: 1px solid rgba(20, 184, 166, 0.24);
+    }
     .cap-badge.params {
         color: var(--text-muted);
         background: rgba(59, 130, 246, 0.1);
@@ -1327,6 +1360,7 @@
     .drop-size { font-family: var(--font-mono); }
     .drop-ctx { font-family: var(--font-mono); }
     .drop-thinking { color: rgba(139, 92, 246, 0.75); font-weight: 500; }
+    .drop-vision { color: rgba(13, 148, 136, 0.85); font-weight: 500; }
     .drop-sep {
         width: 3px;
         height: 3px;

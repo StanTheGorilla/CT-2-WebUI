@@ -1,5 +1,5 @@
 import { Marked } from 'marked';
-import hljs from 'highlight.js';
+import hljs from '$lib/highlight';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 

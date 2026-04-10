@@ -114,7 +114,7 @@
         border-radius: 14px;
         overflow: hidden;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
-        max-width: 480px;
+        max-width: min(680px, 88%);
     }
     .card.design { --card-accent: var(--specialist); }
     .card.code { --card-accent: var(--brain); }
