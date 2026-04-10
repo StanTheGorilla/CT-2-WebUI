@@ -1,4 +1,4 @@
-"""Minimal GGUF metadata reader — extracts context_length from model files.
+"""Minimal GGUF metadata reader — extracts selected metadata from model files.
 
 GGUF format: little-endian, header = magic(4) + version(4) + tensor_count(8) + kv_count(8),
 then kv_count sequential key-value pairs with variable-length encoding.
@@ -60,19 +60,16 @@ def _skip_value(data: bytes, offset: int, vtype: int) -> int:
     return offset
 
 
-def read_context_length(model_path: str | Path) -> int | None:
-    """Read the context_length from a GGUF file's metadata.
+def _read_kv_value(model_path: str | Path, key_suffix: str, read_size: int = 1 * 1024 * 1024):
+    """Read a single GGUF metadata value by key suffix.
 
-    Returns the integer context length, or None if not found.
-    Reads only the header + metadata (typically <1MB), not the full file.
+    Returns the value, or None if not found.
+    Reads only the header + metadata (typically <1MB), with a larger fallback.
     """
     model_path = Path(model_path)
     if not model_path.exists():
         return None
 
-    # Read enough for header + metadata (most metadata fits in first 1MB)
-    # If not enough, fall back to reading more
-    read_size = 1 * 1024 * 1024  # 1MB initial read
     with open(model_path, "rb") as f:
         data = f.read(read_size)
 
@@ -102,11 +99,23 @@ def read_context_length(model_path: str | Path) -> int | None:
         vtype = struct.unpack_from("<I", data, offset)[0]
         offset += 4
 
-        if key.endswith(".context_length"):
+        if key.endswith(key_suffix):
             value, _ = _read_value(data, offset, vtype)
-            return int(value)
+            return value
 
         # Skip this value
         offset = _skip_value(data, offset, vtype)
 
     return None
+
+
+def read_context_length(model_path: str | Path) -> int | None:
+    """Read the context_length from a GGUF file's metadata."""
+    value = _read_kv_value(model_path, ".context_length")
+    return int(value) if value is not None else None
+
+
+def read_architecture(model_path: str | Path) -> str | None:
+    """Read the general architecture name from a GGUF file's metadata."""
+    value = _read_kv_value(model_path, "general.architecture")
+    return str(value) if value is not None else None

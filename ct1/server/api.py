@@ -16,12 +16,14 @@ from ct1.server.health import check_server_health
 from ct1.server.launcher import (
     load_raw_config, resolve_config,
     kill_existing_llama_servers, start_server, stop_server,
+    _detect_vision_support, _find_mmproj_path,
 )
 from ct1.memory.journal_reader import JournalReader
 from ct1.memory.session_store import SessionStore
 from ct1.memory.conversation_db import ConversationDB
 from ct1.memory.component_cache import ComponentCache
 from ct1.server.workspace import WorkspaceManager, is_command_safe
+from ct1.server.cache_policy import should_clear_kv_cache
 
 _TITLE_STRIP = _re.compile(
     r'^(?:(?:can\s+you|please|could\s+you|i(?:\'d)?\s+(?:like|want|need)(?:\s+you)?\s+to|'
@@ -372,11 +374,13 @@ async def get_model_info():
     gguf_ctx = read_context_length(model_path) if model_path and model_found else None
     yaml_ctx = _raw_cfg.get("context_size")
     thinking = _detect_thinking_support(model_name) if model_name else False
+    vision_supported = _cfg.get("models", {}).get("director", {}).get("vision_supported", False) if model_found else False
 
     return {
         "active_model": model_name,
         "model_found": model_found,
         "enable_thinking": thinking,
+        "vision_supported": vision_supported,
         "context_size": yaml_ctx or gguf_ctx or 0,
         "gguf_context_length": gguf_ctx,
     }
@@ -399,11 +403,13 @@ async def get_presets():
     gguf_ctx = read_context_length(model_path) if model_path and model_found else None
     yaml_ctx = _raw_cfg.get("context_size")
     thinking = _detect_thinking_support(model_name) if model_name else False
+    vision_supported = _cfg.get("models", {}).get("director", {}).get("vision_supported", False) if model_found else False
 
     return {
         "active_model": model_name,
         "model_found": model_found,
         "enable_thinking": thinking,
+        "vision_supported": vision_supported,
         "context_size": yaml_ctx or gguf_ctx or 0,
         "gguf_context_length": gguf_ctx,
     }
@@ -430,6 +436,7 @@ async def list_models():
             "name": p.name,
             "size_gb": size_gb,
             "thinking": _detect_thinking_support(p.name),
+            "vision": bool(_detect_vision_support(p.name, p) and _find_mmproj_path(p)),
             "context_length": gguf_ctx,
         })
     return {"models": files, "models_dir": str(models_dir)}
@@ -993,6 +1000,7 @@ async def ws_think(websocket: WebSocket):
         return
     await websocket.accept()
     current_think_task: asyncio.Task | None = None
+    slot_conversation_id: str | None = None
     current_task = asyncio.current_task()
     _active_think_tasks.add(current_task)
     try:
@@ -1040,11 +1048,19 @@ async def ws_think(websocket: WebSocket):
                             break
 
                 async def run_think():
+                    nonlocal slot_conversation_id
                     mode_override = msg.get("mode_override")
                     skip_refinement = msg.get("skip_refinement", False)
                     atlas_settings = msg.get("atlas")
                     actual_goal = goal
                     ws_id = msg.get("workspace_id")
+                    incoming_conv_id = msg.get("conversation_id")
+
+                    if _orch and should_clear_kv_cache(
+                        slot_conversation_id, incoming_conv_id, conversation,
+                    ):
+                        await _orch.clear_kv_cache()
+                        slot_conversation_id = None
 
                     # ── Computer mode: inject existing workspace files into context ──
                     if mode_override == "computer" and ws_id and _workspace:
@@ -1424,11 +1440,11 @@ async def ws_think(websocket: WebSocket):
                             if _is_new_conv:
                                 first_msg_text = goal if isinstance(goal, str) else (goal[0].get("text", "") if isinstance(goal, list) else str(goal))
                                 asyncio.create_task(_refine_title(conv_id, first_msg_text, websocket))
+                            slot_conversation_id = conv_id
                         except Exception as db_err:
                             print(f"[api] conversation save error: {db_err}")  # non-fatal
-
-                    if _orch:
-                        asyncio.create_task(_orch.clear_kv_cache())
+                    elif incoming_conv_id:
+                        slot_conversation_id = incoming_conv_id
 
                 async def watch_for_cancel():
                     """Read incoming WebSocket messages while inference runs.

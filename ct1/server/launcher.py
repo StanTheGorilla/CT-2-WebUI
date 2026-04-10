@@ -1,6 +1,7 @@
 import subprocess
 import asyncio
 import shutil
+import re
 import yaml
 import os
 import signal
@@ -233,12 +234,15 @@ def _detect_thinking_support(model_filename: str) -> bool:
 
     Known thinking-capable model families:
     - Qwen 3+ (Qwen3, Qwen3.5, etc.)
+    - Gemma 4
     - NVIDIA Nemotron Nano (has /think tags in chat template)
     - DeepSeek R1/V3
     - Any model with 'think' in the name
     """
     name = model_filename.lower()
     if "qwen3" in name or "qwen-3" in name:
+        return True
+    if "gemma-4" in name or "gemma4" in name:
         return True
     if "nemotron" in name and "nano" in name:
         return True
@@ -247,6 +251,94 @@ def _detect_thinking_support(model_filename: str) -> bool:
     if "think" in name:
         return True
     return False
+
+
+def _detect_vision_support(model_filename: str, model_path: str | Path | None = None) -> bool:
+    """Best-effort detection for multimodal/vision-capable GGUF models."""
+    name = model_filename.lower()
+    name_hits = (
+        "vision",
+        "llava",
+        "pixtral",
+        "internvl",
+        "minicpm-v",
+        "minicpmv",
+        "paligemma",
+        "moondream",
+        "fuyu",
+        "bunny",
+        "cogvlm",
+        "deepseek-vl",
+        "phi-3-vision",
+        "phi3-vision",
+        "phi3v",
+        "mllama",
+        "qwen2-vl",
+        "qwen2.5-vl",
+        "qwen-2-vl",
+        "qwen-2.5-vl",
+        "llama-3.2-vision",
+    )
+    if any(hit in name for hit in name_hits):
+        return True
+
+    if model_path:
+        try:
+            from ct1.core.gguf_reader import read_architecture
+
+            arch = (read_architecture(model_path) or "").lower()
+            if arch in {
+                "gemma3",
+                "gemma4",
+                "llava",
+                "mllama",
+                "paligemma",
+                "pixtral",
+                "minicpmv",
+                "internvl",
+                "moondream",
+                "fuyu",
+            }:
+                return True
+            if "vl" in arch or "vision" in arch:
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
+def _find_mmproj_path(model_path: str | Path, configured: str | None = "auto") -> str | None:
+    """Resolve an mmproj sidecar for a multimodal model when available."""
+    model_path = Path(model_path)
+
+    if configured and str(configured).lower() != "auto":
+        candidate = Path(configured)
+        return str(candidate) if candidate.exists() else None
+
+    candidates = sorted(model_path.parent.glob("*mmproj*.gguf"))
+    if not candidates:
+        return None
+
+    def _tokens(value: str) -> set[str]:
+        return {
+            tok for tok in re.split(r"[^a-z0-9]+", value.lower())
+            if tok and tok not in {"gguf", "mmproj", "q4", "q5", "q6", "q8", "k", "m", "s", "it", "f16", "f32", "bf16"}
+        }
+
+    model_tokens = _tokens(model_path.stem)
+    size_tokens = {tok for tok in model_tokens if re.fullmatch(r"(?:[ea]\d+b|\d+b)", tok)}
+    ranked = sorted(
+        ((len(model_tokens & _tokens(cand.stem)), cand) for cand in candidates),
+        key=lambda item: (item[0], -len(item[1].name)),
+        reverse=True,
+    )
+    best_score, best = ranked[0]
+    if size_tokens:
+        best_tokens = _tokens(best.stem)
+        if not (size_tokens & best_tokens):
+            return None
+    return str(best) if best_score > 0 else None
 
 
 def resolve_config(raw_cfg: dict, config_path: str = None,
@@ -286,6 +378,10 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
 
         model_path = models_dir / model_name
         enable_thinking = _detect_thinking_support(model_name)
+        explicit_vision = raw_cfg.get("vision_supported") if "vision_supported" in raw_cfg else None
+        vision_capable = explicit_vision if explicit_vision is not None else _detect_vision_support(model_name, model_path)
+        mmproj_path = _find_mmproj_path(model_path, raw_cfg.get("mmproj", "auto")) if vision_capable else None
+        vision_supported = bool(vision_capable and (mmproj_path or explicit_vision is True))
 
         from ct1.core.gguf_reader import read_context_length
         gguf_context = read_context_length(model_path)
@@ -323,7 +419,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
                     "frequency_penalty": raw_cfg.get("frequency_penalty", 0),
                     "max_tokens": raw_cfg.get("max_tokens", 100000),
                     "thinking_budget": raw_cfg.get("thinking_budget", -1),
-                    "vision_supported": raw_cfg.get("vision_supported", False),
+                    "vision_supported": vision_supported,
                 },
             },
             "journal": raw_cfg.get("journal", {}),
@@ -337,6 +433,8 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
             },
             "_task_overrides": raw_cfg.get("task_overrides", {}),
         }
+        if mmproj_path:
+            result["llama_server"]["mmproj"] = mmproj_path
         return result
 
     # ── Legacy preset format ──────────────────────────────────────
@@ -363,6 +461,11 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
             "  Open Settings in the web UI and assign a .gguf file to this preset."
         )
     model_path = models_dir / model_name
+    explicit_vision = director.get("vision_supported") if "vision_supported" in director else None
+    vision_capable = explicit_vision if explicit_vision is not None else _detect_vision_support(model_name, model_path)
+    mmproj_cfg = director.get("mmproj", raw_cfg.get("mmproj", "auto"))
+    mmproj_path = _find_mmproj_path(model_path, mmproj_cfg) if vision_capable else None
+    vision_supported = bool(vision_capable and (mmproj_path or explicit_vision is True))
 
     from ct1.core.gguf_reader import read_context_length
     gguf_context = read_context_length(model_path)
@@ -400,7 +503,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
                 "frequency_penalty": director.get("frequency_penalty", 0),
                 "max_tokens": director.get("max_tokens", 100000),
                 "thinking_budget": director.get("thinking_budget", -1),
-                "vision_supported": director.get("vision_supported", False),
+                "vision_supported": vision_supported,
             },
         },
         "journal": raw_cfg.get("journal", {}),
@@ -414,6 +517,8 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
         },
         "_task_overrides": director.get("task_overrides", {}),
     }
+    if mmproj_path:
+        result["llama_server"]["mmproj"] = mmproj_path
 
     # Specialist handling (legacy nested format only)
     if not is_flat and "specialist" in preset:
@@ -455,6 +560,8 @@ def build_server_command(s: dict) -> list:
         "--parallel", str(s["parallel_slots"]),
         "-c", str(s["context_size"]),
     ]
+    if s.get("mmproj"):
+        cmd += ["--mmproj", str(s["mmproj"])]
     if s.get("cont_batching"):
         cmd.append("--cont-batching")
     if s.get("flash_attn"):
