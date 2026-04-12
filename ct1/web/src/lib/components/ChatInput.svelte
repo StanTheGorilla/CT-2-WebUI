@@ -558,19 +558,21 @@
         width: 34px;
         height: 34px;
         border-radius: 50%;
-        border: 1.5px solid transparent;
-        background: transparent;
-        color: var(--text-muted);
+        border: 1.5px solid var(--border-strong);
+        background: var(--surface);
+        color: var(--text-secondary);
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        opacity: 0.35;
+        opacity: 0.75;
         transition: opacity 0.15s, background 0.2s, border-color 0.2s, box-shadow 0.2s, color 0.15s;
     }
     .web-search-circle:hover:not(:disabled) {
-        opacity: 0.7;
+        opacity: 1;
+        border-color: var(--accent);
+        color: var(--text);
     }
     .web-search-circle.active {
         background: #3b82f6;
@@ -585,6 +587,7 @@
     }
     .web-search-circle:disabled {
         cursor: not-allowed;
+        opacity: 0.4;
     }
 
     /* ---- Workspace context badge + popover ---- */
