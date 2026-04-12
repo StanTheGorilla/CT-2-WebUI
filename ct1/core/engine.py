@@ -972,6 +972,80 @@ class Engine:
         half = max_chars // 2
         return text[:half] + "\n/* ... */\n" + text[-half:]
 
+    async def extract_search_query(
+        self,
+        user_message: str,
+        recent_history: list[dict] | None = None,
+    ) -> str:
+        """Extract a focused web search query from a user message.
+
+        *recent_history* is an optional list of recent conversation turns
+        (OpenAI-style ``[{"role": "user"|"assistant", "content": "..."}]``).
+        Providing it lets the extractor resolve pronouns like "his", "it",
+        "they" by anchoring them to the conversation context.
+
+        Uses a fast, low-temperature, thinking-disabled call so it adds
+        minimal latency. Falls back to the raw message (truncated) on error.
+        """
+        text = (user_message or "").strip()
+        if not text:
+            return ""
+
+        # Build a compact conversation snippet (last ≤3 pairs, 800 chars cap).
+        context_block = ""
+        if recent_history:
+            snippets: list[str] = []
+            for turn in recent_history[-6:]:  # at most 3 user/assistant pairs
+                role = turn.get("role", "")
+                content = turn.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        p.get("text", "") for p in content
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                label = "User" if role == "user" else "Assistant"
+                snippets.append(f"{label}: {str(content)[:200]}")
+            if snippets:
+                raw_ctx = "\n".join(snippets)[:800]
+                context_block = f"\nRecent conversation:\n{raw_ctx}\n"
+
+        system = (
+            "You convert user messages into concise web search queries. "
+            "Reply with ONLY the search query — 3 to 8 keywords, no quotes, "
+            "no punctuation, no prefix like 'query:'. "
+            "If the message contains pronouns (his, her, it, they, that), "
+            "resolve them using the conversation context and include the "
+            "specific subject in the query."
+        )
+        user = f"{context_block}\nUser message:\n{text[:600]}\n\nSearch query:"
+
+        try:
+            result = await self._call(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=40,
+                temperature=0.2,
+                top_p=0.9,
+                enable_thinking=False,
+                thinking_budget=0,
+            )
+            raw = result["text"] if isinstance(result, dict) else result
+        except Exception:
+            return text[:120]
+
+        query = (raw or "").strip().strip('"').strip("'").strip("`")
+        # Strip any leading label the model might emit despite instructions.
+        for prefix in ("search query:", "query:", "search:", "answer:"):
+            if query.lower().startswith(prefix):
+                query = query[len(prefix):].strip().strip('"').strip("'")
+        # Take only the first line in case the model added explanation.
+        query = query.splitlines()[0].strip() if query else ""
+        # Hard cap at 120 chars to avoid pathological outputs.
+        query = query[:120]
+        return query or text[:120]
+
     async def generate_section_edit(
         self, goal: str, section: str,
         sections: dict[str, str],

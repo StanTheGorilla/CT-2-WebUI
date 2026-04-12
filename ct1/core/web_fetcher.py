@@ -16,8 +16,26 @@ from bs4 import BeautifulSoup
 # Constants
 # ---------------------------------------------------------------------------
 
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-TIMEOUT_S = 10
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+# A broader Accept header helps sites that serve 406/403 to minimal clients.
+DEFAULT_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Upgrade-Insecure-Requests": "1",
+}
+TIMEOUT_S = 20
+ROBOTS_TIMEOUT_S = 5
 MAX_URLS_PER_MESSAGE = 3
 
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')\]]+")
@@ -86,7 +104,7 @@ async def fetch_url(url: str, max_chars: int = 240_000) -> FetchResult:
     # 1. Validate scheme ------------------------------------------------
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
-        return FetchResult(url=url, error="Invalid URL scheme (only http/https supported)")
+        return FetchResult(url=url, error="Unsupported URL scheme (only http/https)")
     if not parsed.netloc:
         return FetchResult(url=url, error="Invalid URL: no host")
 
@@ -100,15 +118,41 @@ async def fetch_url(url: str, max_chars: int = 240_000) -> FetchResult:
         async with httpx.AsyncClient(
             timeout=TIMEOUT_S,
             follow_redirects=True,
-            headers={"User-Agent": USER_AGENT},
+            headers=DEFAULT_HEADERS,
+            http2=False,
         ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             html = resp.text
     except httpx.HTTPStatusError as exc:
-        return FetchResult(url=url, error=f"HTTP {exc.response.status_code}")
+        code = exc.response.status_code
+        friendly = {
+            403: "403 Forbidden — site blocked the request",
+            404: "404 Not Found",
+            429: "429 Too Many Requests — site rate-limited us",
+            500: "500 Server Error",
+            502: "502 Bad Gateway",
+            503: "503 Service Unavailable",
+            504: "504 Gateway Timeout",
+        }.get(code, f"HTTP {code}")
+        return FetchResult(url=url, error=friendly)
+    except httpx.ConnectTimeout:
+        return FetchResult(url=url, error="Connection timeout (site unreachable)")
+    except httpx.ReadTimeout:
+        return FetchResult(url=url, error="Read timeout (site too slow)")
+    except httpx.ConnectError as exc:
+        msg = str(exc).lower()
+        if "ssl" in msg or "certificate" in msg:
+            return FetchResult(url=url, error="SSL certificate error")
+        if "name or service not known" in msg or "getaddrinfo" in msg:
+            return FetchResult(url=url, error="Domain not found (DNS lookup failed)")
+        return FetchResult(url=url, error="Could not connect to site")
+    except httpx.TooManyRedirects:
+        return FetchResult(url=url, error="Too many redirects")
     except Exception as exc:  # noqa: BLE001
-        return FetchResult(url=url, error=str(exc))
+        # Strip noisy module prefixes from httpx exceptions.
+        err = str(exc).split("\n")[0][:120] or type(exc).__name__
+        return FetchResult(url=url, error=err)
 
     # 4. Title ----------------------------------------------------------
     title = _extract_title(html)
@@ -174,8 +218,9 @@ async def _check_robots(url: str) -> bool:
 
     try:
         async with httpx.AsyncClient(
-            timeout=TIMEOUT_S,
-            headers={"User-Agent": USER_AGENT},
+            timeout=ROBOTS_TIMEOUT_S,
+            follow_redirects=True,
+            headers=DEFAULT_HEADERS,
         ) as client:
             resp = await client.get(robots_url)
             if resp.status_code != 200:
@@ -188,6 +233,7 @@ async def _check_robots(url: str) -> bool:
             _robots_cache[domain] = allowed
             return allowed
     except Exception:  # noqa: BLE001
+        # Any robots.txt failure → optimistically allow the fetch.
         _robots_cache[domain] = True
         return True
 

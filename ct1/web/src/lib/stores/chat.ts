@@ -32,6 +32,8 @@ export interface Turn {
     feedback?: number;
     fetchedContent?: { url: string; title: string; content: string;
                        contentLength: number; truncated: boolean }[];
+    webSearchResults?: { title: string; url: string; snippet: string }[];
+    webSearchQuery?: string;
     /** Detected language identifier from backend (e.g. 'python', 'html') */
     detectedLang?: string;
     /** Explanation text written before the code fence (code mode only) */
@@ -137,6 +139,7 @@ interface ChatState {
     editing: boolean;
     warning: string;
     modeOverride: ModeOverride;
+    webSearchEnabled: boolean;
     undoStack: string[];
     terminalOutput: string;
     pendingCommands: string[];
@@ -161,6 +164,10 @@ interface ChatState {
     fetchingUrls: { url: string; status: 'fetching' | 'done' | 'failed'; error?: string }[];
     fetchedContent: { url: string; title: string; content: string;
                       contentLength: number; truncated: boolean }[];
+    webSearchPhase: 'idle' | 'extracting' | 'searching' | 'done';
+    webSearchQuery: string | null;
+    webSearchResults: { title: string; url: string; snippet: string }[];
+    webSearchError: string | null;
     // Atlas state
     atlasActive: boolean;
     atlasCandidates: AtlasCandidate[];
@@ -190,6 +197,7 @@ const initial: ChatState = {
     editing: false,
     warning: '',
     modeOverride: 'chat',
+    webSearchEnabled: false,
     undoStack: [],
     terminalOutput: '',
     pendingCommands: [],
@@ -204,6 +212,10 @@ const initial: ChatState = {
     savedFiles: [],
     fetchingUrls: [],
     fetchedContent: [],
+    webSearchPhase: 'idle',
+    webSearchQuery: null,
+    webSearchResults: [],
+    webSearchError: null,
     atlasActive: false,
     atlasCandidates: [],
     atlasPhase: null,
@@ -252,6 +264,10 @@ function clearTransientTurnState(s: ChatState) {
     s.warning = '';
     s.fetchingUrls = [];
     s.fetchedContent = [];
+    s.webSearchPhase = 'idle';
+    s.webSearchQuery = null;
+    s.webSearchResults = [];
+    s.webSearchError = null;
     s.pendingCommands = [];
     s.designSpec = null;
     s.componentProgress = [];
@@ -406,6 +422,8 @@ function handleEvent(data: Record<string, any>) {
                         thinking: s.thinking,
                         draftThinking: s.draftThinking,
                         fetchedContent: s.fetchedContent.length > 0 ? s.fetchedContent : undefined,
+                        webSearchResults: s.webSearchResults.length > 0 ? s.webSearchResults : undefined,
+                        webSearchQuery: s.webSearchQuery ?? undefined,
                         detectedLang: _detectedLang,
                         explanation: data.explanation || undefined,
                         files: data.files ?? [],
@@ -495,6 +513,24 @@ function handleEvent(data: Record<string, any>) {
                 if (Array.isArray(data.commands) && data.commands.length > 0) {
                     s.pendingCommands = [...s.pendingCommands, ...data.commands];
                 }
+                break;
+            case 'web_search_extracting':
+                s.webSearchPhase = 'extracting';
+                s.webSearchQuery = null;
+                s.webSearchResults = [];
+                s.webSearchError = null;
+                break;
+            case 'web_searching':
+                s.webSearchPhase = 'searching';
+                s.webSearchQuery = data.query || null;
+                s.webSearchResults = [];
+                s.webSearchError = null;
+                break;
+            case 'web_search_results':
+                s.webSearchPhase = 'done';
+                s.webSearchQuery = data.query || s.webSearchQuery;
+                s.webSearchResults = Array.isArray(data.results) ? data.results : [];
+                s.webSearchError = data.error || null;
                 break;
             case 'url_fetching':
                 s.fetchingUrls = [...s.fetchingUrls, { url: data.url, status: 'fetching' }];
@@ -696,6 +732,13 @@ export function setMode(mode: ModeOverride) {
     });
 }
 
+export function toggleWebSearch() {
+    chat.update((s) => {
+        s.webSearchEnabled = !s.webSearchEnabled;
+        return s;
+    });
+}
+
 export function undo() {
     chat.update((s) => {
         if (s.undoStack.length === 0) return s;
@@ -889,12 +932,14 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
     let wsId: string | null = null;
     let convId: string | null = null;
     let s_contextFiles: string[] = [];
+    let s_webSearch = false;
     const unsub = chat.subscribe((s) => {
         conv = s.conversation;
         mode = s.modeOverride;
         wsId = s.workspaceId;
         convId = s.conversationId;
         s_contextFiles = s.contextFiles;
+        s_webSearch = s.webSearchEnabled;
     });
     unsub();
 
@@ -927,6 +972,10 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         s.savedFiles = [];
         s.fetchingUrls = [];
         s.fetchedContent = [];
+        s.webSearchPhase = 'idle';
+        s.webSearchQuery = null;
+        s.webSearchResults = [];
+        s.webSearchError = null;
         s.atlasActive = false;
         s.atlasCandidates = [];
         s.atlasPhase = null;
@@ -1002,5 +1051,6 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         ...(!prefs.designRefinement ? { skip_refinement: true } : {}),
         ...(atlasSettings ? { atlas: atlasSettings } : {}),
         ...(s_contextFiles.length > 0 ? { context_files: s_contextFiles } : {}),
+        ...(s_webSearch ? { web_search: true } : {}),
     });
 }

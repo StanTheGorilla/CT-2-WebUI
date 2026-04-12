@@ -911,6 +911,20 @@ async def search_conversations(q: str = "", limit: int = 20):
     return await _db.search(q.strip(), limit)
 
 
+@app.get("/api/web-search")
+async def web_search_endpoint(q: str = "", max_results: int = 5):
+    """Run a DuckDuckGo web search and return structured results."""
+    from ct1.core.web_searcher import search_web
+    if not q.strip():
+        return {"query": q, "results": [], "error": "Empty query"}
+    resp = await search_web(q.strip(), max_results=max(1, min(max_results, 20)))
+    return {
+        "query": resp.query,
+        "results": [{"title": r.title, "url": r.url, "snippet": r.snippet} for r in resp.results],
+        "error": resp.error,
+    }
+
+
 @app.get("/api/conversations/{conv_id}")
 async def get_conversation(conv_id: str):
     conv = await _db.get_conversation(conv_id)
@@ -1110,14 +1124,118 @@ async def ws_think(websocket: WebSocket):
                                         part["text"] = file_ctx + part["text"]
                                         break
 
-                    # ── URL content fetching ──
-                    from ct1.core.web_fetcher import extract_urls, fetch_url as _fetch_url, URL_PATTERN, MAX_URLS_PER_MESSAGE
-
-                    goal_text_for_urls = actual_goal if isinstance(actual_goal, str) else " ".join(
+                    # ── Web search ──
+                    # Triggered by '!search ' prefix (explicit query) OR web_search flag (AI extracts query).
+                    _SEARCH_PREFIX = "!search "
+                    goal_text_for_search = actual_goal if isinstance(actual_goal, str) else " ".join(
                         p.get("text", "") for p in actual_goal if isinstance(p, dict) and p.get("type") == "text"
                     )
-                    all_found = set(URL_PATTERN.findall(goal_text_for_urls))
-                    detected_urls = extract_urls(goal_text_for_urls)
+                    _web_search_flag = msg.get("web_search", False)
+                    _user_raw: str | None = None
+                    _search_query: str | None = None
+                    _explicit_prefix = False
+
+                    if goal_text_for_search.lstrip().startswith(_SEARCH_PREFIX):
+                        # Explicit !search prefix: user provided the exact query.
+                        _user_raw = goal_text_for_search.lstrip()[len(_SEARCH_PREFIX):].strip()
+                        _search_query = _user_raw
+                        _explicit_prefix = True
+                    elif _web_search_flag and goal_text_for_search.strip():
+                        # Toggle on: let the LLM extract a focused query.
+                        _user_raw = goal_text_for_search.strip()
+
+                    if _user_raw:
+                        from ct1.core.web_searcher import search_web, format_results_as_context
+
+                        # Extract a focused query via the LLM when the user didn't provide one explicitly.
+                        if not _explicit_prefix and _orch is not None:
+                            try:
+                                queue.put_nowait({"event": "web_search_extracting", "source": _user_raw})
+                            except asyncio.QueueFull:
+                                pass
+                            try:
+                                # Pass recent history so pronouns ("his", "it", etc.)
+                                # can be resolved against the prior conversation.
+                                _search_query = await _orch.engine.extract_search_query(
+                                    _user_raw,
+                                    recent_history=conversation[-6:] if conversation else None,
+                                )
+                            except Exception as _ext_err:
+                                print(f"[api] search query extraction failed: {_ext_err}")
+                                _search_query = _user_raw[:120]
+
+                        if not _search_query:
+                            _search_query = _user_raw[:120]
+
+                        try:
+                            queue.put_nowait({"event": "web_searching", "query": _search_query})
+                        except asyncio.QueueFull:
+                            pass
+                        _sr = await search_web(_search_query, max_results=5)
+                        try:
+                            queue.put_nowait({
+                                "event": "web_search_results",
+                                "query": _sr.query,
+                                "results": [
+                                    {"title": r.title, "url": r.url, "snippet": r.snippet}
+                                    for r in _sr.results
+                                ],
+                                "error": _sr.error,
+                            })
+                        except asyncio.QueueFull:
+                            pass
+                        if _sr.results:
+                            _search_ctx = format_results_as_context(_sr)
+
+                            # Fetch search result pages (priority domains first,
+                            # skip login-walled / JS-only sites like TikTok/Instagram).
+                            from ct1.core.web_fetcher import fetch_url as _fetch_url_sr
+                            from ct1.core.web_searcher import prioritized_fetch_urls
+                            import re as _re
+                            _sr_urls = prioritized_fetch_urls(_sr.results)
+                            if _sr_urls:
+                                _sr_fetched = await asyncio.gather(
+                                    *[_fetch_url_sr(u, max_chars=24_000) for u in _sr_urls],
+                                    return_exceptions=True,
+                                )
+                                _page_blocks: list[str] = []
+                                for _fetched_url, _sr_page in zip(_sr_urls, _sr_fetched):
+                                    if isinstance(_sr_page, Exception) or getattr(_sr_page, "error", None):
+                                        continue
+                                    _pg_content = getattr(_sr_page, "content", None)
+                                    if _pg_content:
+                                        # Strip non-printable / replacement characters.
+                                        _pg_content = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd\ufffc\ufffe\uffff]', '', _pg_content)
+                                        _pg_content = _re.sub(r'\n{4,}', '\n\n', _pg_content).strip()
+                                        if not _pg_content:
+                                            continue
+                                        _pg_title = getattr(_sr_page, "title", None) or _fetched_url
+                                        _page_blocks.append(
+                                            f"[PAGE: {_pg_title}]\n{_pg_content}\n[/PAGE]"
+                                        )
+                                if _page_blocks:
+                                    _search_ctx += "\n\nFull page content:\n\n" + "\n\n".join(_page_blocks)
+
+                            _search_ctx += "\n--- END WEB SEARCH CONTEXT ---\n\n"
+                            if isinstance(actual_goal, str):
+                                actual_goal = _search_ctx + actual_goal
+                            elif isinstance(actual_goal, list):
+                                for part in actual_goal:
+                                    if part.get("type") == "text":
+                                        part["text"] = _search_ctx + part["text"]
+                                        break
+
+                    # ── URL content fetching ──
+                    # Scan the *original* goal (before search-context injection) so that
+                    # URLs that appear only inside the injected search snippets are not
+                    # double-fetched and bloat the context.
+                    from ct1.core.web_fetcher import extract_urls, fetch_url as _fetch_url, URL_PATTERN, MAX_URLS_PER_MESSAGE
+
+                    _original_goal_text = goal if isinstance(goal, str) else " ".join(
+                        p.get("text", "") for p in goal if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                    all_found = set(URL_PATTERN.findall(_original_goal_text))
+                    detected_urls = extract_urls(_original_goal_text)
 
                     if len(all_found) > MAX_URLS_PER_MESSAGE:
                         try:

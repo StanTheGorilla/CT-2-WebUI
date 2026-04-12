@@ -426,6 +426,24 @@
                                     </details>
                                 {/each}
                             {/if}
+                            {#if turn.webSearchResults?.length}
+                                <details class="search-results-card">
+                                    <summary class="search-results-header">
+                                        <span class="search-results-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+                                        <span class="search-results-title">Web results{turn.webSearchQuery ? ` for "${turn.webSearchQuery}"` : ''}</span>
+                                        <span class="search-results-count">{turn.webSearchResults.length}</span>
+                                    </summary>
+                                    <div class="search-results-body">
+                                        {#each turn.webSearchResults as sr}
+                                            <div class="search-result-item">
+                                                <a href={sr.url} target="_blank" rel="noopener noreferrer" class="sr-title">{sr.title}</a>
+                                                <div class="sr-url">{sr.url.length > 70 ? sr.url.slice(0, 67) + '…' : sr.url}</div>
+                                                {#if sr.snippet}<p class="sr-snippet">{sr.snippet}</p>{/if}
+                                            </div>
+                                        {/each}
+                                    </div>
+                                </details>
+                            {/if}
                             {#if turn.explanation}
                                 <div class="code-explanation">{turn.explanation}</div>
                             {/if}
@@ -520,6 +538,24 @@
                                     </details>
                                 {/each}
                             {/if}
+                            {#if turn.webSearchResults?.length}
+                                <details class="search-results-card">
+                                    <summary class="search-results-header">
+                                        <span class="search-results-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+                                        <span class="search-results-title">Web results{turn.webSearchQuery ? ` for "${turn.webSearchQuery}"` : ''}</span>
+                                        <span class="search-results-count">{turn.webSearchResults.length}</span>
+                                    </summary>
+                                    <div class="search-results-body">
+                                        {#each turn.webSearchResults as sr}
+                                            <div class="search-result-item">
+                                                <a href={sr.url} target="_blank" rel="noopener noreferrer" class="sr-title">{sr.title}</a>
+                                                <div class="sr-url">{sr.url.length > 70 ? sr.url.slice(0, 67) + '…' : sr.url}</div>
+                                                {#if sr.snippet}<p class="sr-snippet">{sr.snippet}</p>{/if}
+                                            </div>
+                                        {/each}
+                                    </div>
+                                </details>
+                            {/if}
                             <div class="computer-result-card" style="animation-delay: {idx * 30}ms">
                                 <div class="computer-result-header">
                                     <div class="computer-result-icon">
@@ -588,6 +624,24 @@
                                         <pre class="fetch-card-body">{fc.content}</pre>
                                     </details>
                                 {/each}
+                            {/if}
+                            {#if turn.webSearchResults?.length}
+                                <details class="search-results-card">
+                                    <summary class="search-results-header">
+                                        <span class="search-results-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+                                        <span class="search-results-title">Web results{turn.webSearchQuery ? ` for "${turn.webSearchQuery}"` : ''}</span>
+                                        <span class="search-results-count">{turn.webSearchResults.length}</span>
+                                    </summary>
+                                    <div class="search-results-body">
+                                        {#each turn.webSearchResults as sr}
+                                            <div class="search-result-item">
+                                                <a href={sr.url} target="_blank" rel="noopener noreferrer" class="sr-title">{sr.title}</a>
+                                                <div class="sr-url">{sr.url.length > 70 ? sr.url.slice(0, 67) + '…' : sr.url}</div>
+                                                {#if sr.snippet}<p class="sr-snippet">{sr.snippet}</p>{/if}
+                                            </div>
+                                        {/each}
+                                    </div>
+                                </details>
                             {/if}
                             <div class="ai-bubble" style="animation-delay: {idx * 30}ms">
                                 {@html render(shownContent)}
@@ -753,6 +807,57 @@
                             <span class="step-text">Assembling page...</span>
                         </div>
                     {/if}
+                {/if}
+
+                {#if $chat.webSearchPhase !== 'idle'}
+                    <div class="search-status">
+                        <span class="search-icon">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>
+                                <path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                            </svg>
+                        </span>
+                        {#if $chat.webSearchPhase === 'extracting'}
+                            <span class="search-label pulse-text">Figuring out what to search...</span>
+                        {:else if $chat.webSearchPhase === 'searching'}
+                            <span class="search-label pulse-text">Searching the web for</span>
+                            <span class="search-query">"{$chat.webSearchQuery}"</span>
+                        {:else if $chat.webSearchPhase === 'done'}
+                            <span class="search-label">Searched for</span>
+                            <span class="search-query">"{$chat.webSearchQuery}"</span>
+                            {#if $chat.webSearchResults.length > 0}
+                                <span class="search-count">{$chat.webSearchResults.length} results</span>
+                            {:else if $chat.webSearchError}
+                                <span class="search-error">— {$chat.webSearchError}</span>
+                            {:else}
+                                <span class="search-error">— no results</span>
+                            {/if}
+                        {/if}
+                    </div>
+                {/if}
+
+                {#if $chat.webSearchResults.length > 0}
+                    <details class="search-results-card">
+                        <summary class="search-results-header">
+                            <span class="search-results-icon">
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                    <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>
+                                    <path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                                </svg>
+                            </span>
+                            <span class="search-results-title">Web results for "{$chat.webSearchQuery}"</span>
+                            <span class="search-results-count">{$chat.webSearchResults.length}</span>
+                        </summary>
+                        <div class="search-results-body">
+                            {#each $chat.webSearchResults as sr, i}
+                                <div class="search-result-item">
+                                    <a href={sr.url} target="_blank" rel="noopener noreferrer" class="sr-title">{sr.title}</a>
+                                    <div class="sr-url">{sr.url.length > 70 ? sr.url.slice(0, 67) + '…' : sr.url}</div>
+                                    {#if sr.snippet}<p class="sr-snippet">{sr.snippet}</p>{/if}
+                                </div>
+                            {/each}
+                        </div>
+                    </details>
                 {/if}
 
                 {#if $chat.fetchingUrls.length > 0}
@@ -2504,4 +2609,77 @@
     .fetch-card-meta { margin-left: auto; opacity: 0.6; flex-shrink: 0; }
     .fetch-card-trunc { font-size: 0.7rem; opacity: 0.5; font-style: italic; }
     .fetch-card-body { padding: 8px 12px; font-size: 0.75rem; color: var(--text-2); max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; border-top: 1px solid var(--border); margin: 0; }
+
+    /* ── Web search status row ── */
+    .search-status {
+        display: flex; align-items: center; gap: 7px;
+        font-size: 0.78rem; color: var(--text-2);
+        margin: 6px 0 4px;
+    }
+    .search-icon { color: var(--accent, #3b82f6); flex-shrink: 0; display: flex; }
+    .search-label { font-weight: 500; }
+    .search-query { opacity: 0.75; font-style: italic; }
+    .search-count { margin-left: auto; font-size: 0.72rem; opacity: 0.55; }
+    .search-error { font-size: 0.72rem; color: var(--warning, #f59e0b); opacity: 0.85; font-style: italic; }
+    .pulse-text { animation: pulseOpacity 1.2s ease-in-out infinite; }
+    @keyframes pulseOpacity { 0%,100% { opacity:1; } 50% { opacity:0.45; } }
+
+    /* ── Web search results card ── */
+    .search-results-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        margin: 4px 0;
+        overflow: hidden;
+    }
+    .search-results-header {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 12px; cursor: pointer;
+        font-size: 0.8rem; color: var(--text-2);
+        list-style: none;
+    }
+    .search-results-header::-webkit-details-marker { display: none; }
+    .search-results-icon {
+        color: var(--accent, #3b82f6);
+        display: flex; flex-shrink: 0;
+    }
+    .search-results-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .search-results-count {
+        margin-left: auto;
+        font-size: 0.7rem;
+        background: var(--accent-subtle);
+        color: var(--accent, #3b82f6);
+        padding: 1px 7px;
+        border-radius: 99px;
+        font-weight: 600;
+        flex-shrink: 0;
+    }
+    .search-results-body {
+        border-top: 1px solid var(--border);
+        padding: 4px 0;
+        max-height: 340px;
+        overflow-y: auto;
+    }
+    .search-result-item {
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--border-subtle, color-mix(in srgb, var(--border) 50%, transparent));
+    }
+    .search-result-item:last-child { border-bottom: none; }
+    .sr-title {
+        font-size: 0.82rem; font-weight: 500;
+        color: var(--accent, #3b82f6);
+        text-decoration: none;
+        display: block;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .sr-title:hover { text-decoration: underline; }
+    .sr-url {
+        font-size: 0.7rem; color: var(--text-muted);
+        margin-top: 1px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .sr-snippet {
+        font-size: 0.76rem; color: var(--text-2);
+        margin: 3px 0 0; line-height: 1.4;
+    }
 </style>

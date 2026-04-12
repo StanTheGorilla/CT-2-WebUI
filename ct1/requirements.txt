@@ -8,3 +8,4 @@ uvicorn>=0.30.0
 websockets>=12.0
 aiosqlite>=0.20.0
 trafilatura>=2.0.0
+ddgs>=9.0.0
