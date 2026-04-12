@@ -1009,13 +1009,20 @@ class Engine:
                 raw_ctx = "\n".join(snippets)[:800]
                 context_block = f"\nRecent conversation:\n{raw_ctx}\n"
 
+        from datetime import datetime as _dt
+        _today = _dt.now().strftime("%B %d, %Y")  # e.g. "April 12, 2025"
+        _year = _dt.now().year
+
         system = (
+            f"Today is {_today}. "
             "You convert user messages into concise web search queries. "
             "Reply with ONLY the search query — 3 to 8 keywords, no quotes, "
             "no punctuation, no prefix like 'query:'. "
             "If the message contains pronouns (his, her, it, they, that), "
             "resolve them using the conversation context and include the "
-            "specific subject in the query."
+            "specific subject in the query. "
+            f"For questions about current events, news, or recent happenings, "
+            f"append the year {_year} to the query to ensure recent results."
         )
         user = f"{context_block}\nUser message:\n{text[:600]}\n\nSearch query:"
 

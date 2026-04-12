@@ -1171,7 +1171,7 @@ async def ws_think(websocket: WebSocket):
                             queue.put_nowait({"event": "web_searching", "query": _search_query})
                         except asyncio.QueueFull:
                             pass
-                        _sr = await search_web(_search_query, max_results=5)
+                        _sr = await search_web(_search_query, max_results=8)
                         try:
                             queue.put_nowait({
                                 "event": "web_search_results",

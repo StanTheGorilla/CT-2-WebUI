@@ -30,27 +30,53 @@ _SKIP_FETCH_DOMAINS: frozenset[str] = frozenset({
 # Domains whose pages are usually high-quality and content-rich.
 # Results from these are sorted to the front of the fetch queue.
 _PRIORITY_FETCH_DOMAINS: frozenset[str] = frozenset({
+    # Encyclopaedic
     "wikipedia.org",
-    "bbc.com",
-    "bbc.co.uk",
+    "britannica.com",
+    # Global wire services & breaking news (highest trust for current events)
     "reuters.com",
     "apnews.com",
+    "afp.com",
+    # English-language broadcasters
+    "bbc.com",
+    "bbc.co.uk",
+    "aljazeera.com",
+    "cnn.com",
+    "nbcnews.com",
+    "abcnews.go.com",
+    "cbsnews.com",
+    "npr.org",
+    "pbs.org",
+    # Newspapers
     "theguardian.com",
     "nytimes.com",
     "washingtonpost.com",
+    "wsj.com",
+    "thetimes.co.uk",
+    "ft.com",
+    "politico.com",
+    "axios.com",
+    "thehill.com",
+    # Middle East / regional (relevant for Iran/Israel/USA coverage)
+    "haaretz.com",
+    "timesofisrael.com",
+    "jpost.com",
+    "middleeasteye.net",
+    "presstv.ir",
+    "tehrannews.ir",
+    # Tech
     "techcrunch.com",
     "arstechnica.com",
     "wired.com",
     "theverge.com",
-    "cnn.com",
-    "nbcnews.com",
-    "forbes.com",
+    # Business
     "bloomberg.com",
+    "forbes.com",
+    "statista.com",
+    # Entertainment
     "variety.com",
     "ign.com",
     "imdb.com",
-    "britannica.com",
-    "statista.com",
 })
 
 
@@ -135,11 +161,15 @@ def format_results_as_context(resp: SearchResponse) -> str:
     if resp.error and not resp.results:
         return f"[WEB SEARCH for '{resp.query}' failed: {resp.error}]"
 
+    from datetime import datetime as _dt
+    _now = _dt.now().strftime("%Y-%m-%d %H:%M UTC")
+
     lines = [
         "--- WEB SEARCH CONTEXT ---",
         f"Query: {resp.query}",
+        f"Search performed: {_now}",
         "The following information was retrieved from the web.",
-        "Use it to answer the user's question. Do NOT reproduce it verbatim.",
+        "Use it to answer the user's question accurately and up to date. Do NOT reproduce it verbatim.",
         "",
         "Search result snippets:",
     ]
