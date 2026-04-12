@@ -341,6 +341,27 @@ def _find_mmproj_path(model_path: str | Path, configured: str | None = "auto") -
     return str(best) if best_score > 0 else None
 
 
+def _ensure_mmproj_path(model_path: str | Path, configured: str | None = "auto") -> str | None:
+    """Return a local mmproj path, auto-downloading a known sidecar when needed."""
+    mmproj_path = _find_mmproj_path(model_path, configured)
+    if mmproj_path:
+        return mmproj_path
+
+    if configured and str(configured).lower() != "auto":
+        return None
+
+    try:
+        from ct1.server.downloader import ensure_mmproj_downloaded
+
+        resolved = ensure_mmproj_downloaded(model_path)
+        if resolved:
+            print(f"[launcher] mmproj ready: {resolved}")
+        return resolved
+    except Exception as exc:
+        print(f"[launcher] mmproj auto-download unavailable: {exc}")
+        return None
+
+
 def resolve_config(raw_cfg: dict, config_path: str = None,
                     context_size_override: int = None) -> dict:
     """Resolve model config into flat format expected by Orchestrator/API.
@@ -380,7 +401,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
         enable_thinking = _detect_thinking_support(model_name)
         explicit_vision = raw_cfg.get("vision_supported") if "vision_supported" in raw_cfg else None
         vision_capable = explicit_vision if explicit_vision is not None else _detect_vision_support(model_name, model_path)
-        mmproj_path = _find_mmproj_path(model_path, raw_cfg.get("mmproj", "auto")) if vision_capable else None
+        mmproj_path = _ensure_mmproj_path(model_path, raw_cfg.get("mmproj", "auto")) if vision_capable else None
         vision_supported = bool(vision_capable and (mmproj_path or explicit_vision is True))
 
         from ct1.core.gguf_reader import read_context_length
@@ -464,7 +485,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
     explicit_vision = director.get("vision_supported") if "vision_supported" in director else None
     vision_capable = explicit_vision if explicit_vision is not None else _detect_vision_support(model_name, model_path)
     mmproj_cfg = director.get("mmproj", raw_cfg.get("mmproj", "auto"))
-    mmproj_path = _find_mmproj_path(model_path, mmproj_cfg) if vision_capable else None
+    mmproj_path = _ensure_mmproj_path(model_path, mmproj_cfg) if vision_capable else None
     vision_supported = bool(vision_capable and (mmproj_path or explicit_vision is True))
 
     from ct1.core.gguf_reader import read_context_length

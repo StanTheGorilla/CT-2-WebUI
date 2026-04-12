@@ -69,6 +69,20 @@ def test_find_mmproj_path_rejects_wrong_model_size():
     assert _find_mmproj_path(model_path) is None
 
 
+def test_ensure_mmproj_path_uses_auto_download_when_missing(monkeypatch):
+    from ct1.server.launcher import _ensure_mmproj_path
+
+    monkeypatch.setattr("ct1.server.launcher._find_mmproj_path", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "ct1.server.downloader.ensure_mmproj_downloaded",
+        lambda _model_path: "models/mmproj-gemma-4-e2b-it-f16.gguf",
+    )
+
+    resolved = _ensure_mmproj_path("models/gemma-4-E2B-it-Q5_K_M.gguf")
+
+    assert resolved == "models/mmproj-gemma-4-e2b-it-f16.gguf"
+
+
 def test_build_server_command_includes_mmproj_when_present():
     from ct1.server.launcher import build_server_command
 
@@ -84,3 +98,26 @@ def test_build_server_command_includes_mmproj_when_present():
 
     assert "--mmproj" in cmd
     assert "mmproj.gguf" in cmd
+
+
+def test_resolve_config_marks_vision_ready_after_auto_download(monkeypatch):
+    from ct1.server.launcher import resolve_config
+
+    base = Path("_local") / "test-resolve-mmproj" / uuid4().hex
+    models_dir = base / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    model_path = models_dir / "gemma-4-E2B-it-Q5_K_M.gguf"
+    model_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr("ct1.server.launcher._find_llama_executable", lambda *_args, **_kwargs: "llama-server")
+    monkeypatch.setattr("ct1.server.launcher._detect_vision_support", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("ct1.server.launcher._ensure_mmproj_path", lambda *_args, **_kwargs: str(models_dir / "mmproj-gemma-4-e2b-it-f16.gguf"))
+    monkeypatch.setattr("ct1.core.gguf_reader.read_context_length", lambda _path: 32768)
+
+    cfg = resolve_config({
+        "models_dir": str(models_dir),
+        "active_model": model_path.name,
+    }, config_path=str(base / "ct1" / "server" / "model_config.yaml"))
+
+    assert cfg["models"]["director"]["vision_supported"] is True
+    assert cfg["llama_server"]["mmproj"].endswith("mmproj-gemma-4-e2b-it-f16.gguf")

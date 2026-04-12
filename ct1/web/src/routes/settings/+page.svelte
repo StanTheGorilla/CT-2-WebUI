@@ -175,6 +175,7 @@
                 switchError = data.error;
             } else {
                 runningContextSize = contextSize;
+                updateStatus = {};   // hide the "Restart Server Now" button
                 await loadData();
             }
         } catch (e: any) {

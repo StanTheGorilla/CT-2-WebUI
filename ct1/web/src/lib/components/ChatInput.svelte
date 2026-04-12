@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, type Attachment, type ModeOverride } from '$lib/stores/chat';
+    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, toggleWebSearch, type Attachment, type ModeOverride } from '$lib/stores/chat';
 
     let input = $state('');
     let textarea: HTMLTextAreaElement;
@@ -19,6 +19,7 @@
 
     const disabled = $derived($chat.phase !== 'idle' && $chat.phase !== 'done');
     const currentMode = $derived($chat.modeOverride);
+    const webSearchEnabled = $derived($chat.webSearchEnabled);
     const isWorkspaceSession = $derived(!!$chat.workspaceId);
     const hasWorkspaceContext = $derived(!!$chat.workspaceId);
     const contextCount = $derived($chat.contextFiles.length);
@@ -373,6 +374,19 @@
         ></textarea>
         <div class="island-actions">
             <span class="hint">Ctrl+Enter</span>
+            <button
+                class="web-search-circle"
+                class:active={webSearchEnabled}
+                onclick={toggleWebSearch}
+                {disabled}
+                aria-pressed={webSearchEnabled}
+                title={webSearchEnabled ? 'Web search on' : 'Web search off'}
+            >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>
+                    <path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                </svg>
+            </button>
             {#if disabled}
                 <button class="send send-stop" onclick={stopGeneration} aria-label="Stop generation" title="Stop">
                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -486,10 +500,10 @@
 
     /* ---- Mode selector pills ---- */
     .mode-bar {
+        width: min(100%, var(--composer-max));
+        margin: 0 auto 10px;
         display: flex;
         gap: 2px;
-        max-width: min(100%, var(--composer-max));
-        margin: 0 auto 8px;
         justify-content: center;
         background: var(--bubble);
         backdrop-filter: var(--bubble-blur);
@@ -536,6 +550,41 @@
     }
     .mode-pill.active .mode-icon {
         opacity: 1;
+    }
+
+    /* ---- Web search circle toggle (inside island) ---- */
+    .web-search-circle {
+        box-sizing: border-box;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1.5px solid transparent;
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        opacity: 0.35;
+        transition: opacity 0.15s, background 0.2s, border-color 0.2s, box-shadow 0.2s, color 0.15s;
+    }
+    .web-search-circle:hover:not(:disabled) {
+        opacity: 0.7;
+    }
+    .web-search-circle.active {
+        background: #3b82f6;
+        border-color: #3b82f6;
+        color: #ffffff;
+        opacity: 1;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+    }
+    .web-search-circle.active:hover {
+        background: #2563eb;
+        border-color: #2563eb;
+    }
+    .web-search-circle:disabled {
+        cursor: not-allowed;
     }
 
     /* ---- Workspace context badge + popover ---- */
@@ -740,9 +789,10 @@
     }
 
     .send {
+        box-sizing: border-box;
         width: 38px;
         height: 38px;
-        border: none;
+        border: 1px solid transparent;
         border-radius: 50%;
         background: var(--text);
         color: var(--bg);
@@ -751,7 +801,11 @@
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        transition: transform var(--spring-duration) var(--spring), opacity var(--transition);
+        transition: transform var(--spring-duration) var(--spring),
+                    opacity var(--transition),
+                    background var(--transition),
+                    color var(--transition),
+                    border-color var(--transition);
     }
     .send:hover:not(:disabled) {
         transform: scale(1.05);
@@ -766,7 +820,7 @@
     .send-stop {
         background: rgba(239, 68, 68, 0.12);
         color: var(--error, #ef4444);
-        border: 1px solid rgba(239, 68, 68, 0.25);
+        border-color: rgba(239, 68, 68, 0.3);
     }
     .send-stop:hover {
         background: rgba(239, 68, 68, 0.22);

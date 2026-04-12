@@ -115,7 +115,7 @@
 
 /* Dark mode donut: white instead of black */
 [data-theme="dark"] .donut {
-    color: rgba(255, 255, 255, 0.12) !important;
+    color: rgba(255, 255, 255, 0.06) !important;
 }
 
 
@@ -125,15 +125,27 @@
     padding: 0;
 }
 
-html, body {
+html {
     height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+}
+
+body {
+    /* Global 80% UI scale. `zoom` is layout-aware (unlike transform: scale)
+       so child sizes, layout, and fixed positioning all behave correctly.
+       Body is laid out at 125% of the viewport and then zoomed to 0.8, so
+       it renders at exactly 100vw × 100vh — the same effect as Chromium
+       browser zoom at 80%. */
+    zoom: 0.8;
+    width: 125vw;
+    height: 125vh;
     background: var(--bg);
     color: var(--text);
     font-family: var(--font-body);
     font-size: 15px;
     line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    /* Let the OS handle subpixel antialiasing (ClearType on Windows). */
     text-rendering: optimizeLegibility;
     overflow: hidden;
     scrollbar-width: none;

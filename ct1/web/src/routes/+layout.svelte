@@ -63,8 +63,10 @@
 
         const R1 = 1, R2 = 2, K2 = 5;
         const charW = 8.4, charH = 14;
-        const screenW = Math.min(180, Math.floor(window.innerWidth / charW));
-        const screenH = Math.min(90, Math.floor(window.innerHeight / charH));
+        // Cap the grid smaller so the donut occupies roughly the centre
+        // third of the screen rather than flooding the whole background.
+        const screenW = Math.min(120, Math.floor(window.innerWidth / charW));
+        const screenH = Math.min(60, Math.floor(window.innerHeight / charH));
         const K1 = screenW * K2 * 3 / (8 * (R1 + R2));
 
         let A = 0, B = 0;
@@ -194,7 +196,9 @@
     .app {
         display: flex;
         flex-direction: column;
-        height: 100vh;
+        /* Fill the zoomed body (100%) rather than the unzoomed viewport (100vh). */
+        width: 100%;
+        height: 100%;
         overflow: hidden;
         position: relative;
         background: var(--bg);
@@ -202,7 +206,7 @@
 
     /* ---- Spinning donut background ---- */
     .donut-bg {
-        position: fixed;
+        position: absolute;
         inset: 0;
         z-index: 0;
         display: flex;
