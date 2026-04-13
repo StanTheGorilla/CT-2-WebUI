@@ -1187,19 +1187,29 @@ async def ws_think(websocket: WebSocket):
                         if _sr.results:
                             _search_ctx = format_results_as_context(_sr)
 
-                            # Fetch search result pages (priority domains first,
+                            # Fetch top search result pages (priority domains first,
                             # skip login-walled / JS-only sites like TikTok/Instagram).
+                            # Hard limits prevent context overflow:
+                            #   - max 3 pages fetched (not all results)
+                            #   - max 3,000 chars per page (~750 tokens)
+                            #   - total page content capped at 9,000 chars (~2,250 tokens)
                             from ct1.core.web_fetcher import fetch_url as _fetch_url_sr
                             from ct1.core.web_searcher import prioritized_fetch_urls
                             import re as _re
-                            _sr_urls = prioritized_fetch_urls(_sr.results)
+                            _MAX_FETCH_PAGES = 3
+                            _MAX_CHARS_PER_PAGE = 3_000
+                            _MAX_TOTAL_PAGE_CHARS = 9_000
+                            _sr_urls = prioritized_fetch_urls(_sr.results)[:_MAX_FETCH_PAGES]
                             if _sr_urls:
                                 _sr_fetched = await asyncio.gather(
-                                    *[_fetch_url_sr(u, max_chars=24_000) for u in _sr_urls],
+                                    *[_fetch_url_sr(u, max_chars=_MAX_CHARS_PER_PAGE) for u in _sr_urls],
                                     return_exceptions=True,
                                 )
                                 _page_blocks: list[str] = []
+                                _total_page_chars = 0
                                 for _fetched_url, _sr_page in zip(_sr_urls, _sr_fetched):
+                                    if _total_page_chars >= _MAX_TOTAL_PAGE_CHARS:
+                                        break
                                     if isinstance(_sr_page, Exception) or getattr(_sr_page, "error", None):
                                         continue
                                     _pg_content = getattr(_sr_page, "content", None)
@@ -1209,10 +1219,15 @@ async def ws_think(websocket: WebSocket):
                                         _pg_content = _re.sub(r'\n{4,}', '\n\n', _pg_content).strip()
                                         if not _pg_content:
                                             continue
+                                        # Trim this page if it would push us over the total budget
+                                        _remaining = _MAX_TOTAL_PAGE_CHARS - _total_page_chars
+                                        if len(_pg_content) > _remaining:
+                                            _pg_content = _pg_content[:_remaining].rsplit('\n', 1)[0]
                                         _pg_title = getattr(_sr_page, "title", None) or _fetched_url
                                         _page_blocks.append(
                                             f"[PAGE: {_pg_title}]\n{_pg_content}\n[/PAGE]"
                                         )
+                                        _total_page_chars += len(_pg_content)
                                 if _page_blocks:
                                     _search_ctx += "\n\nFull page content:\n\n" + "\n\n".join(_page_blocks)
 

@@ -276,10 +276,12 @@
                 >
                     <svg class="mode-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
                         {#if m.key === 'auto'}
-                            <path d="M8 2l1.5 3.5L13 7l-3.5 1.5L8 12l-1.5-3.5L3 7l3.5-1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                            <!-- Lightning bolt — suggests speed / automatic routing -->
+                            <path d="M9.5 2 L5 9 H8 L6.5 14 L12 7 H9 Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>
                         {:else if m.key === 'design'}
-                            <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.2"/>
-                            <circle cx="8" cy="8" r="2" fill="currentColor" opacity="0.4"/>
+                            <!-- Pencil — suggests drawing / visual design -->
+                            <path d="M11.5 2 L14 4.5 L5 13.5 L2 14 L2.5 11 Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M9.5 4 L12 6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
                         {:else if m.key === 'code'}
                             <path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
                         {:else if m.key === 'chat'}

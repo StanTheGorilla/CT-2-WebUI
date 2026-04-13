@@ -241,6 +241,22 @@
         modesDirty[modeName] = true;
     }
 
+    // Shipped defaults — what each mode's task_overrides were at install time.
+    // Used by the reset button so users can always recover a known-good baseline.
+    const MODE_DEFAULTS: Record<string, Record<string, number>> = {
+        computer: { temperature: 0.25, top_p: 0.8,  presence_penalty: 1.3 },
+        design:   { temperature: 0.1 },
+        code:     { temperature: 0,    top_p: 1.0,  presence_penalty: 1.3 },
+        direct:   { temperature: 0.5,               presence_penalty: 0.6 },
+    };
+
+    function resetModeToDefault(name: string) {
+        const defaults = MODE_DEFAULTS[name];
+        if (!defaults) return;
+        modeEdits[name] = { ...defaults };
+        modesDirty[name] = true;
+    }
+
     /* ── Prompts state ── */
     const PROMPT_LABELS: Record<string, string> = {
         generator_text:        'Chat & Direct Answers',
@@ -654,9 +670,26 @@
             {#each modes as mode (mode.name)}
                 <div class="mode-card">
                     <div class="mode-header">
-                        <span class="mode-name">{mode.name}</span>
-                        {#if mode.description}
-                            <span class="mode-desc">{mode.description}</span>
+                        <div class="mode-header-text">
+                            <span class="mode-name">{mode.name}</span>
+                            {#if mode.description}
+                                <span class="mode-desc">{mode.description}</span>
+                            {/if}
+                        </div>
+                        {#if MODE_DEFAULTS[mode.name]}
+                        <button
+                            class="mode-reset-btn"
+                            class:active={modesDirty[mode.name]}
+                            onclick={() => resetModeToDefault(mode.name)}
+                            title="Reset to defaults"
+                            aria-label="Reset {mode.name} settings to defaults"
+                            type="button"
+                        >
+                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                <path d="M2.5 8a5.5 5.5 0 1 0 1.1-3.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M2.5 4v4h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
                         {/if}
                     </div>
 
@@ -1423,7 +1456,45 @@
         box-shadow: var(--shadow-xs);
     }
     .mode-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
         margin-bottom: 18px;
+    }
+    .mode-header-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+    }
+    .mode-reset-btn {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 7px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: color 0.15s, background 0.15s, border-color 0.15s;
+        margin-top: 1px;
+    }
+    .mode-reset-btn:hover {
+        color: var(--text);
+        background: var(--bubble-strong);
+        border-color: var(--border);
+    }
+    .mode-reset-btn.active {
+        color: var(--accent, #7c6fe0);
+        background: color-mix(in srgb, var(--accent, #7c6fe0) 12%, transparent);
+        border-color: color-mix(in srgb, var(--accent, #7c6fe0) 30%, transparent);
+    }
+    .mode-reset-btn svg {
+        display: block;
     }
     .mode-name {
         font-size: 15px;
