@@ -139,7 +139,7 @@
             ? `${Math.round(contextSize / 1000)}K`
             : `${contextSize}`
     );
-    const showCtxBar = $derived(contextSize > 0 && $chat.conversation.length > 0 && ctxPct > 5);
+    const showCtxBar = $derived(contextSize > 0 && $chat.conversation.length > 0);
 
     function getExtension(name: string): string {
         const i = name.lastIndexOf('.');
@@ -330,7 +330,7 @@
                     class="ctx-bar-fill"
                     class:ctx-warn={ctxPct >= 70 && ctxPct < 85}
                     class:ctx-danger={ctxPct >= 85}
-                    style="width: {ctxPct}%"
+                    style="width: max(2px, {ctxPct}%)"
                 ></div>
             </div>
             <span class="ctx-bar-label" class:ctx-warn={ctxPct >= 70 && ctxPct < 85} class:ctx-danger={ctxPct >= 85}>
