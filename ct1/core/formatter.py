@@ -488,12 +488,15 @@ def reassemble_html_section(original_html: str, section: str,
             original_html, count=1, flags=re.DOTALL | re.IGNORECASE,
         )
     if section == 'head':
-        # Preserve <style> tags that live inside <head>
+        # Preserve <style> tags that live inside <head>, but only if new_content
+        # doesn't already contain one (avoids duplicate <style> blocks).
         style_match = re.search(
             r'<style[^>]*>.*?</style>', original_html,
             re.DOTALL | re.IGNORECASE,
         )
-        style_part = f"\n    {style_match.group(0)}" if style_match else ""
+        has_style_in_new = bool(re.search(r'<style', new_content, re.IGNORECASE))
+        style_part = (f"\n    {style_match.group(0)}"
+                      if style_match and not has_style_in_new else "")
         return re.sub(
             r'(<head[^>]*>).*?(</head>)',
             lambda m: f"{m.group(1)}\n{new_content}{style_part}\n{m.group(2)}",

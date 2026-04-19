@@ -550,7 +550,7 @@ class Engine:
             current_messages = list(current_messages)
             current_messages.append({
                 "role": "assistant",
-                "content": pass_text or None,
+                "content": pass_text or "",
                 "tool_calls": [
                     {
                         "id": tc["id"],
@@ -1127,7 +1127,8 @@ class Engine:
                 thinking_budget=0,
             )
             raw = result["text"] if isinstance(result, dict) else result
-        except Exception:
+        except Exception as _e:
+            print(f"[engine] extract_search_query failed ({_e}), using raw text fallback")
             return text[:120]
 
         query = (raw or "").strip().strip('"').strip("'").strip("`")

@@ -169,7 +169,7 @@ def _graceful_shutdown_llama(port: int = 8080, timeout: float = 30.0) -> bool:
         if not _is_llama_server_running():
             print("[launcher] llama-server exited gracefully (Vulkan resources released)")
             return True
-        time.sleep(0.5)
+        time.sleep(1.0)
 
     print(f"[launcher] Graceful shutdown timed out after {timeout}s — escalating to force-kill")
     return False
@@ -210,10 +210,10 @@ def kill_existing_llama_servers(port: int = 8080):
         pass
 
     # Poll until process is actually gone (up to 10s)
-    for _ in range(20):
+    for _ in range(10):
         if not _is_llama_server_running():
             break
-        time.sleep(0.5)
+        time.sleep(1.0)
     else:
         print("[launcher] WARNING: llama-server still alive after 10s — proceeding anyway")
 

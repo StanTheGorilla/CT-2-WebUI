@@ -1525,6 +1525,22 @@ class Orchestrator:
         Works in any language — no keyword dependency. Returns True if the message
         is a pure information request (explain, describe, summarize, etc.).
         Defaults to False (action) on any error so generation is never blocked."""
+        # Fast-path: clear action verbs → skip the LLM roundtrip entirely.
+        _lower = message.lower().strip()
+        _action_words = (
+            "add ", "fix ", "make ", "change ", "update ", "remove ", "delete ",
+            "create ", "build ", "write ", "refactor ", "edit ", "improve ",
+            "rename ", "move ", "replace ", "implement ", "style ", "convert ",
+            "generate ", "rewrite ", "include ",
+        )
+        if any(_lower.startswith(w) for w in _action_words):
+            return False
+        # Fast-path: clear question starters → also skip LLM.
+        _question_starts = ("what ", "why ", "how ", "when ", "where ", "who ",
+                            "which ", "explain ", "describe ", "what's ", "what is ")
+        if any(_lower.startswith(w) for w in _question_starts) or _lower.endswith("?"):
+            return True
+
         try:
             prompt = (
                 f'Message: "{message}"\n\n'

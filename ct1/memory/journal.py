@@ -15,9 +15,9 @@ class Journal:
             path = self.dir / f"{today}_{idx:03d}.jsonl"
             if not path.exists():
                 return path
-            with open(path) as f:
-                if sum(1 for _ in f) < 1000:
-                    return path
+            # ~200 bytes/entry × 1000 entries = 200 KB cap — single stat() call
+            if path.stat().st_size < 200_000:
+                return path
             idx += 1
 
     def write(self, entry: dict):
