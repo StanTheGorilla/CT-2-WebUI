@@ -17,6 +17,7 @@
     let didInitialFocus = $state(false);
     let wasDisabled = $state(true);
     let visionSupported = $state(false);
+    let contextSize = $state(0);
     const TEXT_FILE_ACCEPT = '.txt,.html,.htm,.css,.js,.ts,.py,.json,.md,.csv,.xml,.yaml,.yml,.svg,.sh,.bat,.sql,.rb,.go,.rs,.java,.c,.cpp,.h,.hpp,.toml,.ini,.cfg';
 
     const disabled = $derived(($chat.phase !== 'idle' && $chat.phase !== 'done') || $isUpdating);
@@ -104,13 +105,41 @@
 
     async function loadModelCapabilities() {
         try {
-            const res = await fetch('/api/model');
-            const data = await res.json();
-            visionSupported = data.vision_supported ?? false;
+            const [modelRes, cfgRes] = await Promise.all([
+                fetch('/api/model'),
+                fetch('/api/config'),
+            ]);
+            if (modelRes.ok) {
+                const data = await modelRes.json();
+                visionSupported = data.vision_supported ?? false;
+            }
+            if (cfgRes.ok) {
+                const cfg = await cfgRes.json();
+                contextSize = cfg.context_size ?? 0;
+            }
         } catch {
             visionSupported = false;
         }
     }
+
+    // Estimated token usage across the whole conversation (3.5 chars ≈ 1 token)
+    const usedTokens = $derived(
+        Math.round(
+            $chat.conversation.reduce((acc, t) => acc + t.content.length, 0) / 3.5
+        ) + $chat.tokenCount
+    );
+    const ctxPct = $derived(contextSize > 0 ? Math.min(100, Math.round(usedTokens / contextSize * 100)) : 0);
+    const ctxLabel = $derived(
+        usedTokens >= 1000
+            ? `${(usedTokens / 1000).toFixed(1)}K`
+            : `${usedTokens}`
+    );
+    const ctxMax = $derived(
+        contextSize >= 1000
+            ? `${Math.round(contextSize / 1000)}K`
+            : `${contextSize}`
+    );
+    const showCtxBar = $derived(contextSize > 0 && $chat.conversation.length > 0 && ctxPct > 5);
 
     function getExtension(name: string): string {
         const i = name.lastIndexOf('.');
@@ -291,6 +320,22 @@
                     </button>
                 </div>
             {/each}
+        </div>
+    {/if}
+
+    {#if showCtxBar}
+        <div class="ctx-bar-wrap">
+            <div class="ctx-bar-track">
+                <div
+                    class="ctx-bar-fill"
+                    class:ctx-warn={ctxPct >= 70 && ctxPct < 85}
+                    class:ctx-danger={ctxPct >= 85}
+                    style="width: {ctxPct}%"
+                ></div>
+            </div>
+            <span class="ctx-bar-label" class:ctx-warn={ctxPct >= 70 && ctxPct < 85} class:ctx-danger={ctxPct >= 85}>
+                {ctxLabel} / {ctxMax} tokens
+            </span>
         </div>
     {/if}
 
@@ -869,4 +914,39 @@
         background: rgba(239, 68, 68, 0.2);
         transform: scale(1.06);
     }
+
+    /* ---- Context usage bar ---- */
+    .ctx-bar-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: min(100%, var(--composer-max));
+        margin: 0 auto 7px;
+        padding: 0 4px;
+    }
+    .ctx-bar-track {
+        flex: 1;
+        height: 3px;
+        background: var(--border-subtle);
+        border-radius: 2px;
+        overflow: hidden;
+    }
+    .ctx-bar-fill {
+        height: 100%;
+        background: var(--text-muted);
+        border-radius: 2px;
+        transition: width 0.4s ease, background 0.3s;
+    }
+    .ctx-bar-fill.ctx-warn { background: #e8a000; }
+    .ctx-bar-fill.ctx-danger { background: var(--error, #ef4444); }
+    .ctx-bar-label {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-muted);
+        white-space: nowrap;
+        flex-shrink: 0;
+        letter-spacing: 0.01em;
+    }
+    .ctx-bar-label.ctx-warn { color: #e8a000; }
+    .ctx-bar-label.ctx-danger { color: var(--error, #ef4444); }
 </style>

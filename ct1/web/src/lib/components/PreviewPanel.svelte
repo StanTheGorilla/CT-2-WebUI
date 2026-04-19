@@ -7,6 +7,23 @@
     let iframe = $state<HTMLIFrameElement>();
     let lastOutputType = $state('');
 
+    const _EXT: Record<string, string> = {
+        html_page: 'design.html', python: 'script.py', javascript: 'script.js',
+        typescript: 'script.ts', css: 'styles.css', rust: 'main.rs',
+        go: 'main.go', java: 'Main.java', cpp: 'main.cpp', c: 'main.c',
+    };
+
+    function downloadCode() {
+        const filename = _EXT[outputType] ?? 'output.txt';
+        const blob = new Blob([code], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
     let lines = $derived(() => {
         return code ? code.split('\n') : [];
     });
@@ -71,12 +88,21 @@
                 onclick={() => activeTab = 'code'}
             >Code</button>
         </div>
-        <button class="close" onclick={onClose} aria-label="Close preview" title="Close preview">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-            </svg>
-            <span>Close</span>
-        </button>
+        <div class="toolbar-actions">
+            <button class="action-btn" onclick={downloadCode} aria-label="Download file" title="Download">
+                <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                    <path d="M7 2v7M4 7l3 3 3-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2 11h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+                <span>Download</span>
+            </button>
+            <button class="close" onclick={onClose} aria-label="Close preview" title="Close preview">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+                <span>Close</span>
+            </button>
+        </div>
     </div>
 
     <div class="content">
@@ -151,7 +177,12 @@
         color: var(--text);
         box-shadow: var(--shadow-xs);
     }
-    .close {
+    .toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .action-btn, .close {
         display: flex;
         align-items: center;
         gap: 6px;
@@ -167,7 +198,7 @@
         cursor: pointer;
         transition: all var(--transition);
     }
-    .close:hover {
+    .action-btn:hover, .close:hover {
         background: var(--surface);
         color: var(--text);
         border-color: var(--border-strong);
