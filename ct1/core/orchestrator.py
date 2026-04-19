@@ -24,10 +24,7 @@ from ct1.core.formatter import (
 from ct1.memory.journal import Journal
 from ct1.memory.journal_reader import JournalReader
 from ct1.memory.session_store import SessionStore
-from ct1.core.assembler import assemble_page, patch_component as patch_component_in_page
-from ct1.templates.fallbacks import get_fallback
 from ct1.core.atlas import AtlasController
-from ct1.core.validator import validate_spec
 
 _CONFIG_PATH = (Path(__file__).parent.parent.parent
                 / "ct1" / "server" / "model_config.yaml")
@@ -792,11 +789,6 @@ class Orchestrator:
             if comp.get("type") not in valid_types:
                 comp["type"] = "custom"
 
-        if mode == "new" and spec and spec.get("components"):
-            spec_ok, spec_errors = validate_spec(spec)
-            if not spec_ok:
-                print(f"[design] Phase 0.5: spec validation warnings: {spec_errors}")
-
         print(f"[design] Phase 0.5: {len(spec.get('components', []))} components, "
               f"layout={spec.get('layout_order')}")
 
@@ -935,130 +927,6 @@ class Orchestrator:
             "files": [],
         }
 
-    async def _design_edit_pipeline(
-        self, goal_text: str, conversation: list[dict],
-        emit, on_token, task_ovr: dict,
-        previous_code: str,
-    ) -> dict:
-        """Edit mode for Precision-Design.
-
-        1. Retrieve persisted spec from conversation
-        2. Engine identifies which component(s) the edit targets
-        3. Re-run generation + validation for only that component
-        4. Patch into assembled page
-        """
-        import json as _json
-
-        # Retrieve the spec from the last assistant turn's specialist_data
-        spec = None
-        for turn in reversed(conversation):
-            if turn.get("role") == "assistant":
-                sd = turn.get("specialist_data")
-                if sd and isinstance(sd, str):
-                    try:
-                        spec = _json.loads(sd)
-                        if "layout_order" in spec and "components" in spec:
-                            break
-                        spec = None
-                    except (ValueError, _json.JSONDecodeError):
-                        pass
-                elif sd and isinstance(sd, dict):
-                    if "layout_order" in sd and "components" in sd:
-                        spec = sd
-                        break
-
-        if not spec:
-            # No spec found — fall back to full regeneration
-            print("[design-edit] no spec found in conversation, falling back to full pipeline")
-            return await self._design_pipeline(
-                goal_text, goal_text, conversation,
-                emit, on_token, task_ovr,
-                mode=mode,
-            )
-
-        # Use Engine to identify target component(s) from edit request
-        emit("spec_generating")
-        comp_map = {c["id"]: c for c in spec["components"]}
-
-        # Simple heuristic: check if any component id is mentioned in the edit
-        target_ids = []
-        goal_lower = goal_text.lower()
-        for cid in spec["layout_order"]:
-            if cid.lower() in goal_lower or cid.replace("-", " ").lower() in goal_lower:
-                target_ids.append(cid)
-
-        # Also check component types
-        if not target_ids:
-            for comp in spec["components"]:
-                ctype = comp["type"].lower()
-                if ctype in goal_lower:
-                    target_ids.append(comp["id"])
-
-        # If still nothing, regenerate all — the edit is ambiguous
-        if not target_ids:
-            target_ids = list(spec["layout_order"])
-            print(f"[design-edit] ambiguous edit, regenerating all components")
-        else:
-            print(f"[design-edit] targeting components: {target_ids}")
-
-        emit("spec_validated", spec=spec)
-
-        # Regenerate targeted components
-        total = len(target_ids)
-        for i, comp_id in enumerate(target_ids):
-            comp_spec = comp_map.get(comp_id)
-            if not comp_spec:
-                continue
-
-            emit("component_generating",
-                 component_id=comp_id, index=i, total=total)
-
-            # Specialist removed — use fallback for component regeneration
-            html = get_fallback(comp_spec["type"], comp_id)
-            emit("component_fallback", component_id=comp_id)
-
-            # Patch into previous assembled page
-            if previous_code:
-                previous_code = patch_component_in_page(
-                    previous_code, comp_id, html,
-                )
-
-            emit("component_validated",
-                 component_id=comp_id, index=i, total=total)
-
-        # If no previous assembled page, do full assembly
-        if not previous_code or "<html" not in previous_code.lower():
-            component_html = {}
-            for comp in spec["components"]:
-                cid = comp["id"]
-                if cid in [c for c in target_ids]:
-                    # Already regenerated above — but we only patched into previous_code
-                    # Need to extract or regenerate
-                    component_html[cid] = get_fallback(comp["type"], cid)
-                else:
-                    component_html[cid] = get_fallback(comp["type"], cid)
-            previous_code = assemble_page(
-                spec["page_title"], component_html,
-                spec["layout_order"], spec,
-            )
-
-        emit("draft", text=previous_code, thinking="")
-
-        spec_json = _json.dumps(spec)
-        return {
-            "response": previous_code,
-            "thinking": "",
-            "draft": previous_code,
-            "draft_thinking": "",
-            "route": "ROUTE_DESIGN",
-            "specialist_data": spec_json,
-            "plan": None,
-            "reflection": None,
-            "spec": spec,
-            "detected_lang": "html",
-            "files": [],
-        }
-
     async def _self_review(self, code: str, goal: str, route: str,
                            task_overrides: dict = None) -> dict | None:
         """Large-tier self-review: model checks its own output."""
@@ -1177,19 +1045,10 @@ class Orchestrator:
             def on_token(token, kind):
                 emit("token", text=token, kind=kind)
 
-            if is_question:
-                # Questions about design → fall through to normal ROUTE_DIRECT flow
+            if is_question or is_edit:
+                # Questions and edits fall through to the regular pipeline below.
+                # Edits use _generate_edit → _section_edit (section-based HTML editing).
                 pass
-            elif is_edit:
-                result = await self._design_edit_pipeline(
-                    user_message, conversation,
-                    emit, on_token, task_ovr,
-                    previous_code=previous_code,
-                )
-                # Run reflection
-                if result.get("reflection") is None:
-                    result["reflection"] = await self._write_reflection(goal_text, result["response"])
-                return result
             else:
                 result = await self._design_pipeline(
                     goal, goal_text, conversation,

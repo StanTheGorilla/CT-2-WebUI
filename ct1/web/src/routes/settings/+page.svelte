@@ -184,9 +184,10 @@
             const res = await fetch('/api/modes');
             const data = await res.json();
             modes = data.modes ?? [];
-            // Initialize edits from current task_overrides
+            // Initialize edits: MODE_DEFAULTS as base so all 3 sliders always show,
+            // then task_overrides on top to preserve any saved values
             modeEdits = Object.fromEntries(
-                modes.map(m => [m.name, { ...m.task_overrides }])
+                modes.map(m => [m.name, { ...(MODE_DEFAULTS[m.name] ?? {}), ...m.task_overrides }])
             );
         } catch (e) {
             // silent — modes section just won't show
@@ -222,9 +223,9 @@
     // Used by the reset button so users can always recover a known-good baseline.
     const MODE_DEFAULTS: Record<string, Record<string, number>> = {
         computer: { temperature: 0.25, top_p: 0.8,  presence_penalty: 1.3 },
-        design:   { temperature: 0.1 },
+        design:   { temperature: 0.1,  top_p: 0.9,  presence_penalty: 0.0 },
         code:     { temperature: 0,    top_p: 1.0,  presence_penalty: 1.3 },
-        direct:   { temperature: 0.5,               presence_penalty: 0.6 },
+        direct:   { temperature: 0.5,  top_p: 0.9,  presence_penalty: 0.6 },
     };
 
     function resetModeToDefault(name: string) {
@@ -672,7 +673,7 @@
 
                     <div class="mode-sliders">
                         {#each [['temperature', 0, 2, 0.05, 'Creativity', 'More predictable responses on the left, more surprising and original on the right.'], ['top_p', 0, 1, 0.05, 'Focus', 'Narrow, precise word choices on the left, broader and more diverse on the right.'], ['presence_penalty', -2, 2, 0.05, 'Variety', 'Lower values may repeat phrases. Higher values push the AI to use different words.']] as [key, min, max, step, label, desc]}
-                            {@const val = (modeEdits[mode.name]?.[key as string] ?? mode.task_overrides[key as string])}
+                            {@const val = (modeEdits[mode.name]?.[key as string] ?? mode.task_overrides[key as string] ?? MODE_DEFAULTS[mode.name]?.[key as string])}
                             {#if val !== undefined}
                             <div class="slider-block">
                                 <div class="slider-label-row">

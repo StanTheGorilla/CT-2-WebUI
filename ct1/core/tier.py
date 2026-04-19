@@ -35,11 +35,11 @@ def detect_tier(model_filename: str, explicit_tier: str | None = None) -> str:
         # also has a stray "3" that doesn't end with B.  findall already
         # filters to digits+B, so the last one is the most specific.
         params = float(matches[-1])
-        if params <= 8:
-            return "small"
-        if params <= 30:
-            return "medium"
-        return "large"
+        if params < 2:
+            return "small"   # sub-2B: very limited, inline planning only
+        if params <= 14:
+            return "medium"  # 2B-14B: Gemma 2B/4B, Qwen3 4B, 8B, 13B
+        return "large"       # 14B+: full pipeline with self-review
 
     # --- fail safe ---
     return "small"
