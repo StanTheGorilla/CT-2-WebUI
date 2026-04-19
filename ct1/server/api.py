@@ -96,7 +96,140 @@ _swapping: bool = False          # True while model swap is in progress
 _shutting_down: bool = False     # True during application shutdown
 _active_think_tasks: set = set() # Active /ws/think asyncio tasks
 _health_task: asyncio.Task | None = None  # Background health monitor task
+_is_generating: int = 0          # Active generation count (blocks server update)
 _WS_QUEUE_MAX = 500  # Max buffered events per WebSocket session (~1-2 full responses)
+
+_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the web for current information. Use when the user asks "
+                "about recent events, live data, or anything your training data "
+                "may not cover."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Focused search query",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_url",
+            "description": (
+                "Fetch and read the contents of a URL. Use to get full content "
+                "from a specific web page."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Full URL to fetch",
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+]
+
+
+def _make_tool_executor(queue: asyncio.Queue):
+    """Return an async tool executor that emits websocket progress events."""
+
+    async def _executor(tool_calls: list[dict]) -> list[str]:
+        from ct1.core.web_searcher import search_web, format_results_as_context
+        from ct1.core.web_fetcher import fetch_url as _fetch_url
+
+        results: list[str] = []
+
+        for tc in tool_calls:
+            name = tc["name"]
+            args = tc.get("args", {})
+
+            if name == "web_search":
+                query = (args.get("query") or "").strip()
+                if not query:
+                    results.append("Search query was empty.")
+                    continue
+
+                try:
+                    queue.put_nowait({"event": "web_searching", "query": query})
+                except asyncio.QueueFull:
+                    pass
+
+                sr = await search_web(query, max_results=8)
+
+                try:
+                    queue.put_nowait({
+                        "event": "web_search_results",
+                        "query": sr.query,
+                        "results": [
+                            {"title": r.title, "url": r.url, "snippet": r.snippet}
+                            for r in sr.results
+                        ],
+                        "error": sr.error,
+                    })
+                except asyncio.QueueFull:
+                    pass
+
+                if sr.results:
+                    results.append(format_results_as_context(sr))
+                else:
+                    results.append(f"No results found for '{query}'.")
+
+            elif name == "fetch_url":
+                url = (args.get("url") or "").strip()
+                if not url:
+                    results.append("URL was empty.")
+                    continue
+
+                try:
+                    queue.put_nowait({"event": "url_fetching", "url": url})
+                except asyncio.QueueFull:
+                    pass
+
+                fr = await _fetch_url(url, max_chars=4000)
+
+                if fr.error or not fr.content:
+                    try:
+                        queue.put_nowait({
+                            "event": "url_failed",
+                            "url": url,
+                            "error": fr.error or "empty",
+                        })
+                    except asyncio.QueueFull:
+                        pass
+                    results.append(f"Could not fetch {url}: {fr.error or 'empty'}")
+                else:
+                    try:
+                        queue.put_nowait({
+                            "event": "url_fetched",
+                            "url": fr.url,
+                            "title": fr.title,
+                            "content_length": fr.content_length,
+                            "truncated": fr.truncated,
+                            "preview": fr.content[:500],
+                        })
+                    except asyncio.QueueFull:
+                        pass
+                    results.append(f"[{fr.title or url}]\n{fr.content}")
+            else:
+                results.append(f"Unknown tool: {name}")
+
+        return results
+
+    return _executor
 
 
 async def _health_monitor(port: int = 8080, interval: float = 30.0) -> None:
@@ -294,6 +427,8 @@ async def start_llama_update(backend: str):
     if backend not in ("vulkan", "cuda"):
         from fastapi import HTTPException
         raise HTTPException(400, "backend must be 'vulkan' or 'cuda'")
+    if _is_generating > 0:
+        return {"error": "Model is busy — wait for the current generation to finish before updating"}
     if _update_state.get(backend, {}).get("status") == "downloading":
         return {"error": "Update already in progress"}
     import threading
@@ -427,6 +562,8 @@ async def list_models():
         return {"models": [], "models_dir": str(models_dir)}
     files = []
     for p in sorted(models_dir.glob("*.gguf")):
+        if p.name.lower().startswith("mmproj"):
+            continue
         try:
             size_gb = round(p.stat().st_size / (1024 ** 3), 2)
         except OSError:
@@ -1124,122 +1261,6 @@ async def ws_think(websocket: WebSocket):
                                         part["text"] = file_ctx + part["text"]
                                         break
 
-                    # ── Web search ──
-                    # Triggered by '!search ' prefix (explicit query) OR web_search flag (AI extracts query).
-                    _SEARCH_PREFIX = "!search "
-                    goal_text_for_search = actual_goal if isinstance(actual_goal, str) else " ".join(
-                        p.get("text", "") for p in actual_goal if isinstance(p, dict) and p.get("type") == "text"
-                    )
-                    _web_search_flag = msg.get("web_search", False)
-                    _user_raw: str | None = None
-                    _search_query: str | None = None
-                    _explicit_prefix = False
-
-                    if goal_text_for_search.lstrip().startswith(_SEARCH_PREFIX):
-                        # Explicit !search prefix: user provided the exact query.
-                        _user_raw = goal_text_for_search.lstrip()[len(_SEARCH_PREFIX):].strip()
-                        _search_query = _user_raw
-                        _explicit_prefix = True
-                    elif _web_search_flag and goal_text_for_search.strip():
-                        # Toggle on: let the LLM extract a focused query.
-                        _user_raw = goal_text_for_search.strip()
-
-                    if _user_raw:
-                        from ct1.core.web_searcher import search_web, format_results_as_context
-
-                        # Extract a focused query via the LLM when the user didn't provide one explicitly.
-                        if not _explicit_prefix and _orch is not None:
-                            try:
-                                queue.put_nowait({"event": "web_search_extracting", "source": _user_raw})
-                            except asyncio.QueueFull:
-                                pass
-                            try:
-                                # Pass recent history so pronouns ("his", "it", etc.)
-                                # can be resolved against the prior conversation.
-                                _search_query = await _orch.engine.extract_search_query(
-                                    _user_raw,
-                                    recent_history=conversation[-6:] if conversation else None,
-                                )
-                            except Exception as _ext_err:
-                                print(f"[api] search query extraction failed: {_ext_err}")
-                                _search_query = _user_raw[:120]
-
-                        if not _search_query:
-                            _search_query = _user_raw[:120]
-
-                        try:
-                            queue.put_nowait({"event": "web_searching", "query": _search_query})
-                        except asyncio.QueueFull:
-                            pass
-                        _sr = await search_web(_search_query, max_results=8)
-                        try:
-                            queue.put_nowait({
-                                "event": "web_search_results",
-                                "query": _sr.query,
-                                "results": [
-                                    {"title": r.title, "url": r.url, "snippet": r.snippet}
-                                    for r in _sr.results
-                                ],
-                                "error": _sr.error,
-                            })
-                        except asyncio.QueueFull:
-                            pass
-                        if _sr.results:
-                            _search_ctx = format_results_as_context(_sr)
-
-                            # Fetch top search result pages (priority domains first,
-                            # skip login-walled / JS-only sites like TikTok/Instagram).
-                            # Hard limits prevent context overflow:
-                            #   - max 3 pages fetched (not all results)
-                            #   - max 3,000 chars per page (~750 tokens)
-                            #   - total page content capped at 9,000 chars (~2,250 tokens)
-                            from ct1.core.web_fetcher import fetch_url as _fetch_url_sr
-                            from ct1.core.web_searcher import prioritized_fetch_urls
-                            import re as _re
-                            _MAX_FETCH_PAGES = 3
-                            _MAX_CHARS_PER_PAGE = 3_000
-                            _MAX_TOTAL_PAGE_CHARS = 9_000
-                            _sr_urls = prioritized_fetch_urls(_sr.results)[:_MAX_FETCH_PAGES]
-                            if _sr_urls:
-                                _sr_fetched = await asyncio.gather(
-                                    *[_fetch_url_sr(u, max_chars=_MAX_CHARS_PER_PAGE) for u in _sr_urls],
-                                    return_exceptions=True,
-                                )
-                                _page_blocks: list[str] = []
-                                _total_page_chars = 0
-                                for _fetched_url, _sr_page in zip(_sr_urls, _sr_fetched):
-                                    if _total_page_chars >= _MAX_TOTAL_PAGE_CHARS:
-                                        break
-                                    if isinstance(_sr_page, Exception) or getattr(_sr_page, "error", None):
-                                        continue
-                                    _pg_content = getattr(_sr_page, "content", None)
-                                    if _pg_content:
-                                        # Strip non-printable / replacement characters.
-                                        _pg_content = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd\ufffc\ufffe\uffff]', '', _pg_content)
-                                        _pg_content = _re.sub(r'\n{4,}', '\n\n', _pg_content).strip()
-                                        if not _pg_content:
-                                            continue
-                                        # Trim this page if it would push us over the total budget
-                                        _remaining = _MAX_TOTAL_PAGE_CHARS - _total_page_chars
-                                        if len(_pg_content) > _remaining:
-                                            _pg_content = _pg_content[:_remaining].rsplit('\n', 1)[0]
-                                        _pg_title = getattr(_sr_page, "title", None) or _fetched_url
-                                        _page_blocks.append(
-                                            f"[PAGE: {_pg_title}]\n{_pg_content}\n[/PAGE]"
-                                        )
-                                        _total_page_chars += len(_pg_content)
-                                if _page_blocks:
-                                    _search_ctx += "\n\nFull page content:\n\n" + "\n\n".join(_page_blocks)
-
-                            _search_ctx += "\n--- END WEB SEARCH CONTEXT ---\n\n"
-                            if isinstance(actual_goal, str):
-                                actual_goal = _search_ctx + actual_goal
-                            elif isinstance(actual_goal, list):
-                                for part in actual_goal:
-                                    if part.get("type") == "text":
-                                        part["text"] = _search_ctx + part["text"]
-                                        break
-
                     # ── URL content fetching ──
                     # Scan the *original* goal (before search-context injection) so that
                     # URLs that appear only inside the injected search snippets are not
@@ -1337,11 +1358,19 @@ async def ws_think(websocket: WebSocket):
                                         part["text"] = f"{ctx}\n\n{part['text']}"
                                         break
 
+                    _search_capability = bool(
+                        msg.get("search_capability", msg.get("web_search", False))
+                    )
+                    _tools = _TOOL_SCHEMAS if _search_capability else None
+                    _tool_executor = _make_tool_executor(queue) if _search_capability else None
+
                     result = await _orch.think(
                         actual_goal, on_event=on_event, conversation=conversation,
                         mode_override=mode_override,
                         skip_refinement=skip_refinement,
                         atlas_settings=atlas_settings,
+                        tools=_tools,
+                        tool_executor=_tool_executor,
                     )
                     # Computer mode: save files → run → inspect → fix loop
                     if result.get("route") == "ROUTE_COMPUTER" and _workspace:
@@ -1507,6 +1536,8 @@ async def ws_think(websocket: WebSocket):
                                             fix_goal, on_event=on_event,
                                             conversation=conversation,
                                             mode_override="computer",
+                                            tools=_tools,
+                                            tool_executor=_tool_executor,
                                         )
                                         current_response = fix_result["response"]
                                         result["response"] = current_response
@@ -1593,7 +1624,15 @@ async def ws_think(websocket: WebSocket):
                     except Exception:
                         pass
 
-                current_think_task = asyncio.create_task(run_think())
+                async def _tracked_run_think():
+                    global _is_generating
+                    _is_generating += 1
+                    try:
+                        await run_think()
+                    finally:
+                        _is_generating -= 1
+
+                current_think_task = asyncio.create_task(_tracked_run_think())
                 stream_task = asyncio.create_task(stream_events())
                 cancel_task = asyncio.create_task(watch_for_cancel())
                 try:

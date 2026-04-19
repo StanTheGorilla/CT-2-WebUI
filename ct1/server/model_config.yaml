@@ -1,7 +1,7 @@
 executable: auto
 backend: vulkan
 models_dir: models
-active_model: null
+active_model: Bonsai-8B.gguf
 port: 8080
 n_gpu_layers: 99
 parallel_slots: 1
@@ -14,7 +14,7 @@ frequency_penalty: 0.0
 thinking_budget: -1
 task_overrides:
   design:
-    temperature: 0.4
+    temperature: 0.3
   code:
     temperature: 0.25
     top_p: 0.85

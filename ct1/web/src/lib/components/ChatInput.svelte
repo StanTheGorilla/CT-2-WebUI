@@ -1,6 +1,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, toggleWebSearch, type Attachment, type ModeOverride } from '$lib/stores/chat';
+    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, pendingInputPrompt, type Attachment, type ModeOverride } from '$lib/stores/chat';
+    import { preferences, toggleWebSearch } from '$lib/stores/preferences';
+    import { isUpdating } from '$lib/stores/serverUpdate';
 
     let input = $state('');
     let textarea: HTMLTextAreaElement;
@@ -17,9 +19,8 @@
     let visionSupported = $state(false);
     const TEXT_FILE_ACCEPT = '.txt,.html,.htm,.css,.js,.ts,.py,.json,.md,.csv,.xml,.yaml,.yml,.svg,.sh,.bat,.sql,.rb,.go,.rs,.java,.c,.cpp,.h,.hpp,.toml,.ini,.cfg';
 
-    const disabled = $derived($chat.phase !== 'idle' && $chat.phase !== 'done');
+    const disabled = $derived(($chat.phase !== 'idle' && $chat.phase !== 'done') || $isUpdating);
     const currentMode = $derived($chat.modeOverride);
-    const webSearchEnabled = $derived($chat.webSearchEnabled);
     const isWorkspaceSession = $derived(!!$chat.workspaceId);
     const hasWorkspaceContext = $derived(!!$chat.workspaceId);
     const contextCount = $derived($chat.contextFiles.length);
@@ -116,6 +117,26 @@
         return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
     }
 
+    const IMAGE_MAX_PX = 1536;
+
+    function _resizeAndAttach(srcUrl: string, name: string) {
+        const img = new Image();
+        img.onload = () => {
+            const w = img.naturalWidth, h = img.naturalHeight;
+            if (w <= IMAGE_MAX_PX && h <= IMAGE_MAX_PX) {
+                attachments = [...attachments, { type: 'image', name, dataUrl: srcUrl }];
+                return;
+            }
+            const scale = IMAGE_MAX_PX / Math.max(w, h);
+            const canvas = document.createElement('canvas');
+            canvas.width  = Math.round(w * scale);
+            canvas.height = Math.round(h * scale);
+            canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+            attachments = [...attachments, { type: 'image', name, dataUrl: canvas.toDataURL('image/png') }];
+        };
+        img.src = srcUrl;
+    }
+
     function readFiles(files: FileList | File[]) {
         const remainingSlots = Math.max(0, 4 - attachments.length);
         if (remainingSlots === 0) return;
@@ -128,13 +149,8 @@
             if (file.type.startsWith('image/')) {
                 if (!visionSupported) continue;
                 const reader = new FileReader();
-                reader.onload = () => {
-                    attachments = [...attachments, {
-                        type: 'image',
-                        name: file.name,
-                        dataUrl: reader.result as string,
-                    }];
-                };
+                const fileName = file.name || 'image.png';
+                reader.onload = () => _resizeAndAttach(reader.result as string, fileName);
                 reader.readAsDataURL(file);
                 acceptedCount += 1;
             } else if (TEXT_EXTENSIONS.has(ext) || file.type.startsWith('text/')) {
@@ -221,10 +237,23 @@
     });
 
     $effect(() => {
-        if (wasDisabled && !disabled && textarea) {
-            requestAnimationFrame(() => textarea?.focus());
+        if (wasDisabled && !disabled) {
+            void loadModelCapabilities();
+            if (textarea) requestAnimationFrame(() => textarea?.focus());
         }
         wasDisabled = disabled;
+    });
+
+    $effect(() => {
+        const prompt = $pendingInputPrompt;
+        if (prompt) {
+            input = prompt;
+            pendingInputPrompt.set('');
+            requestAnimationFrame(() => {
+                autoGrow();
+                textarea?.focus();
+            });
+        }
     });
 </script>
 
@@ -245,9 +274,9 @@
                         <img src={att.dataUrl} alt={att.name} class="att-thumb" />
                     {:else}
                         <div class="att-file-icon">
-                            <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
-                                <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
-                                <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/>
+                                <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
                             </svg>
                         </div>
                     {/if}
@@ -256,8 +285,8 @@
                         <span class="att-size">{(att.textContent.length / 1000).toFixed(1)}k</span>
                     {/if}
                     <button class="att-remove" onclick={() => removeAttachment(i)} aria-label="Remove {att.name}">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                            <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                            <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                         </svg>
                     </button>
                 </div>
@@ -265,86 +294,7 @@
         </div>
     {/if}
 
-    {#if !isWorkspaceSession}
-        <div class="mode-bar">
-            {#each modes as m}
-                <button
-                    class="mode-pill"
-                    class:active={currentMode === m.key}
-                    onclick={() => setMode(m.key)}
-                    {disabled}
-                >
-                    <svg class="mode-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
-                        {#if m.key === 'auto'}
-                            <!-- Lightning bolt — suggests speed / automatic routing -->
-                            <path d="M9.5 2 L5 9 H8 L6.5 14 L12 7 H9 Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>
-                        {:else if m.key === 'design'}
-                            <!-- Pencil — suggests drawing / visual design -->
-                            <path d="M11.5 2 L14 4.5 L5 13.5 L2 14 L2.5 11 Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M9.5 4 L12 6.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                        {:else if m.key === 'code'}
-                            <path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-                        {:else if m.key === 'chat'}
-                            <path d="M3 4.5A1.5 1.5 0 014.5 3h7A1.5 1.5 0 0113 4.5v5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5V11H4.5A1.5 1.5 0 013 9.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
-                        {:else if m.key === 'computer'}
-                            <rect x="2" y="3" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-                            <path d="M5.5 14h5M8 11v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-                        {/if}
-                    </svg>
-                    {m.label}
-                </button>
-            {/each}
-        </div>
-    {/if}
-
-    {#if hasWorkspaceContext}
-        <div class="ctx-anchor">
-            <button
-                class="workspace-ctx-badge"
-                class:active={contextCount > 0}
-                onclick={openPopover}
-                type="button"
-            >
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                    <path d="M2 5V3a1 1 0 011-1h4l2 2h4a1 1 0 011 1v7a1 1 0 01-1 1H3a1 1 0 01-1-1V5z" stroke="currentColor" stroke-width="1.2"/>
-                </svg>
-                {contextCount > 0 ? `${contextCount} file${contextCount === 1 ? '' : 's'} in context` : 'Attach files to context'}
-            </button>
-
-            {#if popoverOpen}
-                <div class="ctx-popover" role="dialog" aria-modal="true" aria-label="Workspace files">
-                    <div class="ctx-popover-header">
-                        <span>Workspace files</span>
-                        {#if contextCount > 0}
-                            <button class="ctx-clear" onclick={clearContextFiles} type="button">Clear all</button>
-                        {/if}
-                    </div>
-                    {#if fileListLoading}
-                        <div class="ctx-empty">Loading...</div>
-                    {:else if fileList.length === 0}
-                        <div class="ctx-empty">No files in workspace</div>
-                    {:else}
-                        <ul class="ctx-file-list">
-                            {#each fileList as path}
-                                <li>
-                                    <label class="ctx-file-row">
-                                        <input
-                                            type="checkbox"
-                                            checked={$chat.contextFiles.includes(path)}
-                                            onchange={() => toggleContextFile(path)}
-                                        />
-                                        <span class="ctx-file-path">{path}</span>
-                                    </label>
-                                </li>
-                            {/each}
-                        </ul>
-                    {/if}
-                </div>
-            {/if}
-        </div>
-    {/if}
-
-    <div class="island" class:drag-over={dragOver} class:is-busy={disabled}>
+    <div class="composer" class:drag-over={dragOver} class:is-busy={disabled}>
         <input
             bind:this={fileInput}
             type="file"
@@ -353,17 +303,7 @@
             onchange={onFileSelect}
             class="file-hidden"
         />
-        <button
-            class="attach-btn"
-            onclick={() => fileInput?.click()}
-            {disabled}
-            aria-label={attachLabel}
-            title={attachLabel}
-        >
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.1 2.1 0 013 3L7.2 12.8a.7.7 0 01-1-1l5.3-5.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-        </button>
+
         <textarea
             bind:this={textarea}
             bind:value={input}
@@ -374,34 +314,125 @@
             rows="1"
             {disabled}
         ></textarea>
-        <div class="island-actions">
-            <span class="hint">Ctrl+Enter</span>
-            <button
-                class="web-search-circle"
-                class:active={webSearchEnabled}
-                onclick={toggleWebSearch}
-                {disabled}
-                aria-pressed={webSearchEnabled}
-                title={webSearchEnabled ? 'Web search on' : 'Web search off'}
-            >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>
-                    <path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                </svg>
-            </button>
-            {#if disabled}
-                <button class="send send-stop" onclick={stopGeneration} aria-label="Stop generation" title="Stop">
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                        <rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor"/>
+
+        <div class="composer-footer">
+            <div class="footer-left">
+                {#if !isWorkspaceSession}
+                    {#each modes as m}
+                        <button
+                            class="mode-pill"
+                            class:active={currentMode === m.key}
+                            onclick={() => setMode(m.key)}
+                            {disabled}
+                        >
+                            <svg class="pill-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                {#if m.key === 'auto'}
+                                    <path d="M9.5 2L5 9H8L6.5 14L12 7H9Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+                                {:else if m.key === 'design'}
+                                    <path d="M11.5 2L14 4.5L5 13.5L2 14L2.5 11Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M9.5 4L12 6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                {:else if m.key === 'code'}
+                                    <path d="M5.5 4L2 8l3.5 4M10.5 4L14 8l-3.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                {:else if m.key === 'chat'}
+                                    <path d="M3 4.5A1.5 1.5 0 014.5 3h7A1.5 1.5 0 0113 4.5v5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5V11H4.5A1.5 1.5 0 013 9.5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                                {/if}
+                            </svg>
+                            {m.label}
+                        </button>
+                    {/each}
+                {:else}
+                    <div class="ctx-anchor">
+                        <button
+                            class="workspace-ctx-badge"
+                            class:active={contextCount > 0}
+                            onclick={openPopover}
+                            type="button"
+                        >
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <path d="M2 5V3a1 1 0 011-1h4l2 2h4a1 1 0 011 1v7a1 1 0 01-1 1H3a1 1 0 01-1-1V5z" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                            {contextCount > 0 ? `${contextCount} file${contextCount === 1 ? '' : 's'} in context` : 'Attach files to context'}
+                        </button>
+                        {#if popoverOpen}
+                            <div class="ctx-popover" role="dialog" aria-modal="true" aria-label="Workspace files">
+                                <div class="ctx-popover-header">
+                                    <span>Workspace files</span>
+                                    {#if contextCount > 0}
+                                        <button class="ctx-clear" onclick={clearContextFiles} type="button">Clear all</button>
+                                    {/if}
+                                </div>
+                                {#if fileListLoading}
+                                    <div class="ctx-empty">Loading...</div>
+                                {:else if fileList.length === 0}
+                                    <div class="ctx-empty">No files in workspace</div>
+                                {:else}
+                                    <ul class="ctx-file-list">
+                                        {#each fileList as path}
+                                            <li>
+                                                <label class="ctx-file-row">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={$chat.contextFiles.includes(path)}
+                                                        onchange={() => toggleContextFile(path)}
+                                                    />
+                                                    <span class="ctx-file-path">{path}</span>
+                                                </label>
+                                            </li>
+                                        {/each}
+                                    </ul>
+                                {/if}
+                            </div>
+                        {/if}
+                    </div>
+                {/if}
+
+                <button
+                    class="search-pill"
+                    class:active={$preferences.webSearchEnabled}
+                    onclick={toggleWebSearch}
+                    type="button"
+                    {disabled}
+                    aria-pressed={$preferences.webSearchEnabled}
+                    aria-label={$preferences.webSearchEnabled ? 'Web search on. Click to turn off.' : 'Web search off. Click to turn on.'}
+                    title={$preferences.webSearchEnabled ? 'Web search on' : 'Web search off'}
+                >
+                    <svg class="pill-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+                        <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
+                        <path d="M2.5 8h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        <path d="M8 2.5c1.7 1.5 2.7 3.4 2.7 5.5S9.7 12 8 13.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M8 2.5C6.3 4 5.3 5.9 5.3 8S6.3 12 8 13.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Search
+                </button>
+            </div>
+
+            <div class="footer-right">
+                <span class="send-hint">Ctrl+Enter</span>
+                <button
+                    class="attach-btn"
+                    onclick={() => fileInput?.click()}
+                    {disabled}
+                    aria-label={attachLabel}
+                    title={attachLabel}
+                >
+                    <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                        <path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.1 2.1 0 013 3L7.2 12.8a.7.7 0 01-1-1l5.3-5.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                 </button>
-            {:else}
-                <button class="send" onclick={submit} aria-label="Send message">
-                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                        <path d="M3.5 9h11M10 4.5L14.5 9 10 13.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                </button>
-            {/if}
+                {#if disabled}
+                    <button class="send send-stop" onclick={stopGeneration} aria-label="Stop generation" title="Stop">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                            <rect x="2" y="2" width="8" height="8" rx="1.5" fill="currentColor"/>
+                        </svg>
+                    </button>
+                {:else}
+                    <button class="send" onclick={submit} aria-label="Send message" title="Send (Ctrl+Enter)">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M8 13V3M3.5 7.5L8 3l4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                {/if}
+            </div>
         </div>
     </div>
 </div>
@@ -409,20 +440,18 @@
 <style>
     .input-dock {
         --composer-max: 860px;
-        padding: 10px clamp(20px, 3vw, 36px) 28px;
+        padding: 8px clamp(20px, 3vw, 36px) 28px;
         flex-shrink: 0;
         position: relative;
         z-index: 2;
     }
 
-    /* ---- Attachment islands ---- */
+    /* ---- Attachment preview strip ---- */
     .attachments-bar {
         display: flex;
         gap: 8px;
         width: min(100%, var(--composer-max));
-        max-width: none;
         margin: 0 auto 8px;
-        padding: 0 4px;
         flex-wrap: wrap;
     }
 
@@ -442,7 +471,7 @@
 
     @keyframes islandIn {
         from { opacity: 0; transform: scale(0.85) translateY(6px); }
-        to { opacity: 1; transform: scale(1) translateY(0); }
+        to   { opacity: 1; transform: scale(1)    translateY(0); }
     }
 
     .att-thumb {
@@ -451,16 +480,6 @@
         border-radius: 8px;
         object-fit: cover;
         flex-shrink: 0;
-    }
-
-    .att-name {
-        font-size: 12px;
-        font-weight: 500;
-        color: var(--text-secondary);
-        max-width: 120px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     .att-file-icon {
@@ -473,6 +492,16 @@
         justify-content: center;
         flex-shrink: 0;
         color: var(--text-muted);
+    }
+
+    .att-name {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .att-size {
@@ -500,139 +529,211 @@
         color: var(--text);
     }
 
-    /* ---- Mode selector pills ---- */
-    .mode-bar {
-        width: min(100%, var(--composer-max));
-        margin: 0 auto 10px;
+    /* ---- Main composer ---- */
+    .composer {
+        position: relative;
         display: flex;
-        gap: 2px;
-        justify-content: center;
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
-        border: var(--bubble-border-light);
-        border-radius: var(--radius-pill);
-        padding: 3px;
-        width: fit-content;
-        box-shadow: var(--shadow-xs);
+        flex-direction: column;
+        width: min(100%, var(--composer-max));
+        margin: 0 auto;
+        background: var(--bubble-strong);
+        backdrop-filter: var(--bubble-blur-heavy);
+        -webkit-backdrop-filter: var(--bubble-blur-heavy);
+        border: var(--bubble-border);
+        border-radius: 22px;
+        padding: 18px 18px 14px;
+        box-shadow: var(--bubble-glow);
+        transition: box-shadow var(--transition-slow), border-color var(--transition);
+        overflow: visible;
     }
+    .composer:focus-within {
+        box-shadow: var(--bubble-glow-strong);
+    }
+    .composer.is-busy {
+        border-color: var(--border);
+        box-shadow: var(--bubble-glow);
+    }
+    .composer.drag-over {
+        border-color: var(--accent);
+        box-shadow:
+            0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent),
+            0 8px 40px rgba(0, 0, 0, 0.08);
+    }
+
+    .file-hidden { display: none; }
+
+    /* ---- Textarea ---- */
+    textarea {
+        width: 100%;
+        background: none;
+        color: var(--text);
+        border: none;
+        font-family: var(--font-body);
+        font-size: 15px;
+        line-height: 1.6;
+        min-height: 52px;
+        resize: none;
+        outline: none;
+        padding: 0 0 16px;
+    }
+    textarea::placeholder {
+        color: var(--text-muted);
+        font-weight: 400;
+    }
+    textarea:disabled {
+        opacity: 0.82;
+        cursor: default;
+    }
+
+    /* ---- Footer toolbar ---- */
+    .composer-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding-top: 10px;
+        margin-top: 2px;
+        border-top: 1px solid var(--border-subtle);
+        /* Give pill borders clearance from the separator line */
+        padding-bottom: 2px;
+    }
+
+    .footer-left {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        min-width: 0;
+        overflow: visible;
+        padding: 2px 0;
+    }
+
+    .footer-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+        padding: 2px 0;
+    }
+
+    /* ---- Mode pills ---- */
+    .pill-icon {
+        flex-shrink: 0;
+        opacity: 0.7;
+    }
+
     .mode-pill {
         display: flex;
         align-items: center;
         gap: 5px;
-        padding: 5px 14px;
-        border: none;
-        border-radius: var(--radius-pill);
+        padding: 5px 11px;
+        border: 1px solid transparent;
+        border-radius: 8px;
         background: transparent;
         color: var(--text-muted);
         font-family: var(--font-body);
-        font-size: 12px;
+        font-size: 13px;
         font-weight: 500;
         cursor: pointer;
-        transition: all var(--transition);
+        transition: background var(--transition), color var(--transition), border-color var(--transition);
+        white-space: nowrap;
         user-select: none;
-        letter-spacing: 0.01em;
+        isolation: isolate;
     }
     .mode-pill:hover:not(:disabled):not(.active) {
         color: var(--text-secondary);
         background: var(--accent-subtle);
+        border-color: var(--border-subtle);
     }
     .mode-pill.active {
-        background: var(--surface-solid);
+        background: var(--accent-subtle);
         color: var(--text);
-        box-shadow: var(--shadow-sm);
+        border-color: var(--border);
+    }
+    .mode-pill.active .pill-icon {
+        opacity: 1;
     }
     .mode-pill:disabled {
         opacity: 0.3;
         cursor: not-allowed;
     }
-    .mode-icon {
-        flex-shrink: 0;
-        opacity: 0.6;
-    }
-    .mode-pill.active .mode-icon {
-        opacity: 1;
-    }
 
-    /* ---- Web search circle toggle (inside island) ---- */
-    .web-search-circle {
-        box-sizing: border-box;
-        width: 34px;
-        height: 34px;
-        border-radius: 50%;
-        border: 1.5px solid var(--border-strong);
-        background: var(--surface);
-        color: var(--text-secondary);
-        cursor: pointer;
+    /* ---- Search pill — identical style to mode pills ---- */
+    .search-pill {
         display: flex;
         align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        opacity: 0.75;
-        transition: opacity 0.15s, background 0.2s, border-color 0.2s, box-shadow 0.2s, color 0.15s;
+        gap: 5px;
+        padding: 5px 11px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text-muted);
+        font-family: var(--font-body);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background var(--transition), color var(--transition), border-color var(--transition);
+        white-space: nowrap;
+        user-select: none;
+        margin-left: 5px;
+        isolation: isolate;
     }
-    .web-search-circle:hover:not(:disabled) {
-        opacity: 1;
-        border-color: var(--accent);
+    .search-pill:hover:not(:disabled):not(.active) {
+        color: var(--text-secondary);
+        background: var(--accent-subtle);
+        border-color: var(--border-subtle);
+    }
+    .search-pill.active {
+        background: var(--accent-subtle);
         color: var(--text);
+        border-color: var(--border);
     }
-    .web-search-circle.active {
-        background: #3b82f6;
-        border-color: #3b82f6;
-        color: #ffffff;
+    .search-pill.active .pill-icon {
         opacity: 1;
-        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
     }
-    .web-search-circle.active:hover {
-        background: #2563eb;
-        border-color: #2563eb;
-    }
-    .web-search-circle:disabled {
+    .search-pill:disabled {
+        opacity: 0.3;
         cursor: not-allowed;
-        opacity: 0.4;
     }
 
     /* ---- Workspace context badge + popover ---- */
     .ctx-anchor {
         position: relative;
-        width: min(100%, var(--composer-max));
-        max-width: none;
-        margin: 0 auto 6px;
     }
 
     .workspace-ctx-badge {
         display: flex;
         align-items: center;
         gap: 5px;
-        padding: 3px 8px;
-        border-radius: 6px;
-        font-size: 11px;
-        color: var(--text-secondary);
+        padding: 5px 11px;
+        border-radius: 8px;
+        font-size: 13px;
+        color: var(--text-muted);
         background: transparent;
         border: 1px solid var(--border-subtle);
         cursor: pointer;
-        transition: background 0.15s, color 0.15s;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
         font-family: var(--font-body);
         font-weight: 500;
+        white-space: nowrap;
     }
     .workspace-ctx-badge:hover,
     .workspace-ctx-badge.active {
         background: var(--accent-subtle);
-        color: var(--text);
+        color: var(--text-secondary);
         border-color: var(--border);
     }
 
     .ctx-popover {
         position: absolute;
-        bottom: calc(100% + 6px);
+        bottom: calc(100% + 10px);
         left: 0;
         min-width: 240px;
         max-width: 340px;
-        background: var(--surface);
+        background: var(--surface-solid);
         border: 1px solid var(--border);
-        border-radius: 10px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.18);
-        z-index: 100;
+        border-radius: 14px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.14);
+        z-index: 200;
         overflow: hidden;
     }
 
@@ -640,13 +741,13 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 8px 12px;
+        padding: 10px 14px;
         font-size: 11px;
         font-weight: 600;
         color: var(--text-secondary);
         border-bottom: 1px solid var(--border-subtle);
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.05em;
     }
 
     .ctx-clear {
@@ -656,6 +757,7 @@
         border: none;
         cursor: pointer;
         padding: 0;
+        font-family: var(--font-body);
     }
     .ctx-clear:hover { text-decoration: underline; }
 
@@ -671,12 +773,12 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 5px 12px;
+        padding: 6px 14px;
         cursor: pointer;
         font-size: 12px;
         color: var(--text);
     }
-    .ctx-file-row:hover { background: var(--hover); }
+    .ctx-file-row:hover { background: var(--surface); }
 
     .ctx-file-path {
         white-space: nowrap;
@@ -687,54 +789,32 @@
     }
 
     .ctx-empty {
-        padding: 12px;
+        padding: 14px;
         font-size: 12px;
         color: var(--text-secondary);
         text-align: center;
     }
 
-    /* ---- Input island ---- */
-    .island {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        width: min(100%, var(--composer-max));
-        max-width: none;
-        margin: 0 auto;
-        background: var(--bubble-strong);
-        backdrop-filter: var(--bubble-blur-heavy);
-        -webkit-backdrop-filter: var(--bubble-blur-heavy);
-        border: var(--bubble-border);
-        border-radius: var(--radius-lg);
-        min-height: 58px;
-        padding: 12px 15px;
-        box-shadow: var(--bubble-glow);
-        transition: box-shadow var(--transition-slow), border-color var(--transition);
+    /* ---- Footer-right: hint, attach, send ---- */
+    .send-hint {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-muted);
+        letter-spacing: 0.02em;
+        opacity: 0;
+        transition: opacity var(--transition);
+        white-space: nowrap;
     }
-    .island:focus-within {
-        box-shadow: var(--bubble-glow-strong);
-    }
-    .island.is-busy {
-        border-color: var(--border);
-        box-shadow: var(--bubble-glow);
-    }
-    .island.drag-over {
-        border-color: var(--accent);
-        box-shadow:
-            0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent),
-            0 8px 40px rgba(0, 0, 0, 0.08);
-    }
-
-    .file-hidden {
-        display: none;
+    .composer:focus-within .send-hint {
+        opacity: 1;
     }
 
     .attach-btn {
-        width: 34px;
-        height: 34px;
+        width: 32px;
+        height: 32px;
         border: none;
         background: transparent;
-        border-radius: 50%;
+        border-radius: 8px;
         cursor: pointer;
         display: flex;
         align-items: center;
@@ -744,59 +824,17 @@
         transition: color 0.15s, background 0.15s;
     }
     .attach-btn:hover:not(:disabled) {
-        color: var(--text);
+        color: var(--text-secondary);
         background: var(--accent-subtle);
     }
     .attach-btn:disabled {
-        opacity: 0.5;
+        opacity: 0.4;
         cursor: default;
-    }
-
-    textarea {
-        flex: 1;
-        background: none;
-        color: var(--text);
-        border: none;
-        font-family: var(--font-body);
-        font-size: 15px;
-        line-height: 1.5;
-        min-height: 24px;
-        resize: none;
-        outline: none;
-        padding: 4px 0;
-    }
-    textarea::placeholder {
-        color: var(--text-muted);
-        font-weight: 400;
-    }
-    textarea:disabled {
-        opacity: 0.82;
-        cursor: default;
-    }
-
-    .island-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-shrink: 0;
-    }
-
-    .hint {
-        font-size: 11px;
-        font-weight: 500;
-        color: var(--text-muted);
-        letter-spacing: 0.02em;
-        opacity: 0;
-        transition: opacity var(--transition);
-    }
-    .island:focus-within .hint {
-        opacity: 1;
     }
 
     .send {
-        box-sizing: border-box;
-        width: 38px;
-        height: 38px;
+        width: 34px;
+        height: 34px;
         border: 1px solid transparent;
         border-radius: 50%;
         background: var(--text);
@@ -806,14 +844,13 @@
         align-items: center;
         justify-content: center;
         flex-shrink: 0;
-        transition: transform var(--spring-duration) var(--spring),
-                    opacity var(--transition),
-                    background var(--transition),
-                    color var(--transition),
-                    border-color var(--transition);
+        transition:
+            transform var(--spring-duration) var(--spring),
+            opacity var(--transition),
+            background var(--transition);
     }
     .send:hover:not(:disabled) {
-        transform: scale(1.05);
+        transform: scale(1.06);
     }
     .send:active:not(:disabled) {
         transform: scale(0.93);
@@ -822,13 +859,14 @@
         opacity: 0.15;
         cursor: not-allowed;
     }
+
     .send-stop {
-        background: rgba(239, 68, 68, 0.12);
+        background: rgba(239, 68, 68, 0.1);
         color: var(--error, #ef4444);
-        border-color: rgba(239, 68, 68, 0.3);
+        border-color: rgba(239, 68, 68, 0.25);
     }
     .send-stop:hover {
-        background: rgba(239, 68, 68, 0.22);
-        transform: scale(1.05);
+        background: rgba(239, 68, 68, 0.2);
+        transform: scale(1.06);
     }
 </style>

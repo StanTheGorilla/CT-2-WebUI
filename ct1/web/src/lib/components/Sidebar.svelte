@@ -329,27 +329,13 @@
         height: 100%;
         display: flex;
         flex-direction: column;
-        background: color-mix(in srgb, var(--surface-solid) 76%, var(--bubble-strong));
+        background: var(--bubble-strong);
         backdrop-filter: var(--bubble-blur-heavy);
         -webkit-backdrop-filter: var(--bubble-blur-heavy);
-        border: 1px solid color-mix(in srgb, var(--surface-solid) 34%, var(--border));
+        border: var(--bubble-border);
         border-radius: 24px;
-        box-shadow:
-            0 18px 42px rgba(0, 0, 0, 0.08),
-            0 6px 16px rgba(0, 0, 0, 0.04),
-            inset 0 1px 0 rgba(255, 255, 255, 0.22);
+        box-shadow: var(--shadow-lg);
         overflow: hidden;
-    }
-    .sidebar-inner::before {
-        content: none;
-    }
-    :global([data-theme="dark"]) .sidebar-inner {
-        background: rgba(13, 13, 18, 0.88);
-        border-color: rgba(255, 255, 255, 0.10);
-        box-shadow:
-            0 22px 52px rgba(0, 0, 0, 0.42),
-            0 8px 20px rgba(0, 0, 0, 0.24),
-            inset 0 1px 0 rgba(255, 255, 255, 0.05);
     }
 
     /* ─── Top: New Chat + Search ─── */
@@ -358,7 +344,7 @@
         flex-shrink: 0;
         padding: 22px 20px 16px;
         border-bottom: 1px solid var(--border-subtle);
-        background: color-mix(in srgb, var(--surface-solid) 18%, transparent);
+        background: transparent;
     }
 
     .new-chat {
@@ -371,7 +357,7 @@
         margin-bottom: 16px;
         border: 1px solid var(--border);
         border-radius: 16px;
-        background: color-mix(in srgb, var(--surface-solid) 58%, var(--surface));
+        background: var(--surface);
         color: var(--text);
         font-family: var(--font-body);
         font-size: 14px;
@@ -384,7 +370,6 @@
     .new-chat:hover {
         background: var(--surface-hover);
         border-color: var(--border-strong);
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
     }
     .new-chat:active {
         transform: scale(0.98);
@@ -480,16 +465,16 @@
         box-shadow: inset 0 0 0 1px transparent;
     }
     .row:hover {
-        background: color-mix(in srgb, var(--surface-solid) 46%, var(--surface));
-        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--surface-solid) 18%, transparent);
+        background: var(--surface-hover);
+        box-shadow: inset 0 0 0 1px var(--border-subtle);
     }
     .row.active {
-        background: color-mix(in srgb, var(--surface-hover) 90%, var(--accent-subtle));
-        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+        background: var(--surface-hover);
+        box-shadow: inset 0 0 0 1px var(--border);
     }
     .row:focus-visible {
         outline: none;
-        background: color-mix(in srgb, var(--surface-solid) 46%, var(--surface));
+        background: var(--surface-hover);
         box-shadow: inset 0 0 0 1px var(--border-strong);
     }
     .row::before {
@@ -612,14 +597,14 @@
     }
 
     .project-row {
-        background: color-mix(in srgb, var(--accent-subtle) 92%, transparent);
+        background: var(--accent-subtle);
         box-shadow: inset 0 0 0 1px transparent;
     }
     .project-row:hover {
-        background: color-mix(in srgb, var(--surface-hover) 90%, var(--accent-subtle));
+        background: var(--surface-hover);
     }
     .project-row.active {
-        background: color-mix(in srgb, var(--surface-hover) 94%, var(--accent-subtle));
+        background: var(--surface-hover);
     }
 
     /* ─── Hover action buttons ─── */
@@ -641,15 +626,17 @@
         align-items: center;
         gap: 1px;
         flex-shrink: 0;
-        background: color-mix(in srgb, var(--surface-solid) 78%, var(--surface));
-        border: 1px solid var(--border);
+        background: var(--bubble-strong);
+        backdrop-filter: var(--bubble-blur);
+        -webkit-backdrop-filter: var(--bubble-blur);
+        border: var(--bubble-border);
         border-radius: 10px;
         padding: 2px;
         opacity: 0;
         pointer-events: none;
         transform: translateY(-50%) translateX(6px);
         transition: opacity 150ms ease, transform 150ms ease;
-        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.10);
+        box-shadow: var(--shadow-md);
     }
     .conv-row:not(.renaming):hover .actions,
     .conv-row:not(.renaming):focus-within .actions {
@@ -673,14 +660,13 @@
         background: none;
         border: none;
         border-radius: 6px;
-        color: var(--text-muted);
+        color: var(--text-secondary);
         cursor: pointer;
-        transition: color 150ms ease, background 150ms ease, transform 150ms ease;
+        transition: color 150ms ease, background 150ms ease;
     }
     .act:hover {
         color: var(--text);
         background: var(--surface-hover);
-        transform: none;
     }
     .act.del:hover {
         color: var(--error);
@@ -752,7 +738,7 @@
     }
     .bottom-link:hover {
         color: var(--text-secondary);
-        background: color-mix(in srgb, var(--surface-solid) 40%, var(--surface));
+        background: var(--surface-hover);
         border-color: var(--border);
     }
 </style>

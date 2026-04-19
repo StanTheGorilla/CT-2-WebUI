@@ -1,9 +1,11 @@
 <script lang="ts">
-    import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, clearPendingCommands } from '$lib/stores/chat';
+    import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, clearPendingCommands, revertToTurn, pendingInputPrompt } from '$lib/stores/chat';
+    import type { SearchActivity, SearchResult } from '$lib/stores/chat';
     import { getLangMeta } from '$lib/langMap';
     import { render } from '$lib/markdown';
     import hljs from '$lib/highlight';
     import ChatInput from '$lib/components/ChatInput.svelte';
+    import SearchActivities from '$lib/components/SearchActivities.svelte';
     import SpecialistCard from '$lib/components/SpecialistCard.svelte';
 
     import PlanCard from '$lib/components/PlanCard.svelte';
@@ -61,6 +63,25 @@
     let activeWorkspaceFile = $derived(((viewingFile as WorkspaceFileView | null)?.path) ?? '');
     let computerTab = $state<'files' | 'terminal'>('files');
     let fileRequestId = $state(0);
+
+    function getTurnSearches(turn: {
+        activeSearches?: SearchActivity[];
+        webSearchResults?: SearchResult[];
+        webSearchQuery?: string;
+    }): SearchActivity[] {
+        if (turn.activeSearches?.length) {
+            return turn.activeSearches;
+        }
+        if (turn.webSearchResults?.length) {
+            return [{
+                query: turn.webSearchQuery ?? '',
+                results: turn.webSearchResults,
+                done: true,
+                error: null,
+            }];
+        }
+        return [];
+    }
 
     $effect(() => {
         // On mount: try to restore workspace from localStorage (survives server restarts)
@@ -373,6 +394,27 @@
     <div class="chat-panel" class:resizing-layout={resizing} style={(previewVisible || (isComputerMode && showTerminal)) ? `margin-right: ${previewWidth}px` : ''}>
         <div class="messages" bind:this={messagesEl} onscroll={onMessagesScroll}>
             <div class="messages-inner">
+                <!-- ==================== WELCOME SCREEN ==================== -->
+                {#if $chat.conversation.length === 0 && $chat.phase === 'idle'}
+                    <div class="welcome">
+                        <h1 class="welcome-title">CT-2</h1>
+                        <p class="welcome-sub">What would you like to build today?</p>
+                        <div class="welcome-chips">
+                            {#each [
+                                { label: 'Design a landing page', icon: '✦' },
+                                { label: 'Write a Python script', icon: '⌥' },
+                                { label: 'Explain a concept', icon: '◎' },
+                                { label: 'Help me debug code', icon: '◈' },
+                            ] as chip}
+                                <button class="welcome-chip" onclick={() => pendingInputPrompt.set(chip.label)}>
+                                    <span class="chip-icon">{chip.icon}</span>
+                                    <span>{chip.label}</span>
+                                </button>
+                            {/each}
+                        </div>
+                    </div>
+                {/if}
+
                 <!-- ==================== HISTORY ==================== -->
                 {#each history() as turn, idx}
                     {#if turn.role === 'user'}
@@ -393,6 +435,14 @@
                         {/if}
                         <div class="user-bubble" style="animation-delay: {idx * 30}ms">
                             <p>{turn.content}</p>
+                        </div>
+                        <div class="user-actions" style="animation-delay: {idx * 30 + 60}ms">
+                            <button class="user-action-btn" onclick={() => revertToTurn(idx)} title="Revert conversation to this point">
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                    <path d="M3 8a5 5 0 1 0 5-5H5M3 8L5.5 5.5M3 8L5.5 10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                                Revert here
+                            </button>
                         </div>
                     {:else if turn.isCode && turn.route !== 'ROUTE_COMPUTER'}
                         {@const hLang = turn.detectedLang ?? 'text'}
@@ -426,24 +476,7 @@
                                     </details>
                                 {/each}
                             {/if}
-                            {#if turn.webSearchResults?.length}
-                                <details class="search-results-card">
-                                    <summary class="search-results-header">
-                                        <span class="search-results-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
-                                        <span class="search-results-title">Web results{turn.webSearchQuery ? ` for "${turn.webSearchQuery}"` : ''}</span>
-                                        <span class="search-results-count">{turn.webSearchResults.length}</span>
-                                    </summary>
-                                    <div class="search-results-body">
-                                        {#each turn.webSearchResults as sr}
-                                            <div class="search-result-item">
-                                                <a href={sr.url} target="_blank" rel="noopener noreferrer" class="sr-title">{sr.title}</a>
-                                                <div class="sr-url">{sr.url.length > 70 ? sr.url.slice(0, 67) + '…' : sr.url}</div>
-                                                {#if sr.snippet}<p class="sr-snippet">{sr.snippet}</p>{/if}
-                                            </div>
-                                        {/each}
-                                    </div>
-                                </details>
-                            {/if}
+                            <SearchActivities searches={getTurnSearches(turn)} />
                             {#if turn.explanation}
                                 <div class="code-explanation">{turn.explanation}</div>
                             {/if}
@@ -538,24 +571,7 @@
                                     </details>
                                 {/each}
                             {/if}
-                            {#if turn.webSearchResults?.length}
-                                <details class="search-results-card">
-                                    <summary class="search-results-header">
-                                        <span class="search-results-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
-                                        <span class="search-results-title">Web results{turn.webSearchQuery ? ` for "${turn.webSearchQuery}"` : ''}</span>
-                                        <span class="search-results-count">{turn.webSearchResults.length}</span>
-                                    </summary>
-                                    <div class="search-results-body">
-                                        {#each turn.webSearchResults as sr}
-                                            <div class="search-result-item">
-                                                <a href={sr.url} target="_blank" rel="noopener noreferrer" class="sr-title">{sr.title}</a>
-                                                <div class="sr-url">{sr.url.length > 70 ? sr.url.slice(0, 67) + '…' : sr.url}</div>
-                                                {#if sr.snippet}<p class="sr-snippet">{sr.snippet}</p>{/if}
-                                            </div>
-                                        {/each}
-                                    </div>
-                                </details>
-                            {/if}
+                            <SearchActivities searches={getTurnSearches(turn)} />
                             <div class="computer-result-card" style="animation-delay: {idx * 30}ms">
                                 <div class="computer-result-header">
                                     <div class="computer-result-icon">
@@ -625,24 +641,7 @@
                                     </details>
                                 {/each}
                             {/if}
-                            {#if turn.webSearchResults?.length}
-                                <details class="search-results-card">
-                                    <summary class="search-results-header">
-                                        <span class="search-results-icon"><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
-                                        <span class="search-results-title">Web results{turn.webSearchQuery ? ` for "${turn.webSearchQuery}"` : ''}</span>
-                                        <span class="search-results-count">{turn.webSearchResults.length}</span>
-                                    </summary>
-                                    <div class="search-results-body">
-                                        {#each turn.webSearchResults as sr}
-                                            <div class="search-result-item">
-                                                <a href={sr.url} target="_blank" rel="noopener noreferrer" class="sr-title">{sr.title}</a>
-                                                <div class="sr-url">{sr.url.length > 70 ? sr.url.slice(0, 67) + '…' : sr.url}</div>
-                                                {#if sr.snippet}<p class="sr-snippet">{sr.snippet}</p>{/if}
-                                            </div>
-                                        {/each}
-                                    </div>
-                                </details>
-                            {/if}
+                            <SearchActivities searches={getTurnSearches(turn)} />
                             <div class="ai-bubble" style="animation-delay: {idx * 30}ms">
                                 {@html render(shownContent)}
                             </div>
@@ -751,30 +750,15 @@
                     {/if}
 
                     <!-- ==================== PRECISION-DESIGN PIPELINE ==================== -->
-                    {#if $chat.phase === 'spec_generating'}
-                        <div class="step">
-                            <span class="step-dot pulse"></span>
-                            <span class="step-text">Planning page structure...</span>
-                            {#if $chat.tokensPerSec > 0}
-                                <span class="gen-speed" style="margin-left: 8px">{$chat.tokensPerSec} t/s</span>
+                    {#if $chat.phase === 'spec_generating' || ($chat.phase === 'spec_validated' && $chat.streamingThinking)}
+                        <div class="planning-card">
+                            <div class="planning-header">
+                                <span class="planning-dot" class:pulse={$chat.phase === 'spec_generating'}></span>
+                                <span class="planning-label">Planning{$chat.phase === 'spec_generating' ? '…' : ' complete'}</span>
+                            </div>
+                            {#if $chat.streamingThinking}
+                                <pre class="planning-body">{$chat.streamingThinking}</pre>
                             {/if}
-                        </div>
-                        {#if $chat.streamingThinking}
-                            <div class="spec-stream">
-                                <pre class="spec-stream-pre">{$chat.streamingThinking}</pre>
-                            </div>
-                        {/if}
-                        {#if $chat.streamingText}
-                            <div class="spec-stream">
-                                <pre class="spec-stream-pre">{$chat.streamingText}</pre>
-                            </div>
-                        {/if}
-                    {/if}
-
-                    {#if $chat.phase === 'spec_validated' && $chat.designSpec}
-                        <div class="step">
-                            <span class="step-dot"></span>
-                            <span class="step-text">Spec ready — {$chat.designSpec.components?.length ?? 0} components</span>
                         </div>
                     {/if}
 
@@ -809,56 +793,7 @@
                     {/if}
                 {/if}
 
-                {#if $chat.webSearchPhase !== 'idle'}
-                    <div class="search-status">
-                        <span class="search-icon">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>
-                                <path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                            </svg>
-                        </span>
-                        {#if $chat.webSearchPhase === 'extracting'}
-                            <span class="search-label pulse-text">Figuring out what to search...</span>
-                        {:else if $chat.webSearchPhase === 'searching'}
-                            <span class="search-label pulse-text">Searching the web for</span>
-                            <span class="search-query">"{$chat.webSearchQuery}"</span>
-                        {:else if $chat.webSearchPhase === 'done'}
-                            <span class="search-label">Searched for</span>
-                            <span class="search-query">"{$chat.webSearchQuery}"</span>
-                            {#if $chat.webSearchResults.length > 0}
-                                <span class="search-count">{$chat.webSearchResults.length} results</span>
-                            {:else if $chat.webSearchError}
-                                <span class="search-error">— {$chat.webSearchError}</span>
-                            {:else}
-                                <span class="search-error">— no results</span>
-                            {/if}
-                        {/if}
-                    </div>
-                {/if}
-
-                {#if $chat.webSearchResults.length > 0}
-                    <details class="search-results-card">
-                        <summary class="search-results-header">
-                            <span class="search-results-icon">
-                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                                    <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>
-                                    <path d="M8 2c-1.5 2-2 3.7-2 6s.5 4 2 6M8 2c1.5 2 2 3.7 2 6s-.5 4-2 6M2 8h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                                </svg>
-                            </span>
-                            <span class="search-results-title">Web results for "{$chat.webSearchQuery}"</span>
-                            <span class="search-results-count">{$chat.webSearchResults.length}</span>
-                        </summary>
-                        <div class="search-results-body">
-                            {#each $chat.webSearchResults as sr, i}
-                                <div class="search-result-item">
-                                    <a href={sr.url} target="_blank" rel="noopener noreferrer" class="sr-title">{sr.title}</a>
-                                    <div class="sr-url">{sr.url.length > 70 ? sr.url.slice(0, 67) + '…' : sr.url}</div>
-                                    {#if sr.snippet}<p class="sr-snippet">{sr.snippet}</p>{/if}
-                                </div>
-                            {/each}
-                        </div>
-                    </details>
-                {/if}
+                <SearchActivities searches={$chat.activeSearches} showStatus={true} />
 
                 {#if $chat.fetchingUrls.length > 0}
                     <div class="fetch-status">
@@ -929,7 +864,7 @@
                         </div>
                         {#if !isCode && !isComputerRoute && $chat.streamingText}
                             <div class="gen-body">
-                                {@html render($chat.streamingText)}
+                                {@html render($chat.streamingText)}<span class="stream-cursor"></span>
                             </div>
                         {/if}
                     </div>
@@ -1411,6 +1346,59 @@
     }
 
     /* ================================================================
+       WELCOME SCREEN
+       ================================================================ */
+    .welcome {
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center;
+        min-height: 58vh;
+        padding: 0 24px 40px;
+        gap: 16px;
+        animation: fadeIn 0.5s ease both;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+    .welcome-title {
+        font-size: 32px; font-weight: 700;
+        color: var(--text);
+        letter-spacing: -0.02em;
+        margin: 0;
+    }
+
+    .welcome-sub {
+        font-size: 15px; color: var(--text-secondary);
+        margin: 0 0 8px;
+    }
+
+    .welcome-chips {
+        display: flex; flex-wrap: wrap; gap: 10px;
+        justify-content: center;
+        max-width: 560px;
+    }
+
+    .welcome-chip {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 10px 18px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-pill);
+        font-size: 13.5px; font-weight: 500;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .welcome-chip:hover {
+        color: var(--text);
+        background: var(--surface-hover);
+        border-color: var(--border-strong, var(--border));
+    }
+    .chip-icon {
+        font-size: 14px;
+        color: var(--accent);
+        line-height: 1;
+    }
+
+    /* ================================================================
        USER BUBBLE
        ================================================================ */
     .user-bubble {
@@ -1432,6 +1420,33 @@
         box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
     }
     .user-bubble p { margin: 0; }
+
+    .user-actions {
+        align-self: flex-end;
+        display: flex; gap: 6px;
+        opacity: 0;
+        transition: opacity 0.15s;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+    }
+    .user-bubble:hover ~ .user-actions,
+    .user-actions:hover { opacity: 1; }
+
+    .user-action-btn {
+        display: inline-flex; align-items: center; gap: 5px;
+        padding: 4px 10px;
+        font-size: 11.5px; font-weight: 500;
+        color: var(--text-muted);
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 20px;
+        cursor: pointer;
+        transition: color 0.12s, background 0.12s, border-color 0.12s;
+    }
+    .user-action-btn:hover {
+        color: var(--text-secondary);
+        background: var(--surface);
+        border-color: var(--border);
+    }
 
     /* ================================================================
        ATTACHMENTS (in messages)
@@ -1647,6 +1662,48 @@
         font-size: 11px; font-family: var(--font-mono);
         color: var(--text-muted); margin-left: auto;
     }
+
+    /* ---- Planning card (spec thinking stream) ---- */
+    .planning-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        overflow: hidden;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+        align-self: flex-start;
+        max-width: min(560px, 92%);
+    }
+    .planning-header {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--border);
+    }
+    .planning-dot {
+        width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+        background: var(--brain);
+    }
+    .planning-dot.pulse { animation: pulse 6s ease-in-out infinite; }
+    .planning-label {
+        font-size: 12.5px; font-weight: 500;
+        color: var(--text-secondary); letter-spacing: 0.01em;
+    }
+    .planning-body {
+        margin: 0;
+        padding: 10px 14px;
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        line-height: 1.6;
+        color: var(--text-muted);
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 220px;
+        overflow-y: auto;
+        background: none;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+    }
+
     .spec-stream {
         background: var(--card); border: 1px solid var(--border); border-radius: 8px;
         margin: 4px 0; max-height: 200px; overflow-y: auto;
@@ -1787,6 +1844,20 @@
         color: var(--text-secondary); vertical-align: top;
     }
     .gen-body :global(tr:last-child td) { border-bottom: none; }
+
+    .stream-cursor {
+        display: inline-block;
+        width: 2px; height: 14px;
+        background: var(--accent);
+        border-radius: 1px;
+        margin-left: 2px;
+        vertical-align: middle;
+        animation: cursorBlink 0.75s step-end infinite;
+    }
+    @keyframes cursorBlink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
+    }
 
     .preview-btn {
         padding: 3px 12px;
@@ -2610,76 +2681,4 @@
     .fetch-card-trunc { font-size: 0.7rem; opacity: 0.5; font-style: italic; }
     .fetch-card-body { padding: 8px 12px; font-size: 0.75rem; color: var(--text-2); max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; border-top: 1px solid var(--border); margin: 0; }
 
-    /* ── Web search status row ── */
-    .search-status {
-        display: flex; align-items: center; gap: 7px;
-        font-size: 0.78rem; color: var(--text-2);
-        margin: 6px 0 4px;
-    }
-    .search-icon { color: var(--accent, #3b82f6); flex-shrink: 0; display: flex; }
-    .search-label { font-weight: 500; }
-    .search-query { opacity: 0.75; font-style: italic; }
-    .search-count { margin-left: auto; font-size: 0.72rem; opacity: 0.55; }
-    .search-error { font-size: 0.72rem; color: var(--warning, #f59e0b); opacity: 0.85; font-style: italic; }
-    .pulse-text { animation: pulseOpacity 1.2s ease-in-out infinite; }
-    @keyframes pulseOpacity { 0%,100% { opacity:1; } 50% { opacity:0.45; } }
-
-    /* ── Web search results card ── */
-    .search-results-card {
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        margin: 4px 0;
-        overflow: hidden;
-    }
-    .search-results-header {
-        display: flex; align-items: center; gap: 8px;
-        padding: 8px 12px; cursor: pointer;
-        font-size: 0.8rem; color: var(--text-2);
-        list-style: none;
-    }
-    .search-results-header::-webkit-details-marker { display: none; }
-    .search-results-icon {
-        color: var(--accent, #3b82f6);
-        display: flex; flex-shrink: 0;
-    }
-    .search-results-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .search-results-count {
-        margin-left: auto;
-        font-size: 0.7rem;
-        background: var(--accent-subtle);
-        color: var(--accent, #3b82f6);
-        padding: 1px 7px;
-        border-radius: 99px;
-        font-weight: 600;
-        flex-shrink: 0;
-    }
-    .search-results-body {
-        border-top: 1px solid var(--border);
-        padding: 4px 0;
-        max-height: 340px;
-        overflow-y: auto;
-    }
-    .search-result-item {
-        padding: 8px 14px;
-        border-bottom: 1px solid var(--border-subtle, color-mix(in srgb, var(--border) 50%, transparent));
-    }
-    .search-result-item:last-child { border-bottom: none; }
-    .sr-title {
-        font-size: 0.82rem; font-weight: 500;
-        color: var(--accent, #3b82f6);
-        text-decoration: none;
-        display: block;
-        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    .sr-title:hover { text-decoration: underline; }
-    .sr-url {
-        font-size: 0.7rem; color: var(--text-muted);
-        margin-top: 1px;
-        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    .sr-snippet {
-        font-size: 0.76rem; color: var(--text-2);
-        margin: 3px 0 0; line-height: 1.4;
-    }
 </style>

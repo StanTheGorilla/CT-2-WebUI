@@ -1,7 +1,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import StatusIndicator from '$lib/components/StatusIndicator.svelte';
-    import { preferences } from '$lib/stores/preferences';
+    import { preferences, toggleWebSearch } from '$lib/stores/preferences';
+    import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
 
     const CONTEXT_MIN_FLOOR = 2048;
 
@@ -32,32 +33,8 @@
     let switchingBackend = $state(false);
     let backendError = $state('');
 
-    /* ── llama-server update ── */
-    let updateStatus = $state<Record<string, {status: string; message: string}>>({});
-    let updatePollers = $state<Record<string, ReturnType<typeof setInterval>>>({});
-
-    async function startUpdate(backend: 'vulkan' | 'cuda') {
-        updateStatus[backend] = { status: 'downloading', message: 'Starting...' };
-        try {
-            await fetch(`/api/llama/update/${backend}`, { method: 'POST' });
-        } catch {
-            updateStatus[backend] = { status: 'error', message: 'Request failed' };
-            return;
-        }
-        // Poll until done or error
-        if (updatePollers[backend]) clearInterval(updatePollers[backend]);
-        updatePollers[backend] = setInterval(async () => {
-            try {
-                const res = await fetch(`/api/llama/update/${backend}/status`);
-                const data = await res.json();
-                updateStatus[backend] = data;
-                if (data.status === 'done' || data.status === 'error') {
-                    clearInterval(updatePollers[backend]);
-                    delete updatePollers[backend];
-                }
-            } catch { /* ignore */ }
-        }, 1500);
-    }
+    /* ── llama-server update — state lives in serverUpdate store (persists across navigation) ── */
+    const updateStatus = $derived($serverUpdate);
     const isMac = $derived(
         typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac')
     );
@@ -175,7 +152,7 @@
                 switchError = data.error;
             } else {
                 runningContextSize = contextSize;
-                updateStatus = {};   // hide the "Restart Server Now" button
+                serverUpdate.set({});   // hide the "Restart Server Now" button
                 await loadData();
             }
         } catch (e: any) {
@@ -747,6 +724,24 @@
         </div>
 
         <div class="card-group">
+            <label class="toggle-card">
+                <span class="toggle-info">
+                    <span class="toggle-name">Web Search</span>
+                    <span class="toggle-hint">Allow the AI to search the web during a response and fetch pages it decides are relevant.</span>
+                </span>
+                <button
+                    class="toggle-switch"
+                    class:on={$preferences.webSearchEnabled}
+                    onclick={toggleWebSearch}
+                    role="switch"
+                    aria-checked={$preferences.webSearchEnabled}
+                    aria-label="Toggle web search capability"
+                    title="Toggle web search capability"
+                >
+                    <span class="toggle-knob"></span>
+                </button>
+            </label>
+
             <label class="toggle-card">
                 <span class="toggle-info">
                     <span class="toggle-name">Design Refinement</span>

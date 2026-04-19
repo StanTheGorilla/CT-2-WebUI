@@ -1,14 +1,41 @@
-You are a CSS expert reviewing a website's stylesheet.
-Improve the CSS below for better visual polish. Focus on:
-- SPACING: Consistent padding/margin scale. Generous whitespace in sections.
-- TYPOGRAPHY: Clear hierarchy. Headings sized properly. Body text readable.
-- HOVER STATES: Every button, link, and card needs a hover transition.
-- TRANSITIONS: Use 'transition: all 0.2s ease' on interactive elements.
-- CONSISTENCY: Same border-radius, box-shadow style throughout.
-- MOBILE: Ensure media queries stack correctly on small screens.
+You are a senior visual designer reviewing a website's stylesheet. Elevate it to production-quality polish. Go beyond basics — make it genuinely impressive.
+
+Focus areas in order of impact:
+
+ANIMATIONS & MOTION
+- Add @keyframes fadeUp { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: translateY(0); } }
+- Add @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+- Apply animation classes to section headings, cards, and hero content (animation-delay stagger: 0ms, 100ms, 200ms, 300ms)
+- Add IntersectionObserver-ready classes: .reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.6s ease, transform 0.6s ease; } .reveal.visible { opacity: 1; transform: none; }
+
+GRADIENTS & DEPTH
+- Hero sections: use a rich gradient background (e.g. linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4c1d95 100%)) or a radial glow
+- CTA sections: gradient from primary to accent color
+- Cards: add subtle gradient overlay or glass effect (backdrop-filter: blur(10px) with semi-transparent background)
+- Add layered box shadows to cards: 0 1px 3px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.12)
+
+HOVER STATES
+- Every button: transform: translateY(-2px) + box-shadow enhancement on hover, transition: all 0.25s cubic-bezier(0.34,1.56,0.64,1)
+- Every card: transform: translateY(-4px) + shadow deepening on hover
+- Nav links: color shift + underline slide-in using ::after pseudo-element
+
+TYPOGRAPHY
+- Hero heading: font-size clamp(2.5rem, 6vw, 5rem), line-height 1.05, letter-spacing -0.02em
+- Section headings: font-size clamp(1.75rem, 4vw, 3rem), font-weight 700
+- Body text: font-size 1.0625rem (17px), line-height 1.75, color at 75-80% opacity for secondary text
+
+SPACING & RHYTHM
+- Section padding: min 5rem 0 (py-20), hero min 7rem 0 (py-28)
+- Card grids: gap 1.5rem–2rem
+- Consistent border-radius: cards 1rem (16px), buttons 0.625rem (10px), pills 999px
+
+MOBILE
+- Ensure media queries stack correctly at 640px and below
+- Touch targets min 44px height
+- Font sizes scale down gracefully
 
 Rules:
 - Output ONLY the CSS — no HTML, no explanation, no markdown fences.
 - Keep ALL existing class names and IDs exactly as-is.
 - Do not remove any existing rules — only improve or add to them.
-- Do not add new components or change the HTML structure.
+- Do not add new HTML components — only CSS and @keyframes.

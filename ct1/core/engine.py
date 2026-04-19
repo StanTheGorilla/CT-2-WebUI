@@ -404,7 +404,9 @@ class Engine:
                            conversation: list[dict] = None,
                            enable_thinking: bool = True,
                            thinking_budget: int = None,
-                           check_repetition: bool = True):
+                           check_repetition: bool = True,
+                           tools: list[dict] | None = None,
+                           tool_executor=None):
         """Streaming call with token-by-token callback."""
         if conversation:
             system_prompt = messages[0].get("content", "") if messages else ""
@@ -435,60 +437,140 @@ class Engine:
             "chat_template_kwargs": chat_kwargs,
         }
 
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
         text = ""
         thinking = ""
         content_token_count = 0
         thinking_token_count = 0
+        async def _stream_once(request_messages: list[dict]):
+            nonlocal text, thinking, content_token_count, thinking_token_count
+            pending_tool_calls: list[dict] = []
+            finish_reason: str | None = None
+            start_len = len(text)
 
-        # httpx.AsyncClient.stream() is implemented as an @asynccontextmanager
-        # with a try/finally that calls response.aclose() unconditionally.
-        # This means if a CancelledError propagates out of the async-for loop
-        # (e.g. because the WebSocket client disconnected), aclose() is still
-        # called immediately, closing the TCP connection to llama-server
-        # without draining the remaining response body. CancelledError is then
-        # re-raised by the context manager so the task cancellation propagates
-        # correctly up the call stack. No additional try/except is needed here.
-        async with self.client.stream(
-            "POST", f"{self.base_url}/v1/chat/completions", json=payload
-        ) as response:
-            async for line in response.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data = line[6:].strip()
-                if data == "[DONE]":
-                    break
+            # httpx.AsyncClient.stream() is implemented as an @asynccontextmanager
+            # with a try/finally that calls response.aclose() unconditionally.
+            # This means if a CancelledError propagates out of the async-for loop
+            # (e.g. because the WebSocket client disconnected), aclose() is still
+            # called immediately, closing the TCP connection to llama-server
+            # without draining the remaining response body. CancelledError is then
+            # re-raised by the context manager so the task cancellation propagates
+            # correctly up the call stack. No additional try/except is needed here.
+            async with self.client.stream(
+                "POST",
+                f"{self.base_url}/v1/chat/completions",
+                json={**payload, "messages": request_messages},
+            ) as response:
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        choice = chunk["choices"][0]
+                        delta = choice.get("delta", {})
+                        token = delta.get("content", "")
+                        reason = delta.get("reasoning_content", "")
+                        if token:
+                            text += token
+                            if on_token:
+                                on_token(token, "content")
+                            # Check content for repetition every 150 tokens
+                            # (disabled for design/code routes — HTML/CSS has legitimate repetition)
+                            if check_repetition:
+                                content_token_count += 1
+                                if content_token_count >= 150:
+                                    content_token_count = 0
+                                    if self._detect_repetition(text):
+                                        text = self._trim_repetition(text)
+                                        break
+                        if reason:
+                            thinking += reason
+                            if on_token:
+                                on_token(reason, "thinking")
+                            # Check thinking for repetition every 200 tokens
+                            if check_repetition:
+                                thinking_token_count += 1
+                                if thinking_token_count >= 200:
+                                    thinking_token_count = 0
+                                    if self._detect_repetition(thinking):
+                                        thinking = self._trim_repetition(thinking)
+                                        break
+                        tool_calls_raw = delta.get("tool_calls", [])
+                        for tc_chunk in tool_calls_raw:
+                            idx = tc_chunk.get("index", 0)
+                            while len(pending_tool_calls) <= idx:
+                                pending_tool_calls.append(
+                                    {"id": "", "name": "", "arguments": ""}
+                                )
+                            if tc_chunk.get("id"):
+                                pending_tool_calls[idx]["id"] = tc_chunk["id"]
+                            fn = tc_chunk.get("function", {})
+                            if fn.get("name"):
+                                pending_tool_calls[idx]["name"] = fn["name"]
+                            if fn.get("arguments"):
+                                pending_tool_calls[idx]["arguments"] += fn["arguments"]
+                        if choice.get("finish_reason"):
+                            finish_reason = choice["finish_reason"]
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+
+            return pending_tool_calls, finish_reason, text[start_len:]
+
+        current_messages = list(messages)
+        pending_tool_calls, finish_reason, pass_text = await _stream_once(current_messages)
+
+        while finish_reason == "tool_calls" and tool_executor and pending_tool_calls:
+            parsed_calls = []
+            for tc in pending_tool_calls:
                 try:
-                    chunk = json.loads(data)
-                    delta = chunk["choices"][0].get("delta", {})
-                    token = delta.get("content", "")
-                    reason = delta.get("reasoning_content", "")
-                    if token:
-                        text += token
-                        if on_token:
-                            on_token(token, "content")
-                        # Check content for repetition every 150 tokens
-                        # (disabled for design/code routes — HTML/CSS has legitimate repetition)
-                        if check_repetition:
-                            content_token_count += 1
-                            if content_token_count >= 150:
-                                content_token_count = 0
-                                if self._detect_repetition(text):
-                                    text = self._trim_repetition(text)
-                                    break
-                    if reason:
-                        thinking += reason
-                        if on_token:
-                            on_token(reason, "thinking")
-                        # Check thinking for repetition every 200 tokens
-                        if check_repetition:
-                            thinking_token_count += 1
-                            if thinking_token_count >= 200:
-                                thinking_token_count = 0
-                                if self._detect_repetition(thinking):
-                                    thinking = self._trim_repetition(thinking)
-                                    break
-                except (json.JSONDecodeError, KeyError, IndexError):
-                    continue
+                    args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                except json.JSONDecodeError:
+                    args = {}
+                parsed_calls.append({
+                    "id": tc["id"],
+                    "name": tc["name"],
+                    "args": args,
+                    "arguments": tc["arguments"],
+                })
+
+            tool_results = list(await tool_executor(parsed_calls) or [])
+            if len(tool_results) < len(parsed_calls):
+                tool_results.extend(
+                    ["Tool returned no output."] * (len(parsed_calls) - len(tool_results))
+                )
+            elif len(tool_results) > len(parsed_calls):
+                tool_results = tool_results[:len(parsed_calls)]
+
+            current_messages = list(current_messages)
+            current_messages.append({
+                "role": "assistant",
+                "content": pass_text or None,
+                "tool_calls": [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                        },
+                    }
+                    for tc in parsed_calls
+                ],
+            })
+            for tc, result in zip(parsed_calls, tool_results):
+                current_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": str(result),
+                })
+
+            pending_tool_calls, finish_reason, pass_text = await _stream_once(current_messages)
 
         # Fallback: if model emitted only reasoning (no content), use reasoning as response
         if not text and thinking:
@@ -618,7 +700,9 @@ class Engine:
                        is_edit: bool = False,
                        code_context: str = None,
                        task_overrides: dict = None,
-                       task_list: list[str] = None) -> dict:
+                       task_list: list[str] = None,
+                       tools: list[dict] | None = None,
+                       tool_executor=None) -> dict:
         """Generate the full response. Returns {"text": str, "thinking": str}.
 
         plan: structured task breakdown from Specialist.plan().
@@ -662,6 +746,8 @@ class Engine:
                     conversation=conversation,
                     enable_thinking=ovr_thinking if ovr_thinking is not None else False,
                     thinking_budget=ovr_budget,
+                    tools=tools,
+                    tool_executor=tool_executor,
                 )
             return await self._call(
                 messages, max_tokens=8192,
@@ -744,6 +830,8 @@ class Engine:
                 thinking_budget=ovr_budget,
                 # HTML/CSS/code has legitimate repetition — disable the heuristic check
                 check_repetition=not is_code,
+                tools=tools,
+                tool_executor=tool_executor,
             )
 
         return await self._call(

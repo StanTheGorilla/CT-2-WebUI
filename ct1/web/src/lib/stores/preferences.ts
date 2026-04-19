@@ -7,6 +7,7 @@ interface Preferences {
     theme: Theme;
     showThinking: boolean;
     designRefinement: boolean;
+    webSearchEnabled: boolean;
     // Atlas Mode (beta)
     atlasMode: boolean;
     atlasEffortMode: 'auto' | 'manual';
@@ -20,6 +21,7 @@ const defaults: Preferences = {
     theme: 'light',
     showThinking: false,
     designRefinement: true,
+    webSearchEnabled: false,
     // Atlas defaults
     atlasMode: false,
     atlasEffortMode: 'auto',
@@ -70,5 +72,11 @@ function applyTheme(theme: Theme) {
 export function toggleTheme() {
     preferences.update((p) => {
         return { ...p, theme: p.theme === 'light' ? 'dark' : 'light' };
+    });
+}
+
+export function toggleWebSearch() {
+    preferences.update((p) => {
+        return { ...p, webSearchEnabled: !p.webSearchEnabled };
     });
 }

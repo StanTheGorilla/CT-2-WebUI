@@ -592,6 +592,8 @@ class Orchestrator:
         on_token, emit,
         specialist_data=None, conversation=None,
         task_overrides=None,
+        tools: list[dict] | None = None,
+        tool_executor=None,
     ) -> tuple[str, str, bool]:
         """Handle edit-mode generation. Returns (draft, thinking, used_section_edit).
 
@@ -645,6 +647,8 @@ class Orchestrator:
             on_token=on_token,
             is_edit=True,
             task_overrides=task_overrides,
+            tools=tools,
+            tool_executor=tool_executor,
         )
         return result["text"], result.get("thinking", ""), False
 
@@ -720,21 +724,22 @@ class Orchestrator:
         emit, on_token, task_ovr: dict,
         skip_refinement: bool = False,
         mode: str = "new",
+        tools: list[dict] | None = None,
+        tool_executor=None,
     ) -> dict:
         """Precision-Design pipeline for new ROUTE_DESIGN generation.
 
-        Phase 0:   Engine (4B) generates JSON spec (structured planning)
-        Phase 0.5: Script validates spec mechanically
-        Phase 1:   Engine (4B) generates full HTML page guided by the spec
-        Phase 2:   Mechanical validation + cleanup
-        Phase 3:   Self-refinement pass (AI rewrites for polish)
+        Phase 0:   Engine generates JSON spec (silent — no UI step)
+        Phase 0.5: Script normalises and validates spec
+        Phase 1:   Engine generates full HTML guided by the spec
+        Phase 2:   Mechanical cleanup
+        Phase 3:   CSS-only refinement pass
         """
         import json as _json
 
-        # ── Phase 0: Spec Generation (Engine plans the page) ────
+        # ── Phase 0: Spec generation (thinking streamed to UI) ──────
         emit("spec_generating")
         print("[design] Phase 0: generating spec")
-
         try:
             spec = await self.engine.generate_spec(
                 goal, conversation=conversation,
@@ -742,8 +747,7 @@ class Orchestrator:
                 on_token=on_token,
             )
         except (ValueError, _json.JSONDecodeError) as e:
-            print(f"[design] Phase 0 failed: {e}")
-            emit("spec_failed", errors=[str(e)])
+            print(f"[design] Phase 0 failed: {e} — retrying")
             corrective = (
                 f"{goal_text}\n\n"
                 "Your previous output was invalid JSON. "
@@ -769,55 +773,42 @@ class Orchestrator:
                     },
                 }
 
-        # ── Phase 0.5: Normalize spec ──────────────────────────────
+        # ── Phase 0.5: Normalise spec ────────────────────────────────
         spec = self._normalize_spec(spec)
 
-        # Ensure layout_order is consistent with component ids
         comp_ids = [c["id"] for c in spec.get("components", [])]
         if spec.get("layout_order"):
-            # Keep only ids that exist in components
             spec["layout_order"] = [cid for cid in spec["layout_order"] if cid in comp_ids]
-            # Append any components missing from layout_order
             for cid in comp_ids:
                 if cid not in spec["layout_order"]:
                     spec["layout_order"].append(cid)
         else:
             spec["layout_order"] = comp_ids
 
-        # Normalize component types — map unknowns to "custom"
         valid_types = {"navbar", "hero", "features", "testimonials", "cta",
                        "pricing", "contact", "footer", "gallery", "stats",
                        "team", "faq", "custom"}
         for comp in spec.get("components", []):
             if comp.get("type") not in valid_types:
-                print(f"[design] remapped component type '{comp.get('type')}' → 'custom' for '{comp.get('id')}'")
                 comp["type"] = "custom"
 
-        # Only validate spec when we actually generated a fresh one
-        should_validate_spec = (
-            mode == "new"
-            and spec is not None
-            and bool(spec)
-            and bool(spec.get("components"))
-        )
-        if should_validate_spec:
+        if mode == "new" and spec and spec.get("components"):
             spec_ok, spec_errors = validate_spec(spec)
             if not spec_ok:
                 print(f"[design] Phase 0.5: spec validation warnings: {spec_errors}")
-                emit("spec_warnings", errors=spec_errors)
 
-        emit("spec_validated", spec=spec)
         print(f"[design] Phase 0.5: {len(spec.get('components', []))} components, "
               f"layout={spec.get('layout_order')}")
 
-        # ── Phase 1: Engine generates full HTML (single pass, 4B) ──
+        # ── Phase 1: Engine generates full HTML ──────────────────────
         emit("generating", editing=False)
         print("[design] Phase 1: Engine generating full page HTML")
 
-        # Build compact spec summary — strip required_elements and verbose
-        # fields to save context tokens for actual HTML generation
         compact = {
             "page_title": spec.get("page_title", ""),
+            "visual_style": spec.get("visual_style", ""),
+            "font_pair": spec.get("font_pair", {}),
+            "animation_style": spec.get("animation_style", "scroll-reveal"),
             "color_theme": spec.get("color_theme", {}),
             "layout_order": spec.get("layout_order", []),
             "components": [],
@@ -828,22 +819,65 @@ class Orchestrator:
                 c["content"] = comp["content"]
             if comp.get("style_hints"):
                 c["style_hints"] = comp["style_hints"]
+            if comp.get("interactions"):
+                c["interactions"] = comp["interactions"]
             compact["components"].append(c)
 
         spec_summary = _json.dumps(compact, separators=(",", ":"))
-        spec_guided_goal = (
-            f"{goal_text}\n\n"
-            f"[PAGE SPEC]\n{spec_summary}\n\n"
-            f"Generate a COMPLETE single-file HTML page with all sections. "
-            f"Use Tailwind CSS via CDN. Follow the layout_order. "
-            f"Use the color_theme and content from the spec."
+
+        # Inject spec as an assistant turn — model reads it as its own prior
+        # planning, not a new user instruction.
+        spec_turn = {
+            "role": "assistant",
+            "content": (
+                "I've planned the page architecture:\n\n"
+                f"[PAGE SPEC]\n{spec_summary}"
+            ),
+        }
+        gen_conversation = (conversation or []) + [
+            {"role": "user", "content": goal_text},
+            spec_turn,
+        ]
+
+        visual_style = spec.get("visual_style", "")
+        font_pair = spec.get("font_pair", {})
+        animation_style = spec.get("animation_style", "scroll-reveal")
+        heading_font = font_pair.get("heading", "")
+        body_font = font_pair.get("body", "")
+        font_note = (
+            f"Import '{heading_font}' (headings) and '{body_font}' (body) from Google Fonts. "
+            if heading_font and body_font else ""
+        )
+        anim_note = (
+            "Add CSS scroll-reveal: @keyframes fadeUp (opacity 0→1, translateY 24px→0), "
+            "apply via IntersectionObserver in <script>. Stagger section entry with animation-delay. "
+            if animation_style == "scroll-reveal" else
+            "Add subtle fade-up entrance animations on sections. "
+            if animation_style == "fade-up" else ""
+        )
+
+        gen_goal = (
+            f"Build a world-class, production-ready '{visual_style}' website following the spec above. "
+            f"Include every section in layout_order. {font_note}"
+            f"TYPOGRAPHY: Use the heading font for all headings (large, bold, tight letter-spacing). "
+            f"Body text 17px, line-height 1.75. "
+            f"HERO: Full-screen (min-h-screen), rich gradient or bold background, strong headline, clear CTA with hover effect. "
+            f"SECTIONS: Generous padding (py-24 or more), never cramped. Real persuasive copy. "
+            f"DEPTH: Cards with shadow-lg + hover:-translate-y-1 + hover:shadow-xl transition. "
+            f"HOVER: Every button and link has smooth hover (transform + color + shadow). "
+            f"{anim_note}"
+            f"COLOR: Apply the color_theme cohesively — primary for CTAs, accent for highlights, background for page. "
+            f"MOBILE: Mobile-first, hamburger nav on small screens. "
+            f"Output only the complete HTML file — no explanations, no markdown fences."
         )
 
         result = await self.engine.generate(
-            spec_guided_goal, "ROUTE_DESIGN",
-            conversation=conversation,
+            gen_goal, "ROUTE_DESIGN",
+            conversation=gen_conversation,
             on_token=on_token,
             task_overrides=task_ovr,
+            tools=tools,
+            tool_executor=tool_executor,
         )
         draft = result["text"]
         draft_thinking = result.get("thinking", "")
@@ -887,16 +921,13 @@ class Orchestrator:
             except Exception as e:
                 print(f"[design] Phase 3: CSS refinement failed, keeping original: {e}")
 
-        # Persist spec for edit mode
-        spec_json = _json.dumps(spec)
-
         return {
             "response": final_response,
             "thinking": final_thinking,
             "draft": draft,
             "draft_thinking": draft_thinking,
             "route": "ROUTE_DESIGN",
-            "specialist_data": spec_json,
+            "specialist_data": _json.dumps(spec),
             "plan": None,
             "reflection": None,  # Reflection handled by caller
             "spec": spec,
@@ -1067,7 +1098,9 @@ class Orchestrator:
     async def _pipeline(self, goal, on_event=None,
                         conversation: list[dict] = None,
                         mode_override: str | None = None,
-                        skip_refinement: bool = False) -> dict:
+                        skip_refinement: bool = False,
+                        tools: list[dict] | None = None,
+                        tool_executor=None) -> dict:
         if conversation is None:
             conversation = []
 
@@ -1163,6 +1196,8 @@ class Orchestrator:
                     emit, on_token, task_ovr,
                     skip_refinement=skip_refinement,
                     mode=mode,
+                    tools=tools,
+                    tool_executor=tool_executor,
                 )
                 # Run reflection
                 if result.get("reflection") is None:
@@ -1228,6 +1263,8 @@ class Orchestrator:
                 specialist_data=specialist_data,
                 conversation=conversation,
                 task_overrides=task_ovr,
+                tools=tools,
+                tool_executor=tool_executor,
             )
             # Push patched code to streamingText so preview shows it immediately
             emit("token", text=draft, kind="content")
@@ -1252,6 +1289,8 @@ class Orchestrator:
                 code_context=previous_code if is_question else None,
                 task_overrides=task_ovr,
                 task_list=task_list if task_list else None,
+                tools=tools,
+                tool_executor=tool_executor,
             )
             draft = result["text"]
             draft_thinking = result.get("thinking", "")
@@ -1339,6 +1378,8 @@ class Orchestrator:
                     fix_prompt, route,
                     on_token=on_fix_token_comp,
                     task_overrides=fix_ovr,
+                    tools=tools,
+                    tool_executor=tool_executor,
                 )
                 final_response = fix_result["text"]
                 final_thinking = fix_result.get("thinking", "")
@@ -1406,6 +1447,8 @@ class Orchestrator:
                     conversation=conversation,
                     on_token=on_fix_token,
                     task_overrides=fix_ovr,
+                    tools=tools,
+                    tool_executor=tool_executor,
                 )
                 final_response = fix_result["text"]
                 final_thinking = fix_result.get("thinking", "")
@@ -1435,6 +1478,8 @@ class Orchestrator:
                     fix_prompt, route,
                     on_token=on_token,
                     task_overrides=task_ovr,
+                    tools=tools,
+                    tool_executor=tool_executor,
                 )
                 fixed = strip_think_tags(fix_result["text"])
                 fixed = extract_code(fixed) or fixed
@@ -1692,7 +1737,9 @@ class Orchestrator:
                     conversation: list[dict] = None,
                     mode_override: str | None = None,
                     skip_refinement: bool = False,
-                    atlas_settings: dict | None = None) -> dict:
+                    atlas_settings: dict | None = None,
+                    tools: list[dict] | None = None,
+                    tool_executor=None) -> dict:
         if atlas_settings and atlas_settings.get("atlasMode"):
             return await self.atlas.run(
                 goal, conversation=conversation or [],
@@ -1705,6 +1752,8 @@ class Orchestrator:
             goal, on_event=on_event, conversation=conversation or [],
             mode_override=mode_override,
             skip_refinement=skip_refinement,
+            tools=tools,
+            tool_executor=tool_executor,
         )
 
     async def clear_kv_cache(self) -> bool:

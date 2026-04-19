@@ -6,6 +6,7 @@
     import { onMount, onDestroy } from 'svelte';
     import Sidebar from '$lib/components/Sidebar.svelte';
     import ShortcutOverlay from '$lib/components/ShortcutOverlay.svelte';
+    import ModelSwitcher from '$lib/components/ModelSwitcher.svelte';
     import { sidebarOpen } from '$lib/stores/conversations';
     import { preferences, toggleTheme } from '$lib/stores/preferences';
 
@@ -146,6 +147,8 @@
                     <div class="phase-dot"></div>
                     <span class="phase-label">{phaseText}</span>
                 </div>
+            {:else}
+                <ModelSwitcher />
             {/if}
         </div>
 
@@ -255,12 +258,12 @@
         display: flex;
         align-items: center;
         gap: 6px;
+        flex: 1;
     }
-    .topbar-left { min-width: 160px; }
-    .topbar-right { min-width: 160px; justify-content: flex-end; }
+    .topbar-right { justify-content: flex-end; }
 
     .topbar-center {
-        flex: 1;
+        flex: none;
         display: flex;
         align-items: center;
         justify-content: center;
