@@ -1,5 +1,7 @@
 <script lang="ts">
     import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, clearPendingCommands, revertToTurn, pendingInputPrompt } from '$lib/stores/chat';
+    import { preferences } from '$lib/stores/preferences';
+    import Ct2Chat from '$lib/ct2/ChatPage.svelte';
     import type { SearchActivity, SearchResult } from '$lib/stores/chat';
     import { getLangMeta } from '$lib/langMap';
     import { render } from '$lib/markdown';
@@ -270,11 +272,12 @@
         $chat.checklist;
         $chat.validationIssues;
         $chat.warning;
-        if (messagesEl && userNearBottom) {
-            requestAnimationFrame(() => {
+        if (!messagesEl) return;
+        requestAnimationFrame(() => {
+            if (userNearBottom) {
                 messagesEl.scrollTop = messagesEl.scrollHeight;
-            });
-        }
+            }
+        });
     });
 
     $effect(() => {
@@ -390,6 +393,9 @@
     }
 </script>
 
+{#if $preferences.uiStyle === 'ct2'}
+    <Ct2Chat />
+{:else}
 <div class="page">
     <div class="chat-panel" class:resizing-layout={resizing} style={(previewVisible || (isComputerMode && showTerminal)) ? `margin-right: ${previewWidth}px` : ''}>
         <div class="messages" bind:this={messagesEl} onscroll={onMessagesScroll}>
@@ -1287,6 +1293,7 @@
         <div class="copy-toast">{copyFeedback}</div>
     {/if}
 </div>
+{/if}
 
 <style>
     /* ================================================================
@@ -1331,8 +1338,9 @@
     }
 
     .messages {
-        flex: 1; overflow-y: auto; scroll-behavior: smooth;
+        flex: 1; overflow-y: auto;
         position: relative; z-index: 1;
+        contain: layout style paint;
         scrollbar-width: none; -ms-overflow-style: none;
     }
     .messages::-webkit-scrollbar { display: none; }
@@ -1493,9 +1501,7 @@
        ================================================================ */
     .ai-bubble {
         align-self: flex-start;
-        background: var(--bubble);
-        backdrop-filter: var(--bubble-blur);
-        -webkit-backdrop-filter: var(--bubble-blur);
+        background: rgba(255, 255, 255, 0.92);
         border: var(--bubble-border);
         border-radius: 6px 20px 20px 20px;
         padding: 17px 22px;
@@ -1505,6 +1511,9 @@
         max-width: min(92%, 860px);
         box-shadow: var(--bubble-glow);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+    }
+    :global([data-theme="dark"]) .ai-bubble {
+        background: rgba(28, 28, 28, 0.94);
     }
     .ai-bubble :global(h1) { font-size: 19px; font-weight: 700; margin: 18px 0 6px; line-height: 1.3; }
     .ai-bubble :global(h2) { font-size: 16px; font-weight: 600; margin: 16px 0 5px; line-height: 1.35; }

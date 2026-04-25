@@ -1,8 +1,9 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import StatusIndicator from '$lib/components/StatusIndicator.svelte';
-    import { preferences, toggleWebSearch } from '$lib/stores/preferences';
+    import { preferences, toggleWebSearch, setUiStyle } from '$lib/stores/preferences';
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
+    import Ct2Settings from '$lib/ct2/SettingsPage.svelte';
 
     const CONTEXT_MIN_FLOOR = 2048;
 
@@ -400,6 +401,9 @@
 
 <svelte:window onclick={handleWindowClick} />
 
+{#if $preferences.uiStyle === 'ct2'}
+    <Ct2Settings />
+{:else}
 <div class="settings-page">
 <div class="settings-content">
 
@@ -974,7 +978,46 @@
     </section>
 
     <!-- ═══════════════════════════════════════════════
-         SECTION 7 — Server Status
+         SECTION 7 — Appearance
+         ═══════════════════════════════════════════════ -->
+    <section class="section">
+        <div class="section-head">
+            <div class="section-head-text">
+                <h2 class="section-title">Appearance</h2>
+                <p class="section-desc">Interface layout and visual style.</p>
+            </div>
+        </div>
+
+        <div class="card-group">
+            <div class="toggle-card" style="align-items: flex-start; flex-direction: column; gap: 12px;">
+                <span class="toggle-info" style="width: 100%;">
+                    <span class="toggle-name">Interface style <span style="font-size:10px; font-weight:500; opacity:0.45; letter-spacing:0.06em; text-transform:uppercase; margin-left:6px;">uiStyle</span></span>
+                    <span class="toggle-hint">
+                        {#if $preferences.uiStyle === 'ct2'}
+                            Geist font · ambient gradient background · OKLCH colors · phase progress track
+                        {:else}
+                            Inter font · spinning ASCII donut · glass-surface color tokens
+                        {/if}
+                    </span>
+                </span>
+                <div class="seg-group" role="group" aria-label="Interface style">
+                    <button
+                        class="seg-btn"
+                        class:active={$preferences.uiStyle === 'classic'}
+                        onclick={() => setUiStyle('classic')}
+                    >Classic</button>
+                    <button
+                        class="seg-btn"
+                        class:active={$preferences.uiStyle === 'ct2'}
+                        onclick={() => setUiStyle('ct2')}
+                    >CT-2 Design</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════
+         SECTION 8 — Server Status
          ═══════════════════════════════════════════════ -->
     <section class="section section-last">
         <div class="section-head">
@@ -993,6 +1036,7 @@
 
 </div>
 </div>
+{/if}
 
 <style>
     /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1183,6 +1227,40 @@
     }
     .toggle-switch.on .toggle-knob {
         transform: translateX(20px);
+    }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       SEGMENT CONTROL
+       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+    .seg-group {
+        display: flex;
+        align-items: center;
+        background: var(--accent-subtle);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 3px;
+        gap: 2px;
+    }
+    .seg-btn {
+        padding: 5px 14px;
+        border-radius: calc(var(--radius-sm) - 2px);
+        border: none;
+        background: none;
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: background 150ms ease, color 150ms ease;
+        white-space: nowrap;
+    }
+    .seg-btn:hover:not(.active) {
+        color: var(--text-secondary);
+        background: var(--surface-hover);
+    }
+    .seg-btn.active {
+        background: var(--surface-solid);
+        color: var(--text);
+        box-shadow: var(--shadow-sm);
     }
 
     /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

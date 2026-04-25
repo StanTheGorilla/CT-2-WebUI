@@ -2,6 +2,8 @@
     import { onMount } from 'svelte';
     import StatsBar from '$lib/components/StatsBar.svelte';
     import JournalEntry from '$lib/components/JournalEntry.svelte';
+    import { preferences } from '$lib/stores/preferences';
+    import Ct2Journal from '$lib/ct2/JournalPage.svelte';
 
     let entries = $state<Record<string, any>[]>([]);
     let stats = $state<Record<string, any>>({});
@@ -19,6 +21,9 @@
     });
 </script>
 
+{#if $preferences.uiStyle === 'ct2'}
+    <Ct2Journal />
+{:else}
 <div class="journal-page">
     {#if loading}
         <p class="loading">Loading journal...</p>
@@ -34,6 +39,7 @@
         </div>
     {/if}
 </div>
+{/if}
 
 <style>
     .journal-page {

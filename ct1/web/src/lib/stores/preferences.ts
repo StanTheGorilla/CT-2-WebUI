@@ -2,9 +2,11 @@ import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
 
 export type Theme = 'light' | 'dark';
+export type UiStyle = 'classic' | 'ct2';
 
 interface Preferences {
     theme: Theme;
+    uiStyle: UiStyle;
     showThinking: boolean;
     designRefinement: boolean;
     webSearchEnabled: boolean;
@@ -19,6 +21,7 @@ interface Preferences {
 
 const defaults: Preferences = {
     theme: 'light',
+    uiStyle: 'classic',
     showThinking: false,
     designRefinement: true,
     webSearchEnabled: false,
@@ -56,6 +59,7 @@ function createPreferencesStore() {
         subscribe((prefs) => {
             localStorage.setItem('ct2-preferences', JSON.stringify(prefs));
             applyTheme(prefs.theme);
+            applyUiStyle(prefs.uiStyle);
         });
     }
 
@@ -69,10 +73,19 @@ function applyTheme(theme: Theme) {
     document.documentElement.setAttribute('data-theme', theme);
 }
 
+function applyUiStyle(style: UiStyle) {
+    if (!browser) return;
+    document.documentElement.setAttribute('data-ui-style', style);
+}
+
 export function toggleTheme() {
     preferences.update((p) => {
         return { ...p, theme: p.theme === 'light' ? 'dark' : 'light' };
     });
+}
+
+export function setUiStyle(style: UiStyle) {
+    preferences.update((p) => ({ ...p, uiStyle: style }));
 }
 
 export function toggleWebSearch() {

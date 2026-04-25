@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap');
 
 :root {
     --bg: #F5F3F0;
@@ -31,8 +32,8 @@
     --bubble-strong: rgba(255, 255, 255, 0.72);
     --bubble-border: 1px solid rgba(255, 255, 255, 0.65);
     --bubble-border-light: 1px solid rgba(255, 255, 255, 0.45);
-    --bubble-blur: blur(32px) saturate(1.3);
-    --bubble-blur-heavy: blur(48px) saturate(1.4);
+    --bubble-blur: blur(16px) saturate(1.2);
+    --bubble-blur-heavy: blur(24px) saturate(1.2);
     --bubble-glow:
         0 0 0 1px rgba(255, 255, 255, 0.4),
         0 8px 32px rgba(0, 0, 0, 0.04),
@@ -91,8 +92,8 @@
     --bubble-strong: rgba(255, 255, 255, 0.14);
     --bubble-border: 1px solid rgba(255, 255, 255, 0.12);
     --bubble-border-light: 1px solid rgba(255, 255, 255, 0.08);
-    --bubble-blur: blur(40px) saturate(1.1);
-    --bubble-blur-heavy: blur(56px) saturate(1.2);
+    --bubble-blur: blur(20px) saturate(1.1);
+    --bubble-blur-heavy: blur(28px) saturate(1.15);
     --bubble-glow:
         0 0 0 1px rgba(255, 255, 255, 0.08),
         0 8px 32px rgba(0, 0, 0, 0.4),
@@ -304,4 +305,95 @@ pre {
     @keyframes slideOutRight { 0% { opacity: 1; transform: none; } }
     @keyframes fadeIn { 0% { opacity: 1; } }
     @keyframes expandY { 0% { opacity: 1; transform: none; } }
+}
+
+/* ================================================================
+   CT-2 DESIGN SYSTEM TOKENS
+   Activated on <html data-ui-style="ct2">.
+   Uses its own var names (--bg-0, --fg-0, etc.) — does NOT override
+   classic vars — so both UIs can coexist without conflict.
+   ================================================================ */
+
+[data-ui-style="ct2"] {
+    /* Dark default */
+    --c2-bg-0: oklch(0.155 0.003 260);
+    --c2-bg-1: oklch(0.190 0.003 260);
+    --c2-bg-2: oklch(0.220 0.003 260);
+    --c2-bg-3: oklch(0.260 0.003 260);
+    --c2-bg-glass: oklch(0.21 0.003 260 / 0.60);
+    --c2-bg-user: oklch(0.30 0.003 260);
+    --c2-border-1: oklch(1 0 0 / 0.05);
+    --c2-border-2: oklch(1 0 0 / 0.09);
+    --c2-border-3: oklch(1 0 0 / 0.16);
+    --c2-fg-0: oklch(0.975 0.003 90);
+    --c2-fg-1: oklch(0.80 0.005 90);
+    --c2-fg-2: oklch(0.60 0.005 90);
+    --c2-fg-3: oklch(0.43 0.005 90);
+    --c2-accent: oklch(0.78 0.10 70);
+    --c2-accent-dim: oklch(0.78 0.10 70 / 0.14);
+    --c2-accent-fg: oklch(0.20 0.03 70);
+    --c2-ok: oklch(0.78 0.04 150);
+    --c2-warn: oklch(0.80 0.05 85);
+    --c2-err: oklch(0.70 0.13 25);
+    --c2-shadow-panel:
+        0 1px 0 0 oklch(1 0 0 / 0.04) inset,
+        0 24px 48px -16px oklch(0 0 0 / 0.55),
+        0 2px 6px oklch(0 0 0 / 0.3);
+    --c2-shadow-card:
+        0 1px 0 0 oklch(1 0 0 / 0.03) inset,
+        0 10px 28px -12px oklch(0 0 0 / 0.55);
+    --c2-spring: cubic-bezier(0.22, 1.2, 0.36, 1);
+    --c2-ease: cubic-bezier(0.3, 0, 0.2, 1);
+    --c2-feed-max: 860px;
+}
+
+[data-ui-style="ct2"][data-theme="light"] {
+    --c2-bg-0: oklch(0.995 0.002 90);
+    --c2-bg-1: oklch(0.985 0.002 90);
+    --c2-bg-2: oklch(0.965 0.002 90);
+    --c2-bg-3: oklch(0.935 0.003 90);
+    --c2-bg-glass: oklch(0.99 0.002 90 / 0.80);
+    --c2-bg-user: oklch(0.96 0.002 90);
+    --c2-border-1: oklch(0 0 0 / 0.06);
+    --c2-border-2: oklch(0 0 0 / 0.10);
+    --c2-border-3: oklch(0 0 0 / 0.18);
+    --c2-fg-0: oklch(0.22 0.005 260);
+    --c2-fg-1: oklch(0.40 0.005 260);
+    --c2-fg-2: oklch(0.55 0.005 260);
+    --c2-fg-3: oklch(0.70 0.005 260);
+    --c2-accent: oklch(0.64 0.12 58);
+    --c2-accent-dim: oklch(0.64 0.12 58 / 0.12);
+    --c2-accent-fg: oklch(0.99 0 0);
+    --c2-ok: oklch(0.58 0.10 150);
+    --c2-warn: oklch(0.68 0.10 80);
+    --c2-err: oklch(0.58 0.17 25);
+    --c2-shadow-panel:
+        0 1px 0 0 oklch(1 0 0 / 0.8) inset,
+        0 20px 40px -18px oklch(0 0 0 / 0.14),
+        0 2px 6px oklch(0 0 0 / 0.05);
+    --c2-shadow-card:
+        0 1px 0 0 oklch(1 0 0 / 0.8) inset,
+        0 4px 14px -8px oklch(0 0 0 / 0.08);
+}
+
+/* CT-2 keyframes (spring-up, pulse-dot, cursor-blink used by CT-2 components) */
+@keyframes c2-spring-up {
+    0% { opacity: 0; transform: translateY(10px) scale(0.98); }
+    70% { opacity: 1; transform: translateY(-1px) scale(1.002); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes c2-slide-right {
+    0% { opacity: 0; transform: translateX(-12px); }
+    100% { opacity: 1; transform: translateX(0); }
+}
+@keyframes c2-pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.82); }
+}
+@keyframes c2-cursor-blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+@keyframes c2-spin {
+    to { transform: rotate(360deg); }
 }

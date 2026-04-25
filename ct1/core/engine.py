@@ -224,7 +224,9 @@ class Engine:
                  max_tokens: int = 100000,
                  thinking_budget: int = -1,
                  vision_supported: bool = False,
-                 context_size: int = 16384):
+                 context_size: int = 16384,
+                 model_name: str = "",
+                 is_external: bool = False):
         self.base_url = base_url
         self.temperature = temperature
         self.top_p = top_p
@@ -235,6 +237,8 @@ class Engine:
         self.thinking_budget = thinking_budget
         self.vision_supported = vision_supported
         self.context_size = context_size
+        self.model_name = model_name
+        self.is_external = is_external
         self.client = httpx.AsyncClient(timeout=600.0)
         self._client_lock = asyncio.Lock()
         self.lessons: list[str] = []
@@ -295,7 +299,7 @@ class Engine:
             chat_kwargs["thinking_budget"] = budget
 
         payload = {
-            "model": "qwen",
+            "model": self.model_name or "local",
             "messages": messages,
             "temperature": temperature if temperature is not None else self.temperature,
             "top_p": top_p if top_p is not None else self.top_p,
@@ -305,8 +309,9 @@ class Engine:
             "frequency_penalty": self.frequency_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": False,
-            "chat_template_kwargs": chat_kwargs,
         }
+        if not self.is_external:
+            payload["chat_template_kwargs"] = chat_kwargs
 
         r = await self.client.post(
             f"{self.base_url}/v1/chat/completions", json=payload
@@ -424,7 +429,7 @@ class Engine:
             chat_kwargs["thinking_budget"] = budget
 
         payload = {
-            "model": "qwen",
+            "model": self.model_name or "local",
             "messages": messages,
             "temperature": temperature if temperature is not None else self.temperature,
             "top_p": top_p if top_p is not None else self.top_p,
@@ -434,8 +439,9 @@ class Engine:
             "frequency_penalty": self.frequency_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": True,
-            "chat_template_kwargs": chat_kwargs,
         }
+        if not self.is_external:
+            payload["chat_template_kwargs"] = chat_kwargs
 
         if tools:
             payload["tools"] = tools

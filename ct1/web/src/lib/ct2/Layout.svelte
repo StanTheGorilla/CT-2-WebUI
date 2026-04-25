@@ -1,0 +1,933 @@
+<script lang="ts">
+    import { goto } from '$app/navigation';
+    import { page } from '$app/stores';
+    import { onMount } from 'svelte';
+    import { chat, newConversation, stopGeneration } from '$lib/stores/chat';
+    import { preferences, toggleTheme } from '$lib/stores/preferences';
+    import {
+        sidebarOpen,
+        conversations,
+        loadConversations,
+        loadConversation,
+        deleteConversation,
+        renameConversation,
+    } from '$lib/stores/conversations';
+    import { loadFromHistory } from '$lib/stores/chat';
+
+    let { children } = $props();
+
+    // ── Model switcher state ──────────────────────────────────────
+    interface ModelFile { name: string; size_gb: number; thinking: boolean; vision: boolean }
+    let activeModel = $state('');
+    let modelThinking = $state(false);
+    let modelSwitching = $state(false);
+    let modelPickerOpen = $state(false);
+    let models = $state<ModelFile[]>([]);
+    let modelsLoaded = $state(false);
+
+    function shortName(name: string) {
+        return name.replace(/\.gguf$/i, '').replace(/[._-][Qq]\d+[_A-Za-z0-9]*$/, '');
+    }
+
+    onMount(async () => {
+        try {
+            const res = await fetch('/api/model');
+            const data = await res.json();
+            activeModel = data.active_model || '';
+            modelThinking = data.enable_thinking ?? false;
+        } catch {}
+        await loadConversations();
+    });
+
+    async function openModelPicker() {
+        modelPickerOpen = !modelPickerOpen;
+        if (modelPickerOpen && !modelsLoaded) {
+            try {
+                const res = await fetch('/api/models');
+                models = (await res.json()).models ?? [];
+                modelsLoaded = true;
+            } catch {}
+        }
+    }
+
+    async function selectModel(name: string) {
+        if (name === activeModel) { modelPickerOpen = false; return; }
+        modelPickerOpen = false;
+        modelSwitching = true;
+        try {
+            const res = await fetch('/api/model/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: name }),
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            activeModel = name;
+            modelThinking = data.enable_thinking ?? false;
+            modelsLoaded = false;
+        } catch {}
+        finally { modelSwitching = false; }
+    }
+
+    function closeModelPicker(e: MouseEvent) {
+        if (!(e.target as Element)?.closest?.('.c2-model-pill')) modelPickerOpen = false;
+    }
+
+    // ── Phase indicator ───────────────────────────────────────────
+    const phases = ['routing', 'planning', 'generating', 'polishing', 'validating'];
+    const phaseLabels = ['Classify', 'Plan', 'Generate', 'Polish', 'Validate'];
+    let isGenerating = $derived(
+        $chat.phase !== 'idle' && $chat.phase !== 'done'
+    );
+    let activePhaseIdx = $derived(phases.indexOf($chat.phase));
+    let currentPhaseLabel = $derived(() => {
+        const labels: Record<string,string> = {
+            routing: 'Classifying', planning: 'Planning', generating: 'Generating',
+            polishing: 'Polishing', refining: 'Refining', validating: 'Validating',
+            fixing: 'Fixing',
+        };
+        return labels[$chat.phase] || $chat.phase;
+    });
+
+    // ── Sidebar ───────────────────────────────────────────────────
+    let sidebarQuery = $state('');
+
+    function groupByDate(convs: { id: string; title: string; updated_at: string }[]) {
+        const now = new Date();
+        const today = now.toDateString();
+        const yesterday = new Date(now.getTime() - 86400000).toDateString();
+        const groups: Record<string, typeof convs> = {};
+        for (const c of convs) {
+            const d = new Date(c.updated_at).toDateString();
+            const label = d === today ? 'Today' : d === yesterday ? 'Yesterday' : 'Earlier';
+            (groups[label] ??= []).push(c);
+        }
+        return ['Today', 'Yesterday', 'Earlier']
+            .filter(g => groups[g]?.length)
+            .map(g => ({ group: g, items: groups[g] }));
+    }
+
+    let filteredConvs = $derived(
+        $conversations.filter(c =>
+            !sidebarQuery || c.title.toLowerCase().includes(sidebarQuery.toLowerCase())
+        )
+    );
+    let groupedConvs = $derived(groupByDate(filteredConvs));
+
+    async function pickConversation(id: string) {
+        sidebarOpen.set(false);
+        const data = await loadConversation(id);
+        if (data) {
+            loadFromHistory(data);
+            goto('/');
+        }
+    }
+
+    function startNew() {
+        newConversation();
+        sidebarOpen.set(false);
+        goto('/');
+    }
+
+    let deletingId = $state<string | null>(null);
+    let renamingId = $state<string | null>(null);
+    let renameValue = $state('');
+
+    async function doDelete(id: string) {
+        deletingId = id;
+        await deleteConversation(id);
+        deletingId = null;
+    }
+
+    function startRename(id: string, current: string) {
+        renamingId = id;
+        renameValue = current;
+    }
+
+    async function commitRename() {
+        if (renamingId && renameValue.trim()) {
+            await renameConversation(renamingId, renameValue.trim());
+        }
+        renamingId = null;
+    }
+</script>
+
+<svelte:window onclick={closeModelPicker} />
+
+<!-- Ambient background layers -->
+<div class="c2-shell" aria-hidden="false">
+    <div class="c2-ambient" aria-hidden="true"></div>
+
+    <!-- Topbar -->
+    <header class="c2-topbar">
+        <!-- Left: burger + logo -->
+        <div class="c2-tb-left">
+            <button
+                class="c2-icon-btn"
+                class:c2-icon-btn-active={$sidebarOpen}
+                onclick={() => sidebarOpen.update(v => !v)}
+                aria-label="Conversations"
+            >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <a href="/" class="c2-logo" onclick={() => goto('/')}>
+                <span class="c2-logo-text">ct·2</span>
+            </a>
+        </div>
+
+        <!-- Center: phase indicator or model switcher -->
+        <div class="c2-tb-center">
+            {#if isGenerating}
+                <div class="c2-phase-pill">
+                    <span class="c2-pulse-dot"></span>
+                    <span class="c2-phase-text">{currentPhaseLabel()}</span>
+                    <div class="c2-phase-dots">
+                        {#each phaseLabels as _l, i}
+                            <span
+                                class="c2-phase-seg"
+                                class:c2-phase-seg-done={i < activePhaseIdx}
+                                class:c2-phase-seg-active={i === activePhaseIdx}
+                            ></span>
+                        {/each}
+                    </div>
+                </div>
+            {:else}
+                <div class="c2-model-pill" style="position:relative;">
+                    <button
+                        class="c2-model-btn"
+                        class:c2-model-btn-open={modelPickerOpen}
+                        onclick={openModelPicker}
+                        disabled={modelSwitching}
+                    >
+                        {#if modelSwitching}
+                            <span class="c2-spinner"></span>
+                            <span class="c2-model-name">Loading…</span>
+                        {:else}
+                            <span
+                                class="c2-status-dot"
+                                class:c2-status-thinking={modelThinking}
+                            ></span>
+                            {#if activeModel}
+                                {@const parts = shortName(activeModel).split(' ')}
+                                <span class="c2-model-name">{parts[0]}</span>
+                                {#if parts[1]}
+                                    <span class="c2-model-size">{parts[1]}</span>
+                                {/if}
+                                {#if modelThinking}
+                                    <span class="c2-think-badge">Thinking</span>
+                                {/if}
+                            {:else}
+                                <span class="c2-model-name c2-muted">No model</span>
+                            {/if}
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" class="c2-chevron" class:c2-chevron-open={modelPickerOpen}>
+                                <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        {/if}
+                    </button>
+
+                    {#if modelPickerOpen}
+                        <div class="c2-model-dropdown">
+                            <div class="c2-dropdown-header">Available models</div>
+                            {#if models.length === 0}
+                                <div class="c2-dropdown-empty">No models found</div>
+                            {:else}
+                                {#each models as m}
+                                    <button
+                                        class="c2-dropdown-item"
+                                        class:c2-dropdown-item-active={m.name === activeModel}
+                                        onclick={() => selectModel(m.name)}
+                                    >
+                                        <span class="c2-status-dot" class:c2-status-ok={m.name === activeModel}></span>
+                                        <span class="c2-di-name">{shortName(m.name)}</span>
+                                        {#if m.vision}
+                                            <span class="c2-di-badge">VISION</span>
+                                        {/if}
+                                        <span class="c2-di-size">{m.size_gb} GB</span>
+                                    </button>
+                                {/each}
+                            {/if}
+                        </div>
+                    {/if}
+                </div>
+            {/if}
+        </div>
+
+        <!-- Right: theme toggle, journal, settings -->
+        <div class="c2-tb-right">
+            <button class="c2-icon-btn" onclick={toggleTheme} aria-label="Toggle theme">
+                {#if $preferences.theme === 'dark'}
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                        <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                {:else}
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.6"/>
+                        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M17.36 17.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M17.36 6.64l1.42-1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                    </svg>
+                {/if}
+            </button>
+            <a
+                href="/journal"
+                class="c2-nav-btn"
+                class:c2-nav-btn-active={$page.url.pathname === '/journal'}
+            >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <path d="M4 19.5A2.5 2.5 0 016.5 17H20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Journal
+            </a>
+            <a
+                href="/settings"
+                class="c2-nav-btn"
+                class:c2-nav-btn-active={$page.url.pathname === '/settings'}
+            >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" stroke="currentColor" stroke-width="1.5"/>
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+                Settings
+            </a>
+        </div>
+    </header>
+
+    <!-- Sidebar overlay -->
+    {#if $sidebarOpen}
+        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+        <div class="c2-overlay" onclick={() => sidebarOpen.set(false)}></div>
+    {/if}
+    <aside class="c2-sidebar" class:c2-sidebar-open={$sidebarOpen}>
+        <div class="c2-sb-header">
+            <span class="c2-sb-title">History</span>
+            <button class="c2-icon-btn" onclick={() => sidebarOpen.set(false)} aria-label="Close">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
+
+        <button class="c2-new-btn" onclick={startNew}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            New chat
+            <span class="c2-new-kbd">⌘N</span>
+        </button>
+
+        <div class="c2-sb-search">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+            <input
+                bind:value={sidebarQuery}
+                placeholder="Search"
+                class="c2-sb-input"
+            />
+            {#if sidebarQuery}
+                <button onclick={() => sidebarQuery = ''} class="c2-sb-clear">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            {/if}
+        </div>
+
+        <div class="c2-sb-list">
+            <div class="c2-sb-section-label">Conversations</div>
+            {#each groupedConvs as group}
+                <div class="c2-sb-group-label">{group.group}</div>
+                {#each group.items as conv}
+                    <div
+                        class="c2-conv-item"
+                        class:c2-conv-active={$chat.conversationId === conv.id}
+                        role="button"
+                        tabindex="0"
+                        onclick={() => pickConversation(conv.id)}
+                        onkeydown={(e) => e.key === 'Enter' && pickConversation(conv.id)}
+                    >
+                        {#if renamingId === conv.id}
+                            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                            <input
+                                class="c2-rename-input"
+                                bind:value={renameValue}
+                                onblur={commitRename}
+                                onkeydown={(e) => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') renamingId = null; }}
+                                onclick={(e) => e.stopPropagation()}
+                            />
+                        {:else}
+                            <span class="c2-conv-title">{conv.title}</span>
+                            <div class="c2-conv-actions">
+                                <button
+                                    class="c2-conv-action"
+                                    onclick={(e) => { e.stopPropagation(); startRename(conv.id, conv.title); }}
+                                    aria-label="Rename"
+                                >
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                    </svg>
+                                </button>
+                                <button
+                                    class="c2-conv-action c2-conv-danger"
+                                    onclick={(e) => { e.stopPropagation(); doDelete(conv.id); }}
+                                    disabled={deletingId === conv.id}
+                                    aria-label="Delete"
+                                >
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                                        <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        {/if}
+                    </div>
+                {/each}
+            {/each}
+            {#if filteredConvs.length === 0}
+                <div class="c2-sb-empty">No conversations yet</div>
+            {/if}
+        </div>
+
+        <div class="c2-sb-footer">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Local · Private · GPU
+        </div>
+    </aside>
+
+    <!-- Page content -->
+    <main class="c2-main">
+        {@render children()}
+    </main>
+</div>
+
+<style>
+    /* ── Shell ─────────────────────────────────────────────────── */
+    .c2-shell {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--c2-bg-0);
+        color: var(--c2-fg-0);
+        font-family: 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
+        font-size: 14px;
+        overflow: hidden;
+    }
+
+    /* ── Ambient background ────────────────────────────────────── */
+    .c2-ambient {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+    }
+    .c2-ambient::before {
+        content: "";
+        position: fixed; inset: -10%;
+        background: radial-gradient(60% 40% at 20% 10%, oklch(0.40 0.04 70 / 0.10), transparent 70%);
+        filter: blur(30px);
+        pointer-events: none;
+    }
+    .c2-ambient::after {
+        content: "";
+        position: fixed; inset: 0;
+        background-image: radial-gradient(oklch(1 0 0 / 0.025) 1px, transparent 1px);
+        background-size: 22px 22px;
+        pointer-events: none;
+        mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
+        -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
+    }
+    /* Light mode ambient */
+    :global([data-theme="light"]) .c2-ambient::before {
+        background:
+            radial-gradient(45% 30% at 18% 12%, oklch(0.85 0.10 68 / 0.45), transparent 60%),
+            radial-gradient(50% 35% at 88% 22%, oklch(0.85 0.10 200 / 0.4), transparent 60%);
+    }
+    :global([data-theme="light"]) .c2-ambient::after {
+        background-image: radial-gradient(oklch(0 0 0 / 0.035) 1px, transparent 1px);
+        background-size: 22px 22px;
+    }
+
+    /* ── Topbar ────────────────────────────────────────────────── */
+    .c2-topbar {
+        position: relative;
+        z-index: 50;
+        height: 56px;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        padding: 0 14px;
+        background: var(--c2-bg-0);
+        border-bottom: 1px solid var(--c2-border-1);
+        flex-shrink: 0;
+    }
+    .c2-tb-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .c2-tb-center {
+        display: flex;
+        justify-content: center;
+    }
+    .c2-tb-right {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        justify-content: flex-end;
+    }
+
+    /* ── Icon button ───────────────────────────────────────────── */
+    .c2-icon-btn {
+        width: 32px;
+        height: 32px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--c2-fg-1);
+        cursor: pointer;
+        transition: background 120ms, color 120ms, border-color 120ms;
+        flex-shrink: 0;
+    }
+    .c2-icon-btn:hover {
+        background: var(--c2-bg-2);
+        color: var(--c2-fg-0);
+    }
+    .c2-icon-btn-active {
+        background: var(--c2-bg-3);
+        border-color: var(--c2-border-2);
+        color: var(--c2-fg-0);
+    }
+
+    /* ── Logo ──────────────────────────────────────────────────── */
+    .c2-logo {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        text-decoration: none;
+        color: inherit;
+    }
+    .c2-logo:hover { opacity: 1; }
+    .c2-logo-text {
+        font-size: 15px;
+        font-weight: 500;
+        color: var(--c2-fg-0);
+        letter-spacing: -0.1px;
+        line-height: 1;
+    }
+
+    /* ── Nav buttons (Journal, Settings) ──────────────────────── */
+    .c2-nav-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 30px;
+        padding: 0 10px;
+        border-radius: 8px;
+        font-size: 13px;
+        color: var(--c2-fg-1);
+        text-decoration: none;
+        transition: background 120ms;
+        white-space: nowrap;
+    }
+    .c2-nav-btn:hover { background: var(--c2-bg-2); color: var(--c2-fg-0); }
+    .c2-nav-btn-active { background: var(--c2-bg-2); color: var(--c2-fg-0); }
+
+    /* ── Model switcher ────────────────────────────────────────── */
+    .c2-model-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        height: 32px;
+        padding: 0 12px;
+        border-radius: 999px;
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-2);
+        color: var(--c2-fg-0);
+        font-size: 13px;
+        cursor: pointer;
+        transition: background 120ms, border-color 120ms;
+        white-space: nowrap;
+    }
+    .c2-model-btn:hover:not(:disabled) { background: var(--c2-bg-2); }
+    .c2-model-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .c2-model-btn-open { border-color: var(--c2-border-3); }
+
+    .c2-status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--c2-fg-3);
+        flex-shrink: 0;
+    }
+    .c2-status-ok { background: var(--c2-ok); }
+    .c2-status-thinking { background: var(--c2-accent); animation: c2-pulse-dot 1.2s ease-in-out infinite; }
+
+    .c2-model-name { font-size: 13px; font-weight: 500; line-height: 1; color: var(--c2-fg-0); }
+    .c2-model-size { font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--c2-fg-2); }
+    .c2-muted { color: var(--c2-fg-3); }
+    .c2-think-badge {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10px;
+        color: var(--c2-fg-1);
+        letter-spacing: 0.5px;
+        font-weight: 500;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: var(--c2-bg-2);
+        border: 1px solid var(--c2-border-1);
+        margin-left: 2px;
+    }
+    .c2-chevron {
+        color: var(--c2-fg-3);
+        margin-left: 2px;
+        transition: transform 180ms;
+    }
+    .c2-chevron-open { transform: rotate(180deg); }
+    .c2-spinner {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        border: 1.5px solid var(--c2-border-2);
+        border-top-color: var(--c2-accent);
+        animation: c2-spin 600ms linear infinite;
+        flex-shrink: 0;
+    }
+
+    /* Model dropdown */
+    .c2-model-dropdown {
+        position: absolute;
+        top: calc(100% + 8px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: 300px;
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 12px;
+        padding: 6px;
+        box-shadow: var(--c2-shadow-panel);
+        z-index: 70;
+        animation: c2-spring-up 200ms var(--c2-spring) both;
+    }
+    .c2-dropdown-header {
+        font-family: 'Geist Mono', monospace;
+        padding: 8px 10px;
+        font-size: 10.5px;
+        color: var(--c2-fg-3);
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .c2-dropdown-empty {
+        padding: 12px 10px;
+        font-size: 12.5px;
+        color: var(--c2-fg-3);
+        text-align: center;
+    }
+    .c2-dropdown-item {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 10px;
+        border-radius: 8px;
+        background: transparent;
+        border: none;
+        color: var(--c2-fg-0);
+        text-align: left;
+        cursor: pointer;
+        transition: background 120ms;
+    }
+    .c2-dropdown-item:hover { background: var(--c2-bg-2); }
+    .c2-dropdown-item-active { background: var(--c2-bg-2); }
+    .c2-di-name { flex: 1; font-size: 13px; }
+    .c2-di-badge {
+        font-family: 'Geist Mono', monospace;
+        font-size: 9.5px;
+        padding: 2px 5px;
+        border-radius: 4px;
+        background: var(--c2-bg-3);
+        color: var(--c2-fg-2);
+        border: 1px solid var(--c2-border-1);
+        letter-spacing: 0.3px;
+    }
+    .c2-di-size {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        color: var(--c2-fg-3);
+    }
+
+    /* ── Phase indicator ───────────────────────────────────────── */
+    .c2-phase-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        height: 32px;
+        padding: 0 14px;
+        border-radius: 999px;
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-2);
+    }
+    .c2-pulse-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--c2-accent);
+        animation: c2-pulse-dot 1.2s ease-in-out infinite;
+        flex-shrink: 0;
+    }
+    .c2-phase-text {
+        font-size: 13px;
+        color: var(--c2-fg-0);
+        font-weight: 500;
+    }
+    .c2-phase-dots {
+        display: inline-flex;
+        gap: 3px;
+        margin-left: 2px;
+    }
+    .c2-phase-seg {
+        width: 5px;
+        height: 3px;
+        border-radius: 999px;
+        background: var(--c2-bg-3);
+        transition: all 320ms var(--c2-spring);
+    }
+    .c2-phase-seg-done {
+        background: var(--c2-fg-2);
+    }
+    .c2-phase-seg-active {
+        width: 14px;
+        background: var(--c2-accent);
+    }
+
+    /* ── Sidebar overlay ───────────────────────────────────────── */
+    .c2-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 90;
+        background: oklch(0 0 0 / 0.38);
+        animation: c2-fade-in 220ms ease both;
+    }
+    @keyframes c2-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+    /* ── Sidebar ───────────────────────────────────────────────── */
+    .c2-sidebar {
+        position: fixed;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 312px;
+        z-index: 100;
+        background: var(--c2-bg-1);
+        border-right: 1px solid var(--c2-border-2);
+        box-shadow: var(--c2-shadow-panel);
+        display: flex;
+        flex-direction: column;
+        transform: translateX(-106%);
+        transition: transform 320ms var(--c2-spring);
+    }
+    .c2-sidebar-open {
+        transform: translateX(0);
+    }
+
+    .c2-sb-header {
+        padding: 14px 14px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 44px;
+    }
+    .c2-sb-title {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--c2-fg-0);
+    }
+
+    .c2-new-btn {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 10px 14px 8px;
+        height: 36px;
+        padding: 0 12px;
+        border-radius: 9px;
+        background: var(--c2-bg-2);
+        border: 1px solid var(--c2-border-2);
+        color: var(--c2-fg-0);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 120ms;
+        font-family: inherit;
+    }
+    .c2-new-btn:hover { background: var(--c2-bg-3); }
+    .c2-new-kbd {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10.5px;
+        color: var(--c2-fg-3);
+        border: 1px solid var(--c2-border-1);
+        padding: 2px 5px;
+        border-radius: 4px;
+        margin-left: auto;
+    }
+
+    .c2-sb-search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 14px 8px;
+        padding: 0 10px;
+        height: 30px;
+        border-radius: 8px;
+        background: var(--c2-bg-0);
+        border: 1px solid var(--c2-border-1);
+        color: var(--c2-fg-3);
+    }
+    .c2-sb-input {
+        flex: 1;
+        font-size: 12.5px;
+        color: var(--c2-fg-0);
+        background: transparent;
+        border: none;
+        outline: none;
+        font-family: inherit;
+    }
+    .c2-sb-input::placeholder { color: var(--c2-fg-3); }
+    .c2-sb-clear {
+        color: var(--c2-fg-3);
+        background: none;
+        border: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+    }
+
+    .c2-sb-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 4px 8px 14px;
+        scrollbar-width: thin;
+        scrollbar-color: var(--c2-border-2) transparent;
+    }
+    .c2-sb-section-label {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10px;
+        color: var(--c2-fg-3);
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        padding: 2px 8px 6px;
+    }
+    .c2-sb-group-label {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10px;
+        color: var(--c2-fg-3);
+        letter-spacing: 0.4px;
+        padding: 8px 8px 4px;
+    }
+    .c2-sb-empty {
+        font-size: 12.5px;
+        color: var(--c2-fg-3);
+        padding: 16px 10px;
+        text-align: center;
+    }
+
+    .c2-conv-item {
+        position: relative;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        border-radius: 7px;
+        cursor: pointer;
+        margin-bottom: 1px;
+        height: 32px;
+        transition: background 120ms;
+        overflow: hidden;
+    }
+    .c2-conv-item:hover { background: var(--c2-bg-2); }
+    .c2-conv-active { background: var(--c2-bg-3); }
+    .c2-conv-active::before {
+        content: "";
+        position: absolute;
+        left: -1px;
+        top: 7px;
+        bottom: 7px;
+        width: 2px;
+        border-radius: 999px;
+        background: var(--c2-accent);
+    }
+    .c2-conv-title {
+        font-size: 12.5px;
+        color: var(--c2-fg-1);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+    }
+    .c2-conv-active .c2-conv-title { color: var(--c2-fg-0); font-weight: 500; }
+    .c2-conv-actions {
+        display: flex;
+        gap: 0;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 120ms;
+    }
+    .c2-conv-item:hover .c2-conv-actions {
+        opacity: 1;
+        pointer-events: auto;
+    }
+    .c2-conv-action {
+        width: 22px;
+        height: 22px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 5px;
+        border: none;
+        background: none;
+        color: var(--c2-fg-2);
+        cursor: pointer;
+        transition: background 120ms, color 120ms;
+    }
+    .c2-conv-action:hover { background: var(--c2-bg-3); color: var(--c2-fg-0); }
+    .c2-conv-danger:hover { color: var(--c2-err); }
+    .c2-rename-input {
+        flex: 1;
+        font-size: 12.5px;
+        color: var(--c2-fg-0);
+        background: var(--c2-bg-2);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 5px;
+        padding: 2px 6px;
+        outline: none;
+        font-family: inherit;
+        width: 100%;
+    }
+
+    .c2-sb-footer {
+        padding: 10px 14px;
+        border-top: 1px solid var(--c2-border-1);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        color: var(--c2-fg-3);
+    }
+
+    /* ── Main content ──────────────────────────────────────────── */
+    .c2-main {
+        flex: 1;
+        overflow: hidden;
+        position: relative;
+        z-index: 1;
+    }
+</style>

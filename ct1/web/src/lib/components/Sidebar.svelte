@@ -334,7 +334,7 @@
         -webkit-backdrop-filter: var(--bubble-blur-heavy);
         border: var(--bubble-border);
         border-radius: 24px;
-        box-shadow: var(--shadow-lg);
+        box-shadow: var(--bubble-glow-strong), var(--shadow-lg);
         overflow: hidden;
     }
 
@@ -355,9 +355,9 @@
         min-height: 48px;
         padding: 0 18px;
         margin-bottom: 16px;
-        border: 1px solid var(--border);
+        border: 1px solid var(--border-strong);
         border-radius: 16px;
-        background: var(--surface);
+        background: var(--surface-hover);
         color: var(--text);
         font-family: var(--font-body);
         font-size: 14px;
@@ -365,20 +365,22 @@
         cursor: pointer;
         transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
         letter-spacing: -0.015em;
-        box-shadow: none;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8);
     }
     .new-chat:hover {
-        background: var(--surface-hover);
+        background: var(--surface-solid);
         border-color: var(--border-strong);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.09), inset 0 1px 0 rgba(255,255,255,0.9);
+        transform: translateY(-1px);
     }
     .new-chat:active {
         transform: scale(0.98);
     }
     .new-chat svg {
-        width: 30px;
-        height: 30px;
+        width: 18px;
+        height: 18px;
         padding: 0;
-        color: var(--text-muted);
+        color: var(--text-secondary);
         flex-shrink: 0;
     }
 
@@ -470,7 +472,7 @@
     }
     .row.active {
         background: var(--surface-hover);
-        box-shadow: inset 0 0 0 1px var(--border);
+        box-shadow: inset 0 0 0 1px var(--border-strong), 0 1px 4px rgba(0,0,0,0.04);
     }
     .row:focus-visible {
         outline: none;
@@ -585,10 +587,11 @@
     .time-label {
         font-size: 10px;
         font-weight: 700;
-        color: var(--text-muted);
+        color: var(--text-secondary);
         padding: 8px 14px 6px;
         letter-spacing: 0.12em;
         text-transform: uppercase;
+        opacity: 0.7;
     }
 
     /* ─── Conversation rows ─── */

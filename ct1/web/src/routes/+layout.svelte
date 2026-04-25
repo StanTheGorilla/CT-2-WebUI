@@ -7,6 +7,7 @@
     import Sidebar from '$lib/components/Sidebar.svelte';
     import ShortcutOverlay from '$lib/components/ShortcutOverlay.svelte';
     import ModelSwitcher from '$lib/components/ModelSwitcher.svelte';
+    import Ct2Layout from '$lib/ct2/Layout.svelte';
     import { sidebarOpen } from '$lib/stores/conversations';
     import { preferences, toggleTheme } from '$lib/stores/preferences';
 
@@ -22,6 +23,7 @@
     let { children } = $props();
 
     let shortcutOverlayOpen = $state(false);
+    let isCt2 = $derived($preferences.uiStyle === 'ct2');
 
     function handleKeydown(e: KeyboardEvent) {
         if (e.ctrlKey && e.key === 'n') {
@@ -45,7 +47,6 @@
         idle: '',
         routing: 'Classifying',
         planning: 'Planning',
-
         generating: 'Generating',
         polishing: 'Polishing',
         refining: 'Refining',
@@ -64,8 +65,6 @@
 
         const R1 = 1, R2 = 2, K2 = 5;
         const charW = 8.4, charH = 14;
-        // Cap the grid smaller so the donut occupies roughly the centre
-        // third of the screen rather than flooding the whole background.
         const screenW = Math.min(120, Math.floor(window.innerWidth / charW));
         const screenH = Math.min(60, Math.floor(window.innerHeight / charH));
         const K1 = screenW * K2 * 3 / (8 * (R1 + R2));
@@ -121,85 +120,90 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="app">
-    <div class="donut-bg" aria-hidden="true">
-        <pre class="donut" bind:this={pre}></pre>
-    </div>
-
-    <header class="topbar">
-        <div class="topbar-left">
-            <button class="tb-btn" class:active={$sidebarOpen} onclick={() => sidebarOpen.update(v => !v)} aria-label="Toggle sidebar" title="History (Ctrl+Shift+S)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                    <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                </svg>
-            </button>
-
-            <a href="/" class="logo">
-                <span class="logo-ct">CT</span>
-                <span class="logo-divider"></span>
-                <span class="logo-num">2</span>
-            </a>
-        </div>
-
-        <div class="topbar-center">
-            {#if isActive && phaseText}
-                <div class="phase-pill">
-                    <div class="phase-dot"></div>
-                    <span class="phase-label">{phaseText}</span>
-                </div>
-            {:else}
-                <ModelSwitcher />
-            {/if}
-        </div>
-
-        <nav class="topbar-right">
-            <button class="tb-btn" onclick={toggleTheme} title="Toggle theme">
-                {#if $preferences.theme === 'dark'}
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                        <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                {:else}
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                        <circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.6"/>
-                        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M17.36 17.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M17.36 6.64l1.42-1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-                    </svg>
-                {/if}
-            </button>
-
-            <div class="tb-sep"></div>
-
-            <a href="/journal" class="tb-text-btn" class:active={$page.url.pathname === '/journal'}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                    <path d="M4 19.5A2.5 2.5 0 016.5 17H20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-                <span>Journal</span>
-            </a>
-
-            <a href="/settings" class="tb-text-btn" class:active={$page.url.pathname === '/settings'}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                    <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" stroke="currentColor" stroke-width="1.5"/>
-                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
-                </svg>
-                <span>Settings</span>
-            </a>
-        </nav>
-    </header>
-
-    <Sidebar />
-
-    <main>
+{#if isCt2}
+    <Ct2Layout>
         {@render children()}
-    </main>
+    </Ct2Layout>
+{:else}
+    <div class="app">
+        <div class="donut-bg" aria-hidden="true">
+            <pre class="donut" bind:this={pre}></pre>
+        </div>
 
-    <ShortcutOverlay bind:open={shortcutOverlayOpen} />
-</div>
+        <header class="topbar">
+            <div class="topbar-left">
+                <button class="tb-btn" class:active={$sidebarOpen} onclick={() => sidebarOpen.update(v => !v)} aria-label="Toggle sidebar" title="History (Ctrl+Shift+S)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                        <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    </svg>
+                </button>
+
+                <a href="/" class="logo">
+                    <span class="logo-ct">CT</span>
+                    <span class="logo-divider"></span>
+                    <span class="logo-num">2</span>
+                </a>
+            </div>
+
+            <div class="topbar-center">
+                {#if isActive && phaseText}
+                    <div class="phase-pill">
+                        <div class="phase-dot"></div>
+                        <span class="phase-label">{phaseText}</span>
+                    </div>
+                {:else}
+                    <ModelSwitcher />
+                {/if}
+            </div>
+
+            <nav class="topbar-right">
+                <button class="tb-btn" onclick={toggleTheme} title="Toggle theme">
+                    {#if $preferences.theme === 'dark'}
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                            <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    {:else}
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                            <circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.6"/>
+                            <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M17.36 17.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M17.36 6.64l1.42-1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                    {/if}
+                </button>
+
+                <div class="tb-sep"></div>
+
+                <a href="/journal" class="tb-text-btn" class:active={$page.url.pathname === '/journal'}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                        <path d="M4 19.5A2.5 2.5 0 016.5 17H20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>Journal</span>
+                </a>
+
+                <a href="/settings" class="tb-text-btn" class:active={$page.url.pathname === '/settings'}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                        <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" stroke="currentColor" stroke-width="1.5"/>
+                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
+                    </svg>
+                    <span>Settings</span>
+                </a>
+            </nav>
+        </header>
+
+        <Sidebar />
+
+        <main>
+            {@render children()}
+        </main>
+
+        <ShortcutOverlay bind:open={shortcutOverlayOpen} />
+    </div>
+{/if}
 
 <style>
     .app {
         display: flex;
         flex-direction: column;
-        /* Fill the zoomed body (100%) rather than the unzoomed viewport (100vh). */
         width: 100%;
         height: 100%;
         overflow: hidden;
@@ -252,7 +256,6 @@
         position: relative;
     }
 
-    /* Left / Center / Right layout */
     .topbar-left,
     .topbar-right {
         display: flex;

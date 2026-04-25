@@ -6,6 +6,18 @@ import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse as _BaseStreamingResponse
+
+
+class StreamingResponse(_BaseStreamingResponse):
+    """Suppresses CancelledError from listen_for_disconnect during server shutdown."""
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        except asyncio.CancelledError:
+            if _shutting_down:
+                return
+            raise
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -24,6 +36,7 @@ from ct1.memory.conversation_db import ConversationDB
 from ct1.memory.component_cache import ComponentCache
 from ct1.server.workspace import WorkspaceManager, is_command_safe
 from ct1.server.cache_policy import should_clear_kv_cache
+from ct1.server.backend_detector import detect as _detect_backend, probe_ollama, probe_lm_studio, stop_managed_proc as _stop_ollama
 
 _TITLE_STRIP = _re.compile(
     r'^(?:(?:can\s+you|please|could\s+you|i(?:\'d)?\s+(?:like|want|need)(?:\s+you)?\s+to|'
@@ -45,22 +58,31 @@ def _heuristic_title(msg: str) -> str:
     return result or fallback or 'New chat'
 
 async def _refine_title(conv_id: str, first_msg: str, websocket: WebSocket) -> None:
-    """Call llama-server directly for a short AI-generated title, then update DB + notify frontend."""
+    """Call inference backend for a short AI-generated title, then update DB + notify frontend."""
     try:
-        port = _raw_cfg.get("llama_server", {}).get("port", 8080)
+        if _external_backend:
+            base_url = _external_backend["base_url"]
+            model_name = _external_backend.get("active_model", "")
+        else:
+            port = _raw_cfg.get("llama_server", {}).get("port", 8080)
+            base_url = f"http://localhost:{port}"
+            model_name = ""
         prompt = (
             f"Respond with only a 4-6 word title for this message. "
             f"No punctuation, no quotes, no explanation.\n\nMessage: {first_msg[:200]}"
         )
+        payload: dict = {
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 20,
+            "temperature": 0.3,
+            "stream": False,
+        }
+        if model_name:
+            payload["model"] = model_name
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.post(
-                f"http://localhost:{port}/v1/chat/completions",
-                json={
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 20,
-                    "temperature": 0.3,
-                    "stream": False,
-                },
+                f"{base_url}/v1/chat/completions",
+                json=payload,
             )
         if resp.status_code == 200:
             raw = resp.json()["choices"][0]["message"]["content"].strip().strip('"\'')
@@ -97,6 +119,9 @@ _shutting_down: bool = False     # True during application shutdown
 _active_think_tasks: set = set() # Active /ws/think asyncio tasks
 _health_task: asyncio.Task | None = None  # Background health monitor task
 _is_generating: int = 0          # Active generation count (blocks server update)
+_external_backend: dict | None = None  # Populated at startup if Ollama/LM Studio detected
+_sse_clients: set[asyncio.Queue] = set()  # One queue per connected SSE client
+_watcher_task: asyncio.Task | None = None  # Background external-backend state poller
 _WS_QUEUE_MAX = 500  # Max buffered events per WebSocket session (~1-2 full responses)
 
 _TOOL_SCHEMAS = [
@@ -326,31 +351,76 @@ def _ensure_frontend_built() -> None:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    global _orch, _server_procs, _db, _cache, _workspace, _shutting_down
-    try:
-        _server_procs = await start_server(str(_CONFIG_PATH))
-    except Exception as e:
-        print(f"[api] WARNING: Model server failed to start: {e}")
-        print("[api]    Open Settings in the web UI to assign a model file to your preset.")
+    global _orch, _server_procs, _db, _cache, _workspace, _shutting_down, _external_backend
+
+    # Connect to the explicitly chosen backend (Ollama / LM Studio / local)
+    preference = _raw_cfg.get("inference_backend", "local")
+    _external_backend = await _detect_backend(preference)
+
+    if _external_backend:
+        btype = _external_backend["type"]
+        nmodels = len(_external_backend.get("models", []))
+        print(f"[api] External backend detected: {btype} ({nmodels} model(s) available)")
+        # Pick the active model: use saved preference or first available
+        saved_key = f"{btype}_model"
+        saved = _raw_cfg.get(saved_key, "")
+        models = _external_backend.get("models", [])
+        if saved and any(m["name"] == saved for m in models):
+            active = saved
+        elif models:
+            active = models[0]["name"]
+        else:
+            active = ""
+        _external_backend["active_model"] = active
+        if active:
+            print(f"[api] Using model: {active}")
+    elif preference == "local":
+        try:
+            _server_procs = await start_server(str(_CONFIG_PATH))
+        except Exception as e:
+            print(f"[api] WARNING: Model server failed to start: {e}")
+            print("[api]    Open Settings in the web UI to assign a model file to your preset.")
+    else:
+        # External backend configured but not reachable — do not start local server.
+        print(f"[api] WARNING: {preference} server not reachable — will retry on demand.")
+
     _cache = ComponentCache()
     await _cache.init()
     try:
-        _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
+        if _external_backend:
+            _orch = Orchestrator(
+                str(_CONFIG_PATH), component_cache=_cache,
+                external_base_url=_external_backend["base_url"],
+                external_model_name=_external_backend.get("active_model", ""),
+            )
+        else:
+            _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
     except Exception as e:
         print(f"[api] WARNING: Orchestrator init failed: {e}")
     _db = ConversationDB()
     await _db.init()
     _workspace = WorkspaceManager()
-    global _health_task
-    _health_task = asyncio.create_task(_health_monitor(port=_cfg.get("llama_server", {}).get("port", 8080)))
+    global _health_task, _watcher_task
+    if not _external_backend and preference == "local":
+        _health_task = asyncio.create_task(_health_monitor(port=_cfg.get("llama_server", {}).get("port", 8080)))
+    if preference in ("lm_studio", "ollama"):
+        _watcher_task = asyncio.create_task(_external_backend_watcher())
     yield
     _shutting_down = True
-    if _health_task:
-        _health_task.cancel()
+    # Close all SSE streams immediately — otherwise uvicorn waits for their 25s timeout
+    for q in list(_sse_clients):
         try:
-            await _health_task
-        except asyncio.CancelledError:
+            q.put_nowait(None)  # None = shutdown sentinel
+        except asyncio.QueueFull:
             pass
+    _sse_clients.clear()
+    for task in (_health_task, _watcher_task):
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     # Drain active generations (max 30s)
     snapshot = set(_active_think_tasks)
     if snapshot:
@@ -371,8 +441,9 @@ async def lifespan(application: FastAPI):
         await _cache.close()
     if _orch:
         await _orch.close()
-    if _server_procs:
+    if _server_procs and not _external_backend:
         stop_server(_server_procs)
+    _stop_ollama()  # No-op unless CT-2 started Ollama itself
 
 
 app = FastAPI(title="CT-2 API", lifespan=lifespan)
@@ -391,6 +462,198 @@ async def get_status():
     model_url = f"http://localhost:{port}"
     model = await check_server_health(model_url)
     return {"model": model}
+
+
+@app.get("/api/events")
+async def sse_events():
+    """Server-Sent Events stream — pushes model_state updates in real time."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=20)
+    _sse_clients.add(q)
+
+    async def generator():
+        try:
+            # Send current state immediately on connect
+            if _external_backend:
+                _init_active = _external_backend.get("active_model", "")
+                _init_models = _external_backend.get("models", [])
+            else:
+                _init_active = _raw_cfg.get("active_model", "") if _raw_cfg else ""
+                _init_models = []
+            initial = json.dumps({
+                "type": "model_state",
+                "active_model": _init_active,
+                "models": _init_models,
+            })
+            yield f"data: {initial}\n\n"
+            while not _shutting_down:
+                try:
+                    data = await asyncio.wait_for(q.get(), timeout=25.0)
+                    if data is None:  # shutdown sentinel
+                        return
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    if _shutting_down:
+                        return
+                    yield ": keepalive\n\n"
+        finally:
+            _sse_clients.discard(q)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/backend/status")
+async def get_backend_status():
+    """Return which inference backend is currently active."""
+    if _external_backend:
+        return {
+            "type": _external_backend["type"],
+            "base_url": _external_backend["base_url"],
+            "active_model": _external_backend.get("active_model", ""),
+            "model_count": len(_external_backend.get("models", [])),
+        }
+    return {"type": "local"}
+
+
+class BackendPreference(BaseModel):
+    preference: str  # "auto" | "local" | "ollama" | "lm_studio"
+
+
+def _pick_active_model(backend: dict) -> str:
+    """Pick the best active model for a newly detected external backend."""
+    saved_key = f"{backend['type']}_model"
+    saved = _raw_cfg.get(saved_key, "")
+    models = backend.get("models", [])
+    if saved and any(m["name"] == saved for m in models):
+        return saved
+    return models[0]["name"] if models else ""
+
+
+_reconnect_cooldown: float = 0.0
+
+async def _try_reconnect_external() -> bool:
+    """If preference is external but backend isn't connected, try to reconnect."""
+    global _external_backend, _reconnect_cooldown
+    if _external_backend:
+        return True
+    pref = _raw_cfg.get("inference_backend", "local")
+    if pref not in ("ollama", "lm_studio"):
+        return False
+    import time
+    now = time.monotonic()
+    if now - _reconnect_cooldown < 30:
+        return False
+    _reconnect_cooldown = now
+    probed = await _detect_backend(pref)
+    if not probed:
+        return False
+    active = _pick_active_model(probed)
+    probed["active_model"] = active
+    _external_backend = probed
+    if _orch and _orch.engine:
+        _orch.engine.base_url = probed["base_url"]
+        _orch.engine.model_name = active
+        _orch.engine.is_external = True
+    print(f"[api] Auto-reconnected to {probed['type']} ({active})")
+    return True
+
+
+@app.post("/api/backend/preference")
+async def set_backend_preference(body: BackendPreference):
+    """Save the inference backend preference and switch live immediately."""
+    global _raw_cfg, _external_backend, _orch, _server_procs, _health_task
+
+    allowed = {"local", "ollama", "lm_studio"}
+    if body.preference not in allowed:
+        from fastapi import HTTPException
+        raise HTTPException(400, f"preference must be one of: {', '.join(sorted(allowed))}")
+
+    # Save to YAML
+    _raw_cfg["inference_backend"] = body.preference
+    _CONFIG_PATH.write_text(
+        yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    # Probe for the requested backend
+    new_external = await _detect_backend(body.preference)
+
+    if new_external and not _external_backend:
+        # local → external: stop llama-server + health monitor, switch orchestrator
+        # (if switching to Ollama, the process handle is already tracked in backend_detector)
+        if _health_task:
+            _health_task.cancel()
+            try:
+                await _health_task
+            except asyncio.CancelledError:
+                pass
+            _health_task = None
+        if _server_procs:
+            stop_server(_server_procs)
+            _server_procs = []
+        active = _pick_active_model(new_external)
+        new_external["active_model"] = active
+        _external_backend = new_external
+        if _orch:
+            await _orch.close()
+        try:
+            _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache,
+                                 external_base_url=new_external["base_url"],
+                                 external_model_name=active)
+        except Exception as e:
+            print(f"[api] Orchestrator init failed after switch to external: {e}")
+        print(f"[api] Switched live to {new_external['type']} ({active})")
+        return {"ok": True, "switched": True, "backend": new_external["type"]}
+
+    elif not new_external and _external_backend:
+        # external → local: stop Ollama if we started it, start llama-server
+        _stop_ollama()
+        _external_backend = None
+        if _orch:
+            await _orch.close()
+            _orch = None
+        try:
+            _server_procs = await start_server(str(_CONFIG_PATH))
+        except Exception as e:
+            print(f"[api] Failed to start llama-server: {e}")
+        try:
+            _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
+            await _orch.reset_engine_client()
+        except Exception as e:
+            print(f"[api] Orchestrator init failed after switch to local: {e}")
+        _health_task = asyncio.create_task(
+            _health_monitor(port=_cfg.get("llama_server", {}).get("port", 8080))
+        )
+        print("[api] Switched live to local llama-server")
+        return {"ok": True, "switched": True, "backend": "local"}
+
+    elif new_external and _external_backend:
+        # external → different external: stop Ollama if we're leaving it
+        if _external_backend.get("type") == "ollama" and new_external.get("type") != "ollama":
+            _stop_ollama()
+        active = _pick_active_model(new_external)
+        new_external["active_model"] = active
+        _external_backend = new_external
+        if _orch and _orch.engine:
+            _orch.engine.base_url = new_external["base_url"]
+            _orch.engine.model_name = active
+            _orch.engine.is_external = True
+        print(f"[api] Switched live to {new_external['type']} ({active})")
+        return {"ok": True, "switched": True, "backend": new_external["type"]}
+
+    # Already on local — nothing to switch
+    if body.preference == "local":
+        return {"ok": True, "switched": False}
+
+    # Requested external backend not reachable
+    if body.preference == "ollama":
+        msg = "Ollama is not installed or could not be started. Install Ollama first."
+    else:
+        msg = "LM Studio server is not running. Open LM Studio and start the local server."
+    return {"ok": True, "switched": False, "warning": msg}
 
 
 ## ── llama-server update ──────────────────────────────────────────────────────
@@ -466,8 +729,21 @@ async def get_sessions():
     return results
 
 
+def _ext_context_size() -> int | None:
+    """Return the active external model's context window, or None if unknown."""
+    if not _external_backend:
+        return None
+    active = _external_backend.get("active_model", "")
+    models = _external_backend.get("models", [])
+    m = next((x for x in models if x["name"] == active), None)
+    if m and m.get("context_length"):
+        return int(m["context_length"])
+    return None
+
+
 @app.get("/api/config")
 async def get_config():
+    await _try_reconnect_external()
     server = _cfg.get("llama_server", {})
     model_params = _cfg.get("models", {}).get("director", {})
     preset_info = _cfg.get("_preset_info", {})
@@ -476,8 +752,8 @@ async def get_config():
         "preset_name": preset_info.get("name", ""),
         "tier": preset_info.get("tier"),
         "model": Path(server.get("model", "")).name,
-        "context_size": server.get("context_size"),
-        "gguf_context_length": _cfg.get("_gguf_context_length"),
+        "context_size": _ext_context_size() if _external_backend else server.get("context_size"),
+        "gguf_context_length": _ext_context_size() if _external_backend else _cfg.get("_gguf_context_length"),
         "port": server.get("port"),
         "gpu_layers": server.get("n_gpu_layers"),
         "enable_thinking": model_params.get("enable_thinking", True),
@@ -490,12 +766,162 @@ async def get_config():
         "thinking_budget": model_params.get("thinking_budget", -1),
         "vision_supported": model_params.get("vision_supported", False),
         "backend": _raw_cfg.get("backend", "vulkan"),
+        "inference_backend": _raw_cfg.get("inference_backend", "local"),
+        "inference_backend_preference": _raw_cfg.get("inference_backend", "local"),
+        "external_connected": bool(_external_backend),
     }
+
+
+async def _refresh_lm_studio_state() -> None:
+    """Re-check /v1/models to see if the active model is still loaded.
+
+    Uses only a GET request — no inference probe — so it cannot trigger
+    LM Studio to auto-load anything.
+    """
+    global _external_backend
+    if not _external_backend or _external_backend.get("type") != "lm_studio":
+        return
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as c:
+            r = await c.get(f"{_external_backend['base_url']}/v1/models")
+        if r.status_code != 200:
+            return
+        raw = r.json().get("data", [])
+        has_state = any("state" in m for m in raw)
+        if has_state:
+            loaded_ids = {m["id"] for m in raw if m.get("state") == "loaded"}
+        elif len(raw) <= 1:
+            loaded_ids = {m["id"] for m in raw}
+        else:
+            # Multiple models, no state — leave untouched; watcher will do full probe
+            return
+        # Sync models list to what is actually loaded right now
+        loaded_models = [
+            {"name": m["id"], "size_gb": 0.0, "thinking": False, "vision": False,
+             "context_length": m.get("context_length") or m.get("max_context_length") or None}
+            for m in raw if m.get("id") in loaded_ids
+        ]
+        _external_backend["models"] = loaded_models
+        current = _external_backend.get("active_model", "")
+        changed = False
+        if current and current not in loaded_ids:
+            # Previously-active model was unloaded
+            new_active = loaded_models[0]["name"] if loaded_models else ""
+            _external_backend["active_model"] = new_active
+            if _orch and _orch.engine:
+                _orch.engine.model_name = new_active
+            changed = True
+        elif not current and loaded_models:
+            # A model became loaded after CT-2 started with nothing selected
+            new_active = loaded_models[0]["name"]
+            _external_backend["active_model"] = new_active
+            if _orch and _orch.engine:
+                _orch.engine.model_name = new_active
+            changed = True
+        if changed:
+            await _broadcast_model_state()
+    except Exception:
+        pass
+
+
+async def _broadcast_model_state() -> None:
+    """Push current model state to all connected SSE clients."""
+    global _sse_clients
+    if not _sse_clients:
+        return
+    if _external_backend:
+        _bcast_active = _external_backend.get("active_model", "")
+        _bcast_models = _external_backend.get("models", [])
+    else:
+        _bcast_active = _raw_cfg.get("active_model", "") if _raw_cfg else ""
+        _bcast_models = []
+    payload = json.dumps({
+        "type": "model_state",
+        "active_model": _bcast_active,
+        "models": _bcast_models,
+    })
+    dead: set = set()
+    for q in _sse_clients:
+        try:
+            q.put_nowait(payload)
+        except asyncio.QueueFull:
+            dead.add(q)
+    _sse_clients -= dead
+
+
+async def _external_backend_watcher() -> None:
+    """Poll external backend every 5 s; reconnect if down; push state changes via SSE."""
+    last_active: str = ""
+    last_model_names: list[str] = []
+    while not _shutting_down:
+        await asyncio.sleep(5)
+        if _shutting_down:
+            break
+        # Reconnect if backend went away or was never up
+        if not _external_backend:
+            await _try_reconnect_external()
+            if _external_backend:
+                await _broadcast_model_state()
+            continue
+        # Full probe — picks up loaded/unloaded changes including "multiple models, no state"
+        btype = _external_backend.get("type")
+        if btype == "lm_studio":
+            fresh = await probe_lm_studio()
+        elif btype == "ollama":
+            fresh = await probe_ollama()
+        else:
+            continue
+        if fresh is None:
+            continue  # Backend temporarily unreachable
+        # Update models list from fresh probe
+        _external_backend["models"] = fresh["models"]
+        model_names = [m["name"] for m in fresh["models"]]
+        current = _external_backend.get("active_model", "")
+        if current and current not in model_names:
+            new_active = model_names[0] if model_names else ""
+            _external_backend["active_model"] = new_active
+            if _orch and _orch.engine:
+                _orch.engine.model_name = new_active
+        elif not current and model_names:
+            _external_backend["active_model"] = model_names[0]
+            if _orch and _orch.engine:
+                _orch.engine.model_name = model_names[0]
+        active = _external_backend.get("active_model", "")
+        if active != last_active or model_names != last_model_names:
+            last_active = active
+            last_model_names = model_names
+            await _broadcast_model_state()
 
 
 @app.get("/api/model")
 async def get_model_info():
     """Return current active model info."""
+    await _try_reconnect_external()
+    if _external_backend:
+        await _refresh_lm_studio_state()
+        active = _external_backend.get("active_model", "")
+        ctx = _ext_context_size()
+        return {
+            "active_model": active,
+            "model_found": bool(active),
+            "enable_thinking": False,
+            "vision_supported": False,
+            "context_size": ctx or 0,
+            "gguf_context_length": ctx,
+        }
+
+    # Preference is an external backend but it isn't connected — return empty.
+    pref = _raw_cfg.get("inference_backend", "local")
+    if pref in ("lm_studio", "ollama"):
+        return {
+            "active_model": "",
+            "model_found": False,
+            "enable_thinking": False,
+            "vision_supported": False,
+            "context_size": 0,
+            "gguf_context_length": None,
+        }
+
     from ct1.core.gguf_reader import read_context_length
     from ct1.server.launcher import _detect_thinking_support
 
@@ -552,7 +978,32 @@ async def get_presets():
 
 @app.get("/api/models")
 async def list_models():
-    """List .gguf files found in the configured models directory, with file sizes and capabilities."""
+    """List available models — from disk (.gguf) or external backend API."""
+    await _try_reconnect_external()
+    if _external_backend:
+        # Re-probe for fresh model list (user may have loaded a different model)
+        if _external_backend["type"] == "lm_studio":
+            fresh = await probe_lm_studio()
+        elif _external_backend["type"] == "ollama":
+            fresh = await probe_ollama()
+        else:
+            fresh = None
+        if fresh is not None:
+            _external_backend["models"] = fresh["models"]
+            model_names = {m["name"] for m in fresh["models"]}
+            current = _external_backend.get("active_model", "")
+            if current not in model_names:
+                new_active = fresh["models"][0]["name"] if fresh["models"] else ""
+                _external_backend["active_model"] = new_active
+                if _orch and _orch.engine:
+                    _orch.engine.model_name = new_active
+        return {"models": _external_backend.get("models", []), "models_dir": None}
+
+    # Preference is an external backend but it isn't connected — don't show local files.
+    pref = _raw_cfg.get("inference_backend", "local")
+    if pref in ("lm_studio", "ollama"):
+        return {"models": [], "models_dir": None}
+
     from ct1.server.launcher import _detect_thinking_support
     from ct1.core.gguf_reader import read_context_length
 
@@ -796,12 +1247,44 @@ async def reset_prompt(name: str):
 
 @app.post("/api/model/select")
 async def select_model(body: ModelSelect):
-    """Select a model file and restart the server.
-
-    On failure: reverts config to the previous model and attempts to restart
-    with it, so the server is never left in a permanently broken state.
+    """Select a model. For external backends: switches instantly (no restart).
+    For local llama-server: restarts with the new model file.
     """
-    global _raw_cfg, _cfg, _orch, _server_procs, _swapping, _active_think_tasks
+    global _raw_cfg, _cfg, _orch, _server_procs, _swapping, _active_think_tasks, _external_backend
+
+    # External backend — instant switch, no server restart needed
+    if _external_backend:
+        # For LM Studio, always re-probe to get the currently-loaded model list
+        # before accepting a selection — prevents selecting an unloaded model which
+        # would cause LM Studio to try loading it alongside the already-loaded one.
+        if _external_backend["type"] == "lm_studio":
+            fresh = await probe_lm_studio()
+            if fresh is not None:
+                _external_backend["models"] = fresh["models"]
+            loaded_names = {m["name"] for m in _external_backend.get("models", [])}
+            if body.model not in loaded_names:
+                return {
+                    "error": (
+                        f"'{body.model}' is not loaded in LM Studio. "
+                        "Load it in LM Studio first, then click Refresh."
+                    )
+                }
+        else:
+            models = _external_backend.get("models", [])
+            if not any(m["name"] == body.model for m in models):
+                return {"error": f"Model not available: {body.model}"}
+        _external_backend["active_model"] = body.model
+        # Persist preference so next startup uses the same model
+        key = f"{_external_backend['type']}_model"
+        _raw_cfg[key] = body.model
+        _CONFIG_PATH.write_text(
+            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        if _orch and _orch.engine:
+            _orch.engine.model_name = body.model
+        await _broadcast_model_state()
+        return {"status": "ok", "model": body.model}
 
     # Validate model exists
     models_dir_rel = _raw_cfg.get("models_dir", "models")
@@ -870,6 +1353,7 @@ async def select_model(body: ModelSelect):
                              component_cache=_cache)
         await _orch.reset_engine_client()  # Flush stale TCP connections from prior server
 
+        await _broadcast_model_state()
         return {
             "status": "ok",
             "model": body.model,
@@ -1831,4 +2315,4 @@ if __name__ == "__main__":
     import uvicorn
     _ensure_frontend_built()   # npm install + npm run build
     _mount_frontend_if_built() # mount now that the build exists
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_graceful_shutdown=5)

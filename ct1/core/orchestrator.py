@@ -145,17 +145,46 @@ _EDIT_INTENT = {
 _SOLO_PLAN_SYSTEM = _pm().get("solo_plan")
 
 
+_EXTERNAL_CFG_DEFAULTS = {
+    "llama_server": {"port": 8080, "context_size": 32768},
+    "models": {"director": {
+        "temperature": 0.6, "top_p": 0.9, "top_k": 40,
+        "presence_penalty": 1.0, "frequency_penalty": 0.0,
+        "max_tokens": 100000, "thinking_budget": -1,
+        "vision_supported": False, "enable_thinking": False,
+    }},
+    "_task_overrides": {},
+    "_preset_info": {},
+    "journal": {"path": "ct1/data/journals", "lessons_on_startup": 10},
+    "sessions": {"path": "ct1/data/sessions"},
+}
+
+
 class Orchestrator:
     def __init__(self, config_path: str = None, component_cache=None,
-                 context_size_override: int = None):
+                 context_size_override: int = None,
+                 external_base_url: str | None = None,
+                 external_model_name: str = ""):
         if config_path is None:
             config_path = str(_CONFIG_PATH)
 
         raw_cfg = load_raw_config(config_path)
-        cfg = resolve_config(raw_cfg, config_path,
-                             context_size_override=context_size_override)
+        try:
+            cfg = resolve_config(raw_cfg, config_path,
+                                 context_size_override=context_size_override)
+        except Exception as e:
+            if not external_base_url:
+                raise
+            print(f"[orch] Config resolve failed ({e}), using defaults for external backend")
+            cfg = _EXTERNAL_CFG_DEFAULTS
 
-        director_url = f"http://localhost:{cfg['llama_server']['port']}"
+        if external_base_url:
+            director_url = external_base_url
+            is_external = True
+        else:
+            director_url = f"http://localhost:{cfg['llama_server']['port']}"
+            is_external = False
+
         dc = cfg["models"]["director"]
 
         self.engine = Engine(
@@ -169,6 +198,8 @@ class Orchestrator:
             thinking_budget=dc.get("thinking_budget", -1),
             vision_supported=dc.get("vision_supported", False),
             context_size=cfg["llama_server"]["context_size"],
+            model_name=external_model_name,
+            is_external=is_external,
         )
 
         # Per-task parameter overrides (e.g. Nemotron optimized per route)
