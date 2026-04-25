@@ -64,3 +64,13 @@ CONTEXT/
 AGENTS.md
 docs/
 SYSTEMPROMPT.md
+
+# ── Dev / handoff archives ─────────────────────────────────────────
+ct2-handoff/
+ct2-handoff.zip
+
+# ── Knowledge graph output (generated, not source) ─────────────────
+graphify-out/
+
+# ── Editor / tool config ───────────────────────────────────────────
+.obsidian/
