@@ -533,6 +533,20 @@ class Orchestrator:
             files.append({"path": f"{name}.{ext}", "content": cleaned})
         return files
 
+    @staticmethod
+    def _extract_narrative(text: str) -> str:
+        """Return the narrative/summary text from computer mode output with file blocks removed."""
+        if '[FILE:' in text or '<!-- FILE:' in text:
+            # Remove [FILE: path]...content... blocks
+            result = re.sub(r'\[FILE:\s*[^\]]+\].*?(?=\[FILE:|$)', '', text, flags=re.DOTALL)
+            result = re.sub(r'<!--\s*FILE:\s*.+?\s*-->.*?(?=<!--\s*FILE:|$)', '', result, flags=re.DOTALL)
+        else:
+            # Remove ```filename.ext ... ``` fenced blocks
+            result = re.sub(r'```\S+\.\w+[^\n]*\n.*?```', '', text, flags=re.DOTALL)
+        # Strip "COMPLETED:" label
+        result = re.sub(r'(?m)^COMPLETED:\s*', '', result)
+        return result.strip()
+
     # ── Section-based editing ────────────────────────────────────────
 
     @staticmethod
@@ -1579,10 +1593,9 @@ class Orchestrator:
                 }
                 for f in _parsed
             ]
-            # Use "multi" only when files were written via markers — signals the output card.
-            # When the AI used tool calls and wrote a prose summary, use "text" so it
-            # renders as a normal chat bubble rather than an opaque file block.
             _detected_lang = "multi" if _parsed else "text"
+            if _parsed:
+                explanation_text = Orchestrator._extract_narrative(final_response)
         else:  # ROUTE_DIRECT
             _detected_lang = "text"
             _files = []

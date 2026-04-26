@@ -354,10 +354,76 @@
                             {/if}
 
                             <!-- Content -->
-                            {#if turn.isCode && turn.content}
+                            {#if turn.route === 'ROUTE_COMPUTER'}
+                                <!-- Narrative explanation as markdown bubble -->
+                                {#if turn.explanation}
+                                    <div class="c2-ai-bubble">
+                                        <div class="c2-ai-text">{@html render(turn.explanation)}</div>
+                                        <div class="c2-ai-actions" class:c2-visible={hoveredTurn === i}>
+                                            <button class="c2-icon-btn" onclick={() => setFeedback(i, 1)}
+                                                class:c2-icon-active={turn.feedback === 1} title="Good response">
+                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                                    <path d="M7 22V11M2 13v7a2 2 0 002 2h13.4a2 2 0 001.98-1.72l1.2-9A2 2 0 0020.6 9H15V5a3 3 0 00-3-3 1 1 0 00-1 1v.5L9 9.07" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                                </svg>
+                                            </button>
+                                            <button class="c2-icon-btn" onclick={() => setFeedback(i, -1)}
+                                                class:c2-icon-active={turn.feedback === -1} title="Bad response">
+                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                                    <path d="M17 2v11M22 11V4a2 2 0 00-2-2H6.6a2 2 0 00-1.98 1.72l-1.2 9A2 2 0 003.4 15H9v4a3 3 0 003 3 1 1 0 001-1v-.5L15 14.93" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                                </svg>
+                                            </button>
+                                            <button class="c2-icon-btn" onclick={() => regenerate(i)} title="Regenerate">
+                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                                    <path d="M1 4v6h6M23 20v-6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                                    <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                                </svg>
+                                            </button>
+                                            <button class="c2-icon-btn" onclick={() => copyText(turn.explanation || '')} title="Copy">
+                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                                    <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="1.8"/>
+                                                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                                </svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                {/if}
+                                <!-- File cards — click to open in workspace panel -->
+                                {#if turn.files?.length}
+                                    <div class="c2-ws-file-list">
+                                        {#each turn.files as file}
+                                            <button
+                                                class="c2-ws-file-card"
+                                                onclick={() => { wsTab = 'files'; onFileSelect(file.path); }}
+                                                title="View {file.path}"
+                                            >
+                                                <span class="c2-wsf-ext">{(file.lang || file.path.split('.').pop() || 'file').toUpperCase()}</span>
+                                                <span class="c2-wsf-path">{file.path}</span>
+                                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" class="c2-wsf-open">
+                                                    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                                    <path d="M15 3h6v6M10 14L21 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                                </svg>
+                                            </button>
+                                        {/each}
+                                    </div>
+                                {/if}
+                                <!-- Backward compat: no explanation extracted — show content as markdown -->
+                                {#if !turn.explanation && turn.content}
+                                    <div class="c2-ai-bubble">
+                                        <div class="c2-ai-text">{@html render(turn.content)}</div>
+                                        <div class="c2-ai-actions" class:c2-visible={hoveredTurn === i}>
+                                            <button class="c2-icon-btn" onclick={() => copyText(turn.content)} title="Copy">
+                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                                    <rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="1.8"/>
+                                                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                                </svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                {/if}
+                            {:else if turn.isCode && turn.content}
                                 {@const outputExt = getTurnOutputExt(turn)}
                                 {@const outputName = getTurnOutputFilename(turn)}
-                                <!-- Output card -->
+                                <!-- Output card (ROUTE_CODE / ROUTE_DESIGN) -->
                                 <div class="c2-output-card">
                                     <div class="c2-output-header">
                                         <span class="c2-output-ext">{outputExt}</span>
@@ -1705,6 +1771,65 @@
         font-size: 12.5px;
         color: var(--c2-fg-3);
     }
+
+    /* ── Computer-mode file cards ─────────────────────────────── */
+    .c2-ws-file-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 6px;
+    }
+    .c2-ws-file-card {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 34px;
+        padding: 0 12px;
+        border-radius: 8px;
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-1);
+        color: var(--c2-fg-1);
+        font-family: inherit;
+        font-size: 12.5px;
+        cursor: pointer;
+        transition: background 120ms, border-color 120ms;
+        text-align: left;
+        width: 100%;
+    }
+    .c2-ws-file-card:hover {
+        background: var(--c2-bg-2);
+        border-color: var(--c2-border-2);
+        color: var(--c2-fg-0);
+    }
+    .c2-wsf-ext {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--c2-fg-3);
+        letter-spacing: 0.4px;
+        background: var(--c2-bg-3);
+        border: 1px solid var(--c2-border-1);
+        padding: 2px 6px;
+        border-radius: 4px;
+        flex-shrink: 0;
+    }
+    .c2-wsf-path {
+        flex: 1;
+        font-family: 'Geist Mono', monospace;
+        font-size: 12px;
+        color: var(--c2-fg-0);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+    }
+    .c2-wsf-open {
+        color: var(--c2-fg-3);
+        flex-shrink: 0;
+        opacity: 0;
+        transition: opacity 120ms;
+    }
+    .c2-ws-file-card:hover .c2-wsf-open { opacity: 1; }
 
     /* Terminal tab */
     .c2-ws-terminal {
