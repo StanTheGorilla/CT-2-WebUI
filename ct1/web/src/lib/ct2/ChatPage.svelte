@@ -272,16 +272,30 @@
                                 </div>
                             {/if}
 
-                            <!-- Done status line -->
-                            <div class="c2-status-line">
-                                <svg class="c2-sl-check" width="12" height="12" viewBox="0 0 24 24" fill="none">
-                                    <path d="M20 6L9 17l-5-5" stroke="var(--c2-ok)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                                <span>Done</span>
-                                {#if turn.reflection?.self_score}
-                                    <span class="c2-sl-meta">{turn.reflection.self_score}%</span>
-                                {/if}
-                            </div>
+                            <!-- Status line -->
+                            {#if turn.stopped}
+                                <div class="c2-status-line">
+                                    <svg width="11" height="11" viewBox="0 0 10 10" fill="var(--c2-fg-3)">
+                                        <rect width="10" height="10" rx="1.5"/>
+                                    </svg>
+                                    <span class="c2-stopped-label">Stopped</span>
+                                    {#if turn.content}
+                                        <span class="c2-sl-meta">{turn.content.length.toLocaleString()} chars</span>
+                                    {:else}
+                                        <span class="c2-sl-meta">nothing generated</span>
+                                    {/if}
+                                </div>
+                            {:else}
+                                <div class="c2-status-line">
+                                    <svg class="c2-sl-check" width="12" height="12" viewBox="0 0 24 24" fill="none">
+                                        <path d="M20 6L9 17l-5-5" stroke="var(--c2-ok)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    <span>Done</span>
+                                    {#if turn.reflection?.self_score}
+                                        <span class="c2-sl-meta">{turn.reflection.self_score}%</span>
+                                    {/if}
+                                </div>
+                            {/if}
 
                             <!-- ── Thinking block ────────────────────────── -->
                             {#if turn.thinking}
@@ -1019,6 +1033,11 @@
     }
 
     .c2-sl-check { flex-shrink: 0; }
+
+    .c2-stopped-label {
+        color: var(--c2-fg-3);
+        font-size: 12px;
+    }
 
     .c2-sl-meta {
         font-family: 'Geist Mono', monospace;

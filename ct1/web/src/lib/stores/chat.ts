@@ -68,6 +68,8 @@ export interface Turn {
     truncated?: boolean;
     /** Number of automatic compact-and-continue passes used */
     autoContinuations?: number;
+    /** True when the user stopped generation before it finished */
+    stopped?: boolean;
 }
 
 export interface Reflection {
@@ -1072,52 +1074,36 @@ export function stopGeneration() {
             ? cloneSearchActivities(s.activeSearches)
             : undefined;
         const preserveSavedFiles = s.route === 'ROUTE_COMPUTER' ? [...s.savedFiles] : [];
-        const lastTurn = s.conversation[s.conversation.length - 1];
         s.cancelRequested = true;
 
-        if (!partial && lastTurn?.role === 'user') {
-            // Nothing generated yet — remove the user turn, go back to idle
-            s.conversation = s.conversation.slice(0, -1);
-            s.phase = 'idle';
-        } else if (partial) {
-            // Push partial response as a real assistant turn so it stays
-            // in history with feedback + regenerate buttons
-            const codeRoute = s.route === 'ROUTE_DESIGN' || s.route === 'ROUTE_CODE';
-            s.conversation = [
-                ...s.conversation,
-                {
-                    role: 'assistant',
-                    content: partial,
-                    isCode: codeRoute,
-                    route: s.route,
-                    plan: s.plan,
-                    specialistData: s.specialistData,
-                    thinking: thinking || undefined,
-                    activeSearches,
-                    fetchedContent,
-                },
-            ];
-            s.response = partial;
-            s.thinking = thinking;
-            s.phase = 'done';
-        } else {
-            s.phase = 'idle';
-        }
+        // Always commit a stopped assistant turn — never delete messages.
+        // Even if nothing streamed yet, the turn records that a request was made
+        // and stopped so the user can see what phase was reached.
+        const codeRoute = s.route === 'ROUTE_DESIGN' || s.route === 'ROUTE_CODE';
+        s.conversation = [
+            ...s.conversation,
+            {
+                role: 'assistant',
+                content: partial,
+                isCode: codeRoute && !!partial,
+                route: s.route,
+                plan: s.plan,
+                specialistData: s.specialistData,
+                thinking: thinking || undefined,
+                activeSearches,
+                fetchedContent,
+                stopped: true,
+            },
+        ];
+        s.response = partial;
+        s.thinking = thinking;
+        s.phase = 'done';
 
         clearTransientTurnState(s);
 
-        if (partial) {
-            s.response = partial;
-            s.thinking = thinking;
-            s.savedFiles = preserveSavedFiles;
-        } else {
-            s.route = '';
-            s.plan = null;
-            s.specialistData = null;
-            s.response = '';
-            s.thinking = '';
-            s.savedFiles = [];
-        }
+        s.response = partial;
+        s.thinking = thinking;
+        s.savedFiles = preserveSavedFiles;
 
         return s;
     });
