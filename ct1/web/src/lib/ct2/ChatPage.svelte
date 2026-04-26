@@ -552,14 +552,25 @@
                             </div>
                         {/if}
 
-                        <!-- Active status line -->
-                        <div class="c2-status-line">
-                            <span class="c2-pulse-dot"></span>
-                            <span>{getPhaseLabel($chat.phase)}</span>
-                            {#if $chat.tokensPerSec > 0}
-                                <span class="c2-sl-meta">{$chat.tokensPerSec} tok/s</span>
-                            {/if}
-                        </div>
+                        <!-- Active status line — shows Paused when waiting for command approval -->
+                        {#if $chat.pendingApproval}
+                            <div class="c2-status-line">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                                    <rect x="6" y="4" width="4" height="16" rx="1" fill="var(--c2-fg-3)"/>
+                                    <rect x="14" y="4" width="4" height="16" rx="1" fill="var(--c2-fg-3)"/>
+                                </svg>
+                                <span class="c2-paused-label">Paused</span>
+                                <span class="c2-sl-meta">waiting for your decision in Terminal</span>
+                            </div>
+                        {:else}
+                            <div class="c2-status-line">
+                                <span class="c2-pulse-dot"></span>
+                                <span>{getPhaseLabel($chat.phase)}</span>
+                                {#if $chat.tokensPerSec > 0}
+                                    <span class="c2-sl-meta">{$chat.tokensPerSec} tok/s</span>
+                                {/if}
+                            </div>
+                        {/if}
 
                         <!-- Search activity -->
                         {#each $chat.activeSearches as search}
@@ -612,17 +623,19 @@
                                         <span class="c2-sl-meta">· {$chat.tokensPerSec} tok/s</span>
                                     {/if}
                                     <div style="flex:1"></div>
-                                    <button class="c2-stop-btn" onclick={stopGeneration} title="Stop">
-                                        <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor">
-                                            <rect width="10" height="10" rx="1.5"/>
-                                        </svg>
-                                    </button>
+                                    {#if !$chat.pendingApproval}
+                                        <button class="c2-stop-btn" onclick={stopGeneration} title="Stop">
+                                            <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor">
+                                                <rect width="10" height="10" rx="1.5"/>
+                                            </svg>
+                                        </button>
+                                    {/if}
                                 </div>
                                 <div class="c2-gen-body">
                                     {$chat.streamingText}<span class="c2-cursor">|</span>
                                 </div>
                             </div>
-                        {:else}
+                        {:else if !$chat.pendingApproval}
                             <!-- Phase-only (routing/planning) — show stop button -->
                             <div class="c2-phase-stop">
                                 <button class="c2-revert-btn" onclick={stopGeneration}>Stop</button>
@@ -1037,6 +1050,11 @@
     .c2-stopped-label {
         color: var(--c2-fg-3);
         font-size: 12px;
+    }
+
+    .c2-paused-label {
+        color: var(--c2-fg-2);
+        font-size: 12.5px;
     }
 
     .c2-sl-meta {
