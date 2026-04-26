@@ -2,7 +2,7 @@
     import { goto } from '$app/navigation';
     import { page } from '$app/stores';
     import { onMount } from 'svelte';
-    import { chat, newConversation, stopGeneration } from '$lib/stores/chat';
+    import { chat, newConversation, stopGeneration, setWorkspaceId, setMode } from '$lib/stores/chat';
     import { preferences, toggleTheme } from '$lib/stores/preferences';
     import {
         sidebarOpen,
@@ -29,6 +29,64 @@
         return name.replace(/\.gguf$/i, '').replace(/[._-][Qq]\d+[_A-Za-z0-9]*$/, '');
     }
 
+    // ── Workspaces ────────────────────────────────────────────────
+    interface Workspace { id: string; name: string; file_count: number; }
+    let workspaces = $state<Workspace[]>([]);
+    let creatingWs = $state(false);
+    let newWsName = $state('');
+    let newWsInput = $state<HTMLInputElement | null>(null);
+
+    async function loadWorkspaces() {
+        try { workspaces = await (await fetch('/api/workspaces')).json(); } catch {}
+    }
+
+    async function openWorkspace(id: string) {
+        sidebarOpen.set(false);
+        try {
+            const conv = await fetch(`/api/workspaces/${id}/conversation`).then(r => r.json());
+            if (conv?.id) {
+                loadFromHistory(conv);
+            } else {
+                newConversation();
+            }
+        } catch {
+            newConversation();
+        }
+        setWorkspaceId(id);
+        setMode('computer');
+        goto('/');
+    }
+
+    function startWsCreate() {
+        creatingWs = true;
+        newWsName = '';
+        requestAnimationFrame(() => newWsInput?.focus());
+    }
+
+    async function submitWsCreate() {
+        const name = newWsName.trim();
+        creatingWs = false;
+        newWsName = '';
+        if (!name) return;
+        try {
+            const res = await fetch('/api/workspaces', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+            });
+            const ws: Workspace = await res.json();
+            workspaces = [ws, ...workspaces];
+            openWorkspace(ws.id);
+        } catch {}
+    }
+
+    function cancelWsCreate() { creatingWs = false; newWsName = ''; }
+
+    function handleWsCreateKey(e: KeyboardEvent) {
+        if (e.key === 'Enter') submitWsCreate();
+        else if (e.key === 'Escape') cancelWsCreate();
+    }
+
     onMount(async () => {
         try {
             const res = await fetch('/api/model');
@@ -36,7 +94,7 @@
             activeModel = data.active_model || '';
             modelThinking = data.enable_thinking ?? false;
         } catch {}
-        await loadConversations();
+        await Promise.all([loadConversations(), loadWorkspaces()]);
     });
 
     async function openModelPicker() {
@@ -172,7 +230,7 @@
                     <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                 </svg>
             </button>
-            <a href="/" class="c2-logo" onclick={() => goto('/')}>
+            <a href="/" class="c2-logo" onclick={() => { newConversation(); goto('/'); }}>
                 <span class="c2-logo-text">ct·2</span>
             </a>
         </div>
@@ -295,8 +353,12 @@
 
     <!-- Sidebar overlay -->
     {#if $sidebarOpen}
-        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-        <div class="c2-overlay" onclick={() => sidebarOpen.set(false)}></div>
+        <button
+            type="button"
+            class="c2-overlay"
+            onclick={() => sidebarOpen.set(false)}
+            aria-label="Close sidebar"
+        ></button>
     {/if}
     <aside class="c2-sidebar" class:c2-sidebar-open={$sidebarOpen}>
         <div class="c2-sb-header">
@@ -327,11 +389,58 @@
                 class="c2-sb-input"
             />
             {#if sidebarQuery}
-                <button onclick={() => sidebarQuery = ''} class="c2-sb-clear">
+                <button onclick={() => sidebarQuery = ''} class="c2-sb-clear" aria-label="Clear search">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
                         <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                     </svg>
                 </button>
+            {/if}
+        </div>
+
+        <div class="c2-sb-list c2-sb-projects">
+            <div class="c2-sb-proj-head">
+                <span class="c2-sb-section-label" style="padding:0">Projects</span>
+                <button class="c2-sb-proj-add" onclick={startWsCreate} title="New project" aria-label="New project">
+                    <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
+                        <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
+
+            {#if creatingWs}
+                <div class="c2-ws-create-row">
+                    <input
+                        class="c2-ws-create-input"
+                        bind:this={newWsInput}
+                        bind:value={newWsName}
+                        placeholder="Project name"
+                        onkeydown={handleWsCreateKey}
+                        onblur={cancelWsCreate}
+                    />
+                </div>
+            {/if}
+
+            {#each workspaces as ws (ws.id)}
+                <div
+                    class="c2-conv-item"
+                    class:c2-conv-active={$chat.workspaceId === ws.id}
+                    role="button"
+                    tabindex="0"
+                    onclick={() => openWorkspace(ws.id)}
+                    onkeydown={(e) => e.key === 'Enter' && openWorkspace(ws.id)}
+                >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style="flex-shrink:0;color:var(--c2-fg-3)">
+                        <path d="M2 5V3.5A1.5 1.5 0 013.5 2h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 5v7.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V5z" stroke="currentColor" stroke-width="1.1"/>
+                    </svg>
+                    <span class="c2-conv-title">{ws.name}</span>
+                    {#if ws.file_count > 0}
+                        <span class="c2-ws-count">{ws.file_count}</span>
+                    {/if}
+                </div>
+            {/each}
+
+            {#if workspaces.length === 0 && !creatingWs}
+                <div class="c2-sb-empty" style="padding:8px 10px;font-size:11.5px">No projects yet</div>
             {/if}
         </div>
 
@@ -712,6 +821,8 @@
         position: fixed;
         inset: 0;
         z-index: 90;
+        padding: 0;
+        border: 0;
         background: oklch(0 0 0 / 0.38);
         animation: c2-fade-in 220ms ease both;
     }
@@ -815,6 +926,63 @@
         padding: 4px 8px 14px;
         scrollbar-width: thin;
         scrollbar-color: var(--c2-border-2) transparent;
+    }
+    .c2-sb-projects {
+        flex: none;
+        overflow: visible;
+        border-bottom: 1px solid var(--c2-border-1);
+        padding-bottom: 6px;
+        margin-bottom: 4px;
+    }
+    .c2-sb-proj-head {
+        display: flex;
+        align-items: center;
+        padding: 2px 8px 6px;
+    }
+    .c2-sb-proj-add {
+        width: 20px;
+        height: 20px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 5px;
+        background: none;
+        border: none;
+        color: var(--c2-fg-3);
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 120ms, color 120ms, background 120ms;
+        margin-left: auto;
+    }
+    .c2-sb-proj-head:hover .c2-sb-proj-add { opacity: 1; }
+    .c2-sb-proj-add:hover { color: var(--c2-fg-0); background: var(--c2-bg-3); }
+    .c2-ws-create-row {
+        padding: 3px 8px 6px;
+    }
+    .c2-ws-create-input {
+        width: 100%;
+        height: 28px;
+        padding: 0 10px;
+        font-size: 12.5px;
+        font-family: inherit;
+        color: var(--c2-fg-0);
+        background: var(--c2-bg-2);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 7px;
+        outline: none;
+        box-sizing: border-box;
+    }
+    .c2-ws-create-input:focus { border-color: var(--c2-accent); }
+    .c2-ws-create-input::placeholder { color: var(--c2-fg-3); }
+    .c2-ws-count {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10px;
+        color: var(--c2-fg-3);
+        background: var(--c2-bg-3);
+        border: 1px solid var(--c2-border-1);
+        padding: 1px 5px;
+        border-radius: 999px;
+        flex-shrink: 0;
     }
     .c2-sb-section-label {
         font-family: 'Geist Mono', monospace;

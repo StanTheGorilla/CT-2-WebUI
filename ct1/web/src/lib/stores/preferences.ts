@@ -10,6 +10,7 @@ interface Preferences {
     showThinking: boolean;
     designRefinement: boolean;
     webSearchEnabled: boolean;
+    requireCommandApproval: boolean;
     // Atlas Mode (beta)
     atlasMode: boolean;
     atlasEffortMode: 'auto' | 'manual';
@@ -25,6 +26,7 @@ const defaults: Preferences = {
     showThinking: false,
     designRefinement: true,
     webSearchEnabled: false,
+    requireCommandApproval: false,
     // Atlas defaults
     atlasMode: false,
     atlasEffortMode: 'auto',

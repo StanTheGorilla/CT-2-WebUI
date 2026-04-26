@@ -1,6 +1,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
+    import { goto } from '$app/navigation';
     import { preferences, toggleTheme, setUiStyle } from '$lib/stores/preferences';
+    import { newConversation, setWorkspaceId, setMode, loadFromHistory } from '$lib/stores/chat';
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
     import StatusIndicator from '$lib/components/StatusIndicator.svelte';
 
@@ -8,7 +10,7 @@
 
     let modelStatus = $state<Record<string, any>>({});
     let config = $state<Record<string, any>>({});
-    let loading = $state(true);
+    let loading = $state(false);
     let activeSection = $state('model');
 
     interface ModelFile { name: string; size_gb: number; thinking: boolean; vision: boolean; context_length: number | null; }
@@ -189,10 +191,43 @@
     interface Workspace { id: string; name: string; created_at: string; file_count: number; }
     let workspaces = $state<Workspace[]>([]);
     let deletingWs = $state<string | null>(null);
+    let wsCreating = $state(false);
+    let wsNewName = $state('');
+    let wsNewInput = $state<HTMLInputElement | null>(null);
 
     async function loadWorkspaces() {
         try { workspaces = await (await fetch('/api/workspaces')).json(); } catch {}
     }
+
+    function startWsCreate() {
+        wsCreating = true;
+        wsNewName = '';
+        requestAnimationFrame(() => wsNewInput?.focus());
+    }
+
+    async function submitWsCreate() {
+        const trimmed = wsNewName.trim();
+        wsCreating = false;
+        wsNewName = '';
+        if (!trimmed) return;
+        try {
+            const res = await fetch('/api/workspaces', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: trimmed }),
+            });
+            const ws: Workspace = await res.json();
+            workspaces = [ws, ...workspaces];
+        } catch {}
+    }
+
+    function cancelWsCreate() { wsCreating = false; wsNewName = ''; }
+
+    function handleWsCreateKeydown(e: KeyboardEvent) {
+        if (e.key === 'Enter') submitWsCreate();
+        else if (e.key === 'Escape') cancelWsCreate();
+    }
+
     async function deleteWorkspace(id: string) {
         deletingWs = id;
         try {
@@ -203,6 +238,22 @@
     }
     function fmtWsDate(iso: string) {
         try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch { return iso; }
+    }
+
+    async function openWorkspace(id: string) {
+        try {
+            const conv = await fetch(`/api/workspaces/${id}/conversation`).then(r => r.json());
+            if (conv?.id) {
+                loadFromHistory(conv);
+            } else {
+                newConversation();
+            }
+        } catch {
+            newConversation();
+        }
+        setWorkspaceId(id);
+        setMode('computer');
+        goto('/');
     }
 
     // ── Confirm reset ─────────────────────────────────────────────
@@ -341,19 +392,31 @@
                         {scanning ? 'Scanning…' : 'Rescan models folder'}
                     </button>
 
-                    {#if $updateStatus?.available}
-                        <div class="c2-row" style="margin-top:16px;">
-                            <div class="c2-row-label">
-                                <div class="c2-row-name">Server update available</div>
-                                <div class="c2-row-desc">{$updateStatus.version ?? ''}</div>
-                            </div>
-                            <div class="c2-row-control">
-                                <button class="c2-btn-primary" onclick={startUpdate} disabled={$isUpdating}>
-                                    {$isUpdating ? 'Updating…' : 'Update now'}
-                                </button>
-                            </div>
+                    <div class="c2-row" style="margin-top:16px;">
+                        <div class="c2-row-label">
+                            <div class="c2-row-name">Update llama-server</div>
+                            <div class="c2-row-desc">Download the latest llama.cpp release for the currently selected backend. The new version is used after restart.</div>
                         </div>
-                    {/if}
+                        <div class="c2-row-control">
+                            <button class="c2-btn-primary" onclick={() => startUpdate(activeBackend)} disabled={$isUpdating}>
+                                {#if $isUpdating}
+                                    Updating…
+                                {:else}
+                                    Update {activeBackend.charAt(0).toUpperCase() + activeBackend.slice(1)}
+                                {/if}
+                            </button>
+                            {#if updateStatus[activeBackend]?.status === 'done'}
+                                <button class="c2-btn-outline c2-btn-warn" onclick={restartModel} disabled={switching}>
+                                    {switching ? 'Restarting…' : 'Restart server'}
+                                </button>
+                            {/if}
+                            {#if updateStatus[activeBackend]?.message}
+                                <span class={updateStatus[activeBackend]?.status === 'error' ? 'c2-inline-err' : 'c2-row-desc'}>
+                                    {updateStatus[activeBackend]?.message}
+                                </span>
+                            {/if}
+                        </div>
+                    </div>
                 {/if}
 
             <!-- ── GENERATION ── -->
@@ -520,6 +583,7 @@
                             onclick={() => preferences.update(p => ({ ...p, designRefinement: !p.designRefinement }))}
                             role="switch"
                             aria-checked={$preferences.designRefinement}
+                            aria-label="Toggle CSS refinement pass"
                         >
                             <span class="c2-switch-knob"></span>
                         </button>
@@ -545,6 +609,7 @@
                             onclick={() => preferences.update(p => ({ ...p, atlasMode: !p.atlasMode }))}
                             role="switch"
                             aria-checked={$preferences.atlasMode}
+                            aria-label="Toggle Atlas mode"
                         >
                             <span class="c2-switch-knob"></span>
                         </button>
@@ -595,7 +660,8 @@
                         <div class="c2-row-control">
                             <button class="c2-switch" class:c2-switch-on={$preferences.atlasSelfVerification}
                                 onclick={() => preferences.update(p => ({ ...p, atlasSelfVerification: !p.atlasSelfVerification }))}
-                                disabled={!$preferences.atlasMode} role="switch" aria-checked={$preferences.atlasSelfVerification}>
+                                disabled={!$preferences.atlasMode} role="switch" aria-checked={$preferences.atlasSelfVerification}
+                                aria-label="Toggle Atlas self-verification">
                                 <span class="c2-switch-knob"></span>
                             </button>
                         </div>
@@ -608,7 +674,8 @@
                         <div class="c2-row-control">
                             <button class="c2-switch" class:c2-switch-on={$preferences.atlasMultiPerspective}
                                 onclick={() => preferences.update(p => ({ ...p, atlasMultiPerspective: !p.atlasMultiPerspective }))}
-                                disabled={!$preferences.atlasMode} role="switch" aria-checked={$preferences.atlasMultiPerspective}>
+                                disabled={!$preferences.atlasMode} role="switch" aria-checked={$preferences.atlasMultiPerspective}
+                                aria-label="Toggle Atlas multi-perspective mode">
                                 <span class="c2-switch-knob"></span>
                             </button>
                         </div>
@@ -621,7 +688,8 @@
                         <div class="c2-row-control">
                             <button class="c2-switch" class:c2-switch-on={$preferences.atlasIterativeRefinement}
                                 onclick={() => preferences.update(p => ({ ...p, atlasIterativeRefinement: !p.atlasIterativeRefinement }))}
-                                disabled={!$preferences.atlasMode} role="switch" aria-checked={$preferences.atlasIterativeRefinement}>
+                                disabled={!$preferences.atlasMode} role="switch" aria-checked={$preferences.atlasIterativeRefinement}
+                                aria-label="Toggle Atlas iterative refinement">
                                 <span class="c2-switch-knob"></span>
                             </button>
                         </div>
@@ -682,6 +750,7 @@
                             onclick={() => preferences.update(p => ({ ...p, webSearchEnabled: !p.webSearchEnabled }))}
                             role="switch"
                             aria-checked={$preferences.webSearchEnabled}
+                            aria-label="Toggle web search"
                         >
                             <span class="c2-switch-knob"></span>
                         </button>
@@ -712,8 +781,45 @@
                     <p class="c2-sh-sub">Persistent project folders with file access and terminal integration.</p>
                 </div>
 
-                {#if workspaces.length === 0}
-                    <div class="c2-empty-state">No workspaces yet. Create one from the sidebar.</div>
+                <div class="c2-row">
+                    <div class="c2-row-label">
+                        <div class="c2-row-name">Command approval</div>
+                        <div class="c2-row-desc">Require your confirmation before the AI runs each shell command. Applies to all workspaces.</div>
+                    </div>
+                    <div class="c2-row-control">
+                        <button
+                            class="c2-switch"
+                            class:c2-switch-on={$preferences.requireCommandApproval}
+                            onclick={() => preferences.update(p => ({ ...p, requireCommandApproval: !p.requireCommandApproval }))}
+                            role="switch"
+                            aria-checked={$preferences.requireCommandApproval}
+                            aria-label="Toggle command approval"
+                        >
+                            <span class="c2-switch-knob"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="c2-ws-toolbar">
+                    <button class="c2-btn-primary" onclick={startWsCreate}>New workspace</button>
+                </div>
+
+                {#if wsCreating}
+                    <div class="c2-ws-create-row">
+                        <input
+                            class="c2-ws-create-input"
+                            bind:this={wsNewInput}
+                            bind:value={wsNewName}
+                            placeholder="Project name"
+                            onkeydown={handleWsCreateKeydown}
+                        />
+                        <button class="c2-btn-primary" onmousedown={(e) => e.preventDefault()} onclick={submitWsCreate}>Create</button>
+                        <button class="c2-btn-ghost" style="margin-top:0" onclick={cancelWsCreate}>Cancel</button>
+                    </div>
+                {/if}
+
+                {#if workspaces.length === 0 && !wsCreating}
+                    <div class="c2-empty-state">No workspaces yet.</div>
                 {:else}
                     {#each workspaces as ws}
                         <div class="c2-ws-row">
@@ -721,11 +827,14 @@
                                 <span class="c2-ws-name">{ws.name || ws.id}</span>
                                 <span class="c2-ws-meta">{ws.file_count} file{ws.file_count !== 1 ? 's' : ''}{ws.created_at ? ' · ' + fmtWsDate(ws.created_at) : ''}</span>
                             </div>
-                            <button
-                                class="c2-btn-outline c2-btn-err"
-                                onclick={() => deleteWorkspace(ws.id)}
-                                disabled={deletingWs === ws.id}
-                            >{deletingWs === ws.id ? 'Deleting…' : 'Delete'}</button>
+                            <div style="display:inline-flex;gap:8px;">
+                                <button class="c2-btn-primary" onclick={() => openWorkspace(ws.id)}>Open</button>
+                                <button
+                                    class="c2-btn-outline c2-btn-err"
+                                    onclick={() => deleteWorkspace(ws.id)}
+                                    disabled={deletingWs === ws.id}
+                                >{deletingWs === ws.id ? 'Deleting…' : 'Delete'}</button>
+                            </div>
                         </div>
                     {/each}
                 {/if}
@@ -836,7 +945,6 @@
         border-top: 1px solid var(--c2-border-1);
         align-items: start;
     }
-    .c2-row-label {}
     .c2-row-name {
         font-size: 14px;
         color: var(--c2-fg-0);
@@ -1154,6 +1262,30 @@
         padding: 32px 0;
         text-align: center;
     }
+    .c2-ws-toolbar { margin-bottom: 16px; }
+
+    .c2-ws-create-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+    }
+    .c2-ws-create-input {
+        flex: 1;
+        height: 32px;
+        padding: 0 12px;
+        font-size: 13px;
+        font-family: inherit;
+        color: var(--c2-fg-0);
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 8px;
+        outline: none;
+        min-width: 0;
+    }
+    .c2-ws-create-input:focus { border-color: var(--c2-accent); }
+    .c2-ws-create-input::placeholder { color: var(--c2-fg-3); }
+
     .c2-ws-row {
         display: flex;
         align-items: center;

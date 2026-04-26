@@ -1,7 +1,10 @@
 <script lang="ts">
-    let { workspaceId, onClose, externalOutput = '', pendingCommands = [], onCommandsConsumed }:
+    let { workspaceId, onClose, externalOutput = '', pendingCommands = [], onCommandsConsumed,
+          pendingApproval = null, onApprovalHandled }:
         { workspaceId: string; onClose: () => void; externalOutput?: string;
-          pendingCommands?: string[]; onCommandsConsumed?: () => void } = $props();
+          pendingCommands?: string[]; onCommandsConsumed?: () => void;
+          pendingApproval?: { id: string; command: string } | null;
+          onApprovalHandled?: () => void } = $props();
 
     let output = $state('');
     let inputText = $state('');
@@ -123,6 +126,23 @@
         }
     }
 
+    async function respondToApproval(approved: boolean) {
+        if (!pendingApproval) return;
+        const { id, command } = pendingApproval;
+        onApprovalHandled?.();
+        output += approved
+            ? `\n$ ${command}\n`
+            : `\n[command rejected: ${command}]\n`;
+        scrollBottom();
+        try {
+            await fetch(`/api/command-approve/${id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ approved }),
+            });
+        } catch {}
+    }
+
 </script>
 
 <div class="terminal">
@@ -150,6 +170,18 @@
         </div>
     </div>
     <pre class="term-output" bind:this={outputEl}>{output}{#if !output}<span class="term-welcome">workspace ready — type a command below</span>{/if}</pre>
+    {#if pendingApproval}
+        <div class="term-approval">
+            <div class="term-approval-cmd">
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 9l4-3-4-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <code class="term-approval-text">{pendingApproval.command}</code>
+            </div>
+            <div class="term-approval-actions">
+                <button class="term-approve-btn term-approve-reject" onclick={() => respondToApproval(false)}>Reject</button>
+                <button class="term-approve-btn term-approve-ok" onclick={() => respondToApproval(true)}>Approve</button>
+            </div>
+        </div>
+    {/if}
     <div class="term-input-row">
         <span class="term-prompt">
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 9l4-3-4-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -283,4 +315,58 @@
     .term-output::-webkit-scrollbar { width: 4px; }
     .term-output::-webkit-scrollbar-track { background: transparent; }
     .term-output::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+
+    .term-approval {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 14px;
+        background: rgba(255, 165, 0, 0.07);
+        border-top: 1px solid rgba(255, 165, 0, 0.18);
+        flex-shrink: 0;
+    }
+    .term-approval-cmd {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: rgba(255, 165, 0, 0.7);
+        min-width: 0;
+        overflow: hidden;
+    }
+    .term-approval-text {
+        font: inherit;
+        font-size: 11.5px;
+        color: rgba(255, 200, 100, 0.9);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .term-approval-actions {
+        display: flex;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+    .term-approve-btn {
+        height: 24px;
+        padding: 0 10px;
+        border-radius: 5px;
+        font-size: 11.5px;
+        font-family: inherit;
+        cursor: pointer;
+        font-weight: 500;
+        transition: opacity 120ms;
+    }
+    .term-approve-reject {
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.12);
+        color: rgba(255,255,255,0.5);
+    }
+    .term-approve-reject:hover { opacity: 0.75; }
+    .term-approve-ok {
+        background: rgba(255, 165, 0, 0.22);
+        border: 1px solid rgba(255, 165, 0, 0.4);
+        color: rgba(255, 200, 80, 0.95);
+    }
+    .term-approve-ok:hover { opacity: 0.85; }
 </style>

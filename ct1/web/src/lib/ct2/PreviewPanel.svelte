@@ -1,6 +1,6 @@
 <script lang="ts">
-    let { code, open = false, width = 44, onClose, onWidthChange }:
-        { code: string; open: boolean; width: number; onClose: () => void; onWidthChange: (w: number) => void } = $props();
+    let { code, open = false, width = 44, isStreaming = false, onClose, onWidthChange }:
+        { code: string; open: boolean; width: number; isStreaming: boolean; onClose: () => void; onWidthChange: (w: number) => void } = $props();
 
     let activeTab = $state<'preview' | 'source'>('preview');
     let iframe = $state<HTMLIFrameElement | null>(null);
@@ -8,13 +8,13 @@
     let copied = $state(false);
     let debounceTimer: ReturnType<typeof setTimeout>;
 
-    // Auto-switch to preview tab when new code arrives
-    let prevCode = $state('');
+    // Show code while streaming; auto-switch to preview when done
+    let prevStreaming = $state(false);
     $effect(() => {
-        if (code && code !== prevCode) {
-            prevCode = code;
-            activeTab = 'preview';
-        }
+        const s = isStreaming;
+        if (s && !prevStreaming) activeTab = 'source';
+        else if (!s && prevStreaming && code) activeTab = 'preview';
+        prevStreaming = s;
     });
 
     function wrapPartialHtml(html: string): string {
@@ -76,7 +76,12 @@
 
 <aside class="c2-pv" class:c2-pv-open={open} style="width: {width}%">
     <!-- Invisible drag handle -->
-    <div class="c2-pv-handle" onpointerdown={startResize}></div>
+    <button
+        type="button"
+        class="c2-pv-handle"
+        onpointerdown={startResize}
+        aria-label="Resize preview panel"
+    ></button>
 
     <!-- Toolbar — matches handoff reference exactly -->
     <div class="c2-pv-toolbar">
@@ -181,6 +186,9 @@
         position: absolute;
         left: -4px; top: 0; bottom: 0;
         width: 8px;
+        padding: 0;
+        border: none;
+        background: transparent;
         cursor: col-resize;
         z-index: 2;
     }

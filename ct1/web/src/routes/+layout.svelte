@@ -10,6 +10,7 @@
     import Ct2Layout from '$lib/ct2/Layout.svelte';
     import { sidebarOpen } from '$lib/stores/conversations';
     import { preferences, toggleTheme } from '$lib/stores/preferences';
+    import { getPhaseLabel } from '$lib/chatUi';
 
     function startNewChat() {
         newConversation();
@@ -43,22 +44,10 @@
         }
     }
 
-    const phaseLabels: Record<string, string> = {
-        idle: '',
-        routing: 'Classifying',
-        planning: 'Planning',
-        generating: 'Generating',
-        polishing: 'Polishing',
-        refining: 'Refining',
-        validating: 'Validating',
-        fixing: 'Fixing',
-        done: '',
-    };
-
-    let phaseText = $derived(phaseLabels[$chat.phase] || '');
+    let phaseText = $derived(getPhaseLabel($chat.phase));
     let isActive = $derived($chat.phase !== 'idle' && $chat.phase !== 'done');
 
-    let pre: HTMLPreElement;
+    let pre = $state<HTMLPreElement | null>(null);
 
     onMount(() => {
         if (!pre) return;
@@ -73,6 +62,7 @@
         const luminanceChars = '.,-~:;=!*#$@';
 
         function renderFrame() {
+            if (!pre) return;
             const output: string[] = new Array(screenW * screenH).fill(' ');
             const zbuffer: number[] = new Array(screenW * screenH).fill(0);
 

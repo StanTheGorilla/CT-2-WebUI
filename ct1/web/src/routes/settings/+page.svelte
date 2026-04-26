@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import StatusIndicator from '$lib/components/StatusIndicator.svelte';
-    import { preferences, toggleWebSearch, setUiStyle } from '$lib/stores/preferences';
+    import { preferences, toggleWebSearch, setUiStyle, type UiStyle } from '$lib/stores/preferences';
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
     import Ct2Settings from '$lib/ct2/SettingsPage.svelte';
 
@@ -39,6 +39,10 @@
     const isMac = $derived(
         typeof navigator !== 'undefined' && navigator.platform.toLowerCase().includes('mac')
     );
+
+    function isUiStyle(style: UiStyle) {
+        return $preferences.uiStyle === style;
+    }
 
     let contextSize = $state(0);
     let maxContextSize = $state(0);
@@ -358,12 +362,44 @@
     interface Workspace { id: string; name: string; created_at: string; file_count: number; }
     let workspaces = $state<Workspace[]>([]);
     let deletingWs = $state<string | null>(null);
+    let wsCreating = $state(false);
+    let wsNewName = $state('');
+    let wsNewInput = $state<HTMLInputElement | null>(null);
 
     async function loadWorkspaces() {
         try {
             const res = await fetch('/api/workspaces');
             workspaces = await res.json();
         } catch {}
+    }
+
+    function startWsCreate() {
+        wsCreating = true;
+        wsNewName = '';
+        requestAnimationFrame(() => wsNewInput?.focus());
+    }
+
+    async function submitWsCreate() {
+        const trimmed = wsNewName.trim();
+        wsCreating = false;
+        wsNewName = '';
+        if (!trimmed) return;
+        try {
+            const res = await fetch('/api/workspaces', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: trimmed }),
+            });
+            const ws: Workspace = await res.json();
+            workspaces = [ws, ...workspaces];
+        } catch {}
+    }
+
+    function cancelWsCreate() { wsCreating = false; wsNewName = ''; }
+
+    function handleWsCreateKeydown(e: KeyboardEvent) {
+        if (e.key === 'Enter') submitWsCreate();
+        else if (e.key === 'Escape') cancelWsCreate();
     }
 
     async function deleteWorkspace(id: string) {
@@ -952,11 +988,25 @@
         <div class="section-head">
             <div class="section-head-text">
                 <h2 class="section-title">Workspaces</h2>
-                <p class="section-desc">Project workspaces created from the sidebar. Delete old ones to free space.</p>
+                <p class="section-desc">Project folders for computer mode. Delete old ones to free up space.</p>
             </div>
+            <button class="scan-btn" onclick={startWsCreate}>New workspace</button>
         </div>
-        {#if workspaces.length === 0}
-            <p class="ws-empty">No workspaces yet — create one from the sidebar when you want to work inside a project.</p>
+        {#if wsCreating}
+            <div class="ws-create-row">
+                <input
+                    class="ws-create-input"
+                    bind:this={wsNewInput}
+                    bind:value={wsNewName}
+                    placeholder="Project name"
+                    onkeydown={handleWsCreateKeydown}
+                />
+                <button class="save-btn" onmousedown={(e) => e.preventDefault()} onclick={submitWsCreate}>Create</button>
+                <button class="btn-outline" onclick={cancelWsCreate}>Cancel</button>
+            </div>
+        {/if}
+        {#if workspaces.length === 0 && !wsCreating}
+            <p class="ws-empty">No workspaces yet.</p>
         {:else}
             <div class="ws-list">
                 {#each workspaces as ws (ws.id)}
@@ -993,7 +1043,7 @@
                 <span class="toggle-info" style="width: 100%;">
                     <span class="toggle-name">Interface style <span style="font-size:10px; font-weight:500; opacity:0.45; letter-spacing:0.06em; text-transform:uppercase; margin-left:6px;">uiStyle</span></span>
                     <span class="toggle-hint">
-                        {#if $preferences.uiStyle === 'ct2'}
+                        {#if isUiStyle('ct2')}
                             Geist font · ambient gradient background · OKLCH colors · phase progress track
                         {:else}
                             Inter font · spinning ASCII donut · glass-surface color tokens
@@ -1003,12 +1053,12 @@
                 <div class="seg-group" role="group" aria-label="Interface style">
                     <button
                         class="seg-btn"
-                        class:active={$preferences.uiStyle === 'classic'}
+                        class:active={isUiStyle('classic')}
                         onclick={() => setUiStyle('classic')}
                     >Classic</button>
                     <button
                         class="seg-btn"
-                        class:active={$preferences.uiStyle === 'ct2'}
+                        class:active={isUiStyle('ct2')}
                         onclick={() => setUiStyle('ct2')}
                     >CT-2 Design</button>
                 </div>
@@ -1971,6 +2021,27 @@
         color: var(--text-muted);
         padding: 8px 0;
     }
+    .ws-create-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+    .ws-create-input {
+        flex: 1;
+        padding: 8px 14px;
+        font-size: 13px;
+        font-family: inherit;
+        color: var(--text);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        outline: none;
+        min-width: 0;
+        transition: border-color 0.15s;
+    }
+    .ws-create-input:focus { border-color: var(--text-muted); }
+    .ws-create-input::placeholder { color: var(--text-muted); }
     .ws-list {
         display: flex;
         flex-direction: column;

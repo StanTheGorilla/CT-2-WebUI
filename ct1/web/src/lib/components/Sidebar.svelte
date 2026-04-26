@@ -16,6 +16,9 @@
     interface Workspace { id: string; name: string; file_count: number; }
     let workspaces = $state<Workspace[]>([]);
     let projectsOpen = $state(true);
+    let creatingWorkspace = $state(false);
+    let newWsName = $state('');
+    let newWsInput = $state<HTMLInputElement | null>(null);
 
     onMount(() => {
         loadConversations();
@@ -39,10 +42,17 @@
         sidebarOpen.set(false);
     }
 
-    async function createWorkspace() {
-        const name = window.prompt('Project name:');
-        if (name === null) return;
-        const trimmed = name.trim();
+    function startCreate() {
+        projectsOpen = true;
+        creatingWorkspace = true;
+        newWsName = '';
+        requestAnimationFrame(() => newWsInput?.focus());
+    }
+
+    async function submitCreate() {
+        const trimmed = newWsName.trim();
+        creatingWorkspace = false;
+        newWsName = '';
         if (!trimmed) return;
         try {
             const res = await fetch('/api/workspaces', {
@@ -54,6 +64,16 @@
             workspaces = [ws, ...workspaces];
             openWorkspace(ws.id);
         } catch { /* ignore */ }
+    }
+
+    function cancelCreate() {
+        creatingWorkspace = false;
+        newWsName = '';
+    }
+
+    function handleCreateKeydown(e: KeyboardEvent) {
+        if (e.key === 'Enter') submitCreate();
+        else if (e.key === 'Escape') cancelCreate();
     }
 
     // ── Time-based grouping ──
@@ -180,38 +200,68 @@
         <!-- ── Scrollable body ── -->
         <div class="scroll-area">
 
-            <!-- ── Projects ── -->
-            {#if workspaces.length > 0}
-                <div class="section-head">
-                    <button class="section-toggle" onclick={() => projectsOpen = !projectsOpen}>
-                        <svg class="chevron" class:closed={!projectsOpen} width="12" height="12" viewBox="0 0 16 16" fill="none">
-                            <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                        Projects
-                    </button>
-                    <button class="section-plus" onclick={createWorkspace} title="New project">
-                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                            <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                        </svg>
-                    </button>
-                </div>
+            <!-- ── Projects — always visible ── -->
+            <div class="section-head">
+                <button class="section-toggle" onclick={() => projectsOpen = !projectsOpen}>
+                    <svg class="chevron" class:closed={!projectsOpen} width="12" height="12" viewBox="0 0 16 16" fill="none">
+                        <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Projects
+                </button>
+                <button class="section-plus" onclick={startCreate} title="New project">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                        <path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
 
-                {#if projectsOpen}
-                    {#each workspaces as ws (ws.id)}
-                        <button
-                            class="row project-row"
-                            class:active={$chat.workspaceId === ws.id}
-                            onclick={() => openWorkspace(ws.id)}
-                        >
-                            <svg class="row-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                <path d="M2 5V3.5A1.5 1.5 0 013.5 2h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 5v7.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V5z" stroke="currentColor" stroke-width="1.1"/>
+            {#if projectsOpen}
+                {#if creatingWorkspace}
+                    <div class="ws-create-row">
+                        <svg class="row-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M2 5V3.5A1.5 1.5 0 013.5 2h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 5v7.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V5z" stroke="currentColor" stroke-width="1.1"/>
+                        </svg>
+                        <input
+                            class="ws-create-input"
+                            bind:this={newWsInput}
+                            bind:value={newWsName}
+                            placeholder="Project name"
+                            onkeydown={handleCreateKeydown}
+                        />
+                        <button class="ws-create-ok" onmousedown={(e) => e.preventDefault()} onclick={submitCreate} title="Create">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <path d="M3 8l4 4 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
-                            <span class="row-text">{ws.name}</span>
-                            {#if ws.file_count > 0}
-                                <span class="badge">{ws.file_count}</span>
-                            {/if}
                         </button>
-                    {/each}
+                        <button class="ws-create-cancel" onmousedown={(e) => e.preventDefault()} onclick={cancelCreate} title="Cancel">
+                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                                <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                {/if}
+
+                {#each workspaces as ws (ws.id)}
+                    <button
+                        class="row project-row"
+                        class:active={$chat.workspaceId === ws.id}
+                        onclick={() => openWorkspace(ws.id)}
+                    >
+                        <svg class="row-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M2 5V3.5A1.5 1.5 0 013.5 2h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 5v7.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V5z" stroke="currentColor" stroke-width="1.1"/>
+                        </svg>
+                        <span class="row-text">{ws.name}</span>
+                        {#if ws.file_count > 0}
+                            <span class="badge">{ws.file_count}</span>
+                        {/if}
+                    </button>
+                {/each}
+
+                {#if workspaces.length === 0 && !creatingWorkspace}
+                    <div class="ws-empty-hint">No projects yet — click + to create one</div>
+                {/if}
+
+                {#if workspaces.length > 0}
                     <div class="divider"></div>
                 {/if}
             {/if}
@@ -282,17 +332,6 @@
             {/if}
         </div>
 
-        <!-- ── Bottom: create project shortcut ── -->
-        {#if workspaces.length === 0}
-            <div class="bottom-bar">
-                <button class="bottom-link" onclick={createWorkspace}>
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                        <path d="M2 5V3.5A1.5 1.5 0 013.5 2h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 5v7.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V5z" stroke="currentColor" stroke-width="1.1"/>
-                    </svg>
-                    New project
-                </button>
-            </div>
-        {/if}
     </div>
 </aside>
 
@@ -716,32 +755,58 @@
         color: var(--text-muted);
     }
 
-    /* ─── Bottom bar ─── */
-    .bottom-bar {
-        flex-shrink: 0;
-        padding: 14px 20px 20px;
-        border-top: 1px solid var(--border-subtle);
-        background: transparent;
-    }
-    .bottom-link {
+    /* ─── Inline workspace create ─── */
+    .ws-create-row {
         display: flex;
         align-items: center;
-        gap: 10px;
-        width: 100%;
-        padding: 12px 14px;
-        border: 1px solid transparent;
+        gap: 6px;
+        padding: 7px 10px;
+        margin-bottom: 4px;
         border-radius: 14px;
-        background: none;
-        color: var(--text-muted);
-        font-family: var(--font-body);
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 150ms ease;
-    }
-    .bottom-link:hover {
-        color: var(--text-secondary);
+        border: 1px solid var(--border-strong);
         background: var(--surface-hover);
-        border-color: var(--border);
+    }
+
+    .ws-create-input {
+        flex: 1;
+        font-size: 13.5px;
+        font-weight: 500;
+        color: var(--text);
+        background: transparent;
+        border: none;
+        outline: none;
+        font-family: var(--font-body);
+        min-width: 0;
+        letter-spacing: -0.01em;
+    }
+    .ws-create-input::placeholder {
+        color: var(--text-muted);
+        font-weight: 400;
+    }
+
+    .ws-create-ok,
+    .ws-create-cancel {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        background: none;
+        border: none;
+        border-radius: 7px;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: color 150ms ease, background 150ms ease;
+    }
+    .ws-create-ok { color: var(--text-secondary); }
+    .ws-create-ok:hover { color: var(--text); background: var(--surface); }
+    .ws-create-cancel { color: var(--text-muted); }
+    .ws-create-cancel:hover { color: var(--error); background: rgba(207, 34, 46, 0.08); }
+
+    .ws-empty-hint {
+        font-size: 12px;
+        color: var(--text-muted);
+        padding: 6px 14px 8px;
+        font-style: italic;
     }
 </style>
