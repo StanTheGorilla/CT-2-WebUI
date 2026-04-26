@@ -17,6 +17,23 @@
     let lastPendingLen = 0;
     let lastWorkspaceId: string | null = null;
 
+    const APPROVAL_TIMEOUT = 60;
+    let approvalCountdown = $state(APPROVAL_TIMEOUT);
+    let _approvalTimer: ReturnType<typeof setInterval> | null = null;
+
+    $effect(() => {
+        if (pendingApproval) {
+            approvalCountdown = APPROVAL_TIMEOUT;
+            if (_approvalTimer) clearInterval(_approvalTimer);
+            _approvalTimer = setInterval(() => {
+                approvalCountdown = Math.max(0, approvalCountdown - 1);
+            }, 1000);
+        } else {
+            if (_approvalTimer) { clearInterval(_approvalTimer); _approvalTimer = null; }
+        }
+        return () => { if (_approvalTimer) clearInterval(_approvalTimer); };
+    });
+
     $effect(() => {
         if (!workspaceId) {
             lastWorkspaceId = null;
@@ -172,13 +189,22 @@
     <pre class="term-output" bind:this={outputEl}>{output}{#if !output}<span class="term-welcome">workspace ready — type a command below</span>{/if}</pre>
     {#if pendingApproval}
         <div class="term-approval">
+            <div class="term-approval-header">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+                <span class="term-approval-label">AI wants to run a command</span>
+                <span class="term-approval-countdown" class:term-countdown-urgent={approvalCountdown <= 15}>
+                    {approvalCountdown}s
+                </span>
+            </div>
             <div class="term-approval-cmd">
-                <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 9l4-3-4-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 <code class="term-approval-text">{pendingApproval.command}</code>
             </div>
             <div class="term-approval-actions">
-                <button class="term-approve-btn term-approve-reject" onclick={() => respondToApproval(false)}>Reject</button>
-                <button class="term-approve-btn term-approve-ok" onclick={() => respondToApproval(true)}>Approve</button>
+                <button class="term-approve-btn term-approve-reject" onclick={() => respondToApproval(false)}>Deny</button>
+                <button class="term-approve-btn term-approve-ok" onclick={() => respondToApproval(true)}>Allow</button>
             </div>
         </div>
     {/if}
@@ -318,40 +344,62 @@
 
     .term-approval {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 8px 14px;
-        background: rgba(255, 165, 0, 0.07);
-        border-top: 1px solid rgba(255, 165, 0, 0.18);
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 14px 12px;
+        background: rgba(255, 150, 0, 0.09);
+        border-top: 1px solid rgba(255, 150, 0, 0.28);
         flex-shrink: 0;
     }
-    .term-approval-cmd {
+    .term-approval-header {
         display: flex;
         align-items: center;
-        gap: 6px;
-        color: rgba(255, 165, 0, 0.7);
+        gap: 7px;
+        color: rgba(255, 180, 60, 0.9);
+        font-size: 11.5px;
+        font-weight: 600;
+    }
+    .term-approval-label { flex: 1; }
+    .term-approval-countdown {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        color: rgba(255, 180, 60, 0.65);
+        font-weight: 500;
+    }
+    .term-countdown-urgent {
+        color: rgba(255, 90, 60, 0.9);
+        animation: term-blink 0.6s ease-in-out infinite alternate;
+    }
+    @keyframes term-blink {
+        from { opacity: 1; }
+        to { opacity: 0.4; }
+    }
+    .term-approval-cmd {
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 5px;
+        padding: 5px 10px;
         min-width: 0;
         overflow: hidden;
     }
     .term-approval-text {
-        font: inherit;
-        font-size: 11.5px;
-        color: rgba(255, 200, 100, 0.9);
+        font-family: 'Geist Mono', monospace;
+        font-size: 12px;
+        color: rgba(255, 220, 140, 0.95);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        display: block;
     }
     .term-approval-actions {
         display: flex;
         gap: 6px;
-        flex-shrink: 0;
     }
     .term-approve-btn {
-        height: 24px;
-        padding: 0 10px;
+        height: 26px;
+        padding: 0 14px;
         border-radius: 5px;
-        font-size: 11.5px;
+        font-size: 12px;
         font-family: inherit;
         cursor: pointer;
         font-weight: 500;
@@ -364,9 +412,9 @@
     }
     .term-approve-reject:hover { opacity: 0.75; }
     .term-approve-ok {
-        background: rgba(255, 165, 0, 0.22);
-        border: 1px solid rgba(255, 165, 0, 0.4);
-        color: rgba(255, 200, 80, 0.95);
+        background: rgba(255, 150, 0, 0.25);
+        border: 1px solid rgba(255, 150, 0, 0.45);
+        color: rgba(255, 210, 80, 1);
     }
     .term-approve-ok:hover { opacity: 0.85; }
 </style>

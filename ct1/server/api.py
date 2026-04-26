@@ -341,7 +341,7 @@ def _make_computer_tool_executor(queue: asyncio.Queue, workspace, ws_id: str, re
                     except asyncio.QueueFull:
                         pass
                     try:
-                        approved = await asyncio.wait_for(asyncio.shield(fut), timeout=120)
+                        approved = await asyncio.wait_for(asyncio.shield(fut), timeout=60)
                     except (asyncio.TimeoutError, asyncio.CancelledError):
                         _pending_approvals.pop(approval_id, None)
                         results.append(f"[command timed out waiting for approval: {cmd}]")
