@@ -10,6 +10,10 @@ class Brain(Engine):
         super().__init__(base_url=base_url, **kwargs)
 
     @staticmethod
+    def _text(result) -> str:
+        return result if isinstance(result, str) else result.get("text", "")
+
+    @staticmethod
     def _parse_json(text: str, fallback: dict) -> dict:
         if not text:
             return fallback
@@ -39,7 +43,7 @@ class Brain(Engine):
             "requirements": [],
             "complexity": "deep" if "?" in goal else "moderate",
         }
-        return self._parse_json(result, fallback)
+        return self._parse_json(self._text(result), fallback)
 
     def write_deliberation_brief(self, intent: dict) -> str:
         requirements = intent.get("requirements") or []
@@ -76,7 +80,7 @@ class Brain(Engine):
             "reason": "Could not determine convergence.",
             "agreed_approach": "",
         }
-        return self._parse_json(result, fallback)
+        return self._parse_json(self._text(result), fallback)
 
     async def synthesize(self, goal: str, intent: dict, dialogue: list[dict]) -> str:
         dialogue_text = "\n".join(
@@ -108,4 +112,5 @@ class Brain(Engine):
                 ),
             },
         ]
-        return await self._call(messages, enable_thinking=False)
+        result = await self._call(messages, enable_thinking=False)
+        return self._text(result)

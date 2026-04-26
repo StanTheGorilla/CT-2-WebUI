@@ -678,7 +678,24 @@ class Orchestrator:
             tools=tools,
             tool_executor=tool_executor,
         )
-        return result["text"], result.get("thinking", ""), False
+        draft = result["text"]
+        draft_thinking = result.get("thinking", "")
+        draft, draft_thinking, _finish_reason, _ = await self._continue_after_length(
+            draft=draft,
+            draft_thinking=draft_thinking,
+            finish_reason=result.get("finish_reason"),
+            goal_text=goal,
+            route=route,
+            continuation_context=(conversation or []) + [{"role": "user", "content": goal}],
+            specialist_data=specialist_data,
+            plan=None,
+            task_ovr=task_overrides or {},
+            emit=emit,
+            on_token=on_token,
+            tools=tools,
+            tool_executor=tool_executor,
+        )
+        return draft, draft_thinking, False
 
     # ── Self-planning via Engine ────────────────────────────────────────
 
@@ -751,7 +768,6 @@ class Orchestrator:
         self, goal, goal_text: str, conversation: list[dict],
         emit, on_token, task_ovr: dict,
         skip_refinement: bool = False,
-        mode: str = "new",
         tools: list[dict] | None = None,
         tool_executor=None,
     ) -> dict:
@@ -794,6 +810,9 @@ class Orchestrator:
                     "thinking": "", "draft": "", "draft_thinking": "",
                     "route": "ROUTE_DESIGN", "specialist_data": None,
                     "plan": None,
+                    "finish_reason": None,
+                    "truncated": False,
+                    "auto_continuations": 0,
                     "reflection": {
                         "goal": goal_text[:200], "complexity": "failed",
                         "lesson": "spec generation failed twice",
@@ -822,6 +841,7 @@ class Orchestrator:
 
         print(f"[design] Phase 0.5: {len(spec.get('components', []))} components, "
               f"layout={spec.get('layout_order')}")
+        emit("spec_validated", spec=spec)
 
         # ── Phase 1: Engine generates full HTML ──────────────────────
         emit("generating", editing=False)
@@ -904,6 +924,22 @@ class Orchestrator:
         )
         draft = result["text"]
         draft_thinking = result.get("thinking", "")
+        finish_reason = result.get("finish_reason")
+        draft, draft_thinking, finish_reason, auto_continuations = await self._continue_after_length(
+            draft=draft,
+            draft_thinking=draft_thinking,
+            finish_reason=finish_reason,
+            goal_text=goal_text,
+            route="ROUTE_DESIGN",
+            continuation_context=gen_conversation,
+            specialist_data=None,
+            plan=None,
+            task_ovr=task_ovr,
+            emit=emit,
+            on_token=on_token,
+            tools=tools,
+            tool_executor=tool_executor,
+        )
 
         # ── Phase 2: Cleanup ──────────────────────────────────────
         from ct1.core.formatter import strip_think_tags, extract_code
@@ -952,6 +988,9 @@ class Orchestrator:
             "route": "ROUTE_DESIGN",
             "specialist_data": _json.dumps(spec),
             "plan": None,
+            "finish_reason": finish_reason,
+            "truncated": finish_reason == "length",
+            "auto_continuations": auto_continuations,
             "reflection": None,  # Reflection handled by caller
             "spec": spec,
             "detected_lang": "html",
@@ -1071,7 +1110,7 @@ class Orchestrator:
         # Resolve per-task parameter overrides for this route
         task_ovr = self._get_task_overrides(route, user_message)
 
-        # ── ROUTE_DESIGN: Precision-Design pipeline (replaces old flow) ──
+        # ── ROUTE_DESIGN: Precision-Design pipeline ──
         if route == "ROUTE_DESIGN":
             def on_token(token, kind):
                 emit("token", text=token, kind=kind)
@@ -1085,7 +1124,6 @@ class Orchestrator:
                     goal, goal_text, conversation,
                     emit, on_token, task_ovr,
                     skip_refinement=skip_refinement,
-                    mode=mode,
                     tools=tools,
                     tool_executor=tool_executor,
                 )
@@ -1146,6 +1184,8 @@ class Orchestrator:
             emit("token", text=token, kind=kind)
 
         used_section_edit = False
+        finish_reason = None
+        auto_continuations = 0
 
         if is_edit and is_code:
             draft, draft_thinking, used_section_edit = await self._generate_edit(
@@ -1184,6 +1224,22 @@ class Orchestrator:
             )
             draft = result["text"]
             draft_thinking = result.get("thinking", "")
+            finish_reason = result.get("finish_reason")
+            draft, draft_thinking, finish_reason, auto_continuations = await self._continue_after_length(
+                draft=draft,
+                draft_thinking=draft_thinking,
+                finish_reason=finish_reason,
+                goal_text=goal_text,
+                route=route,
+                continuation_context=(conversation or []) + [{"role": "user", "content": goal_text}],
+                specialist_data=specialist_data,
+                plan=plan,
+                task_ovr=task_ovr,
+                emit=emit,
+                on_token=on_token,
+                tools=tools,
+                tool_executor=tool_executor,
+            )
 
         emit("draft", text=draft, thinking=draft_thinking)
 
@@ -1511,7 +1567,6 @@ class Orchestrator:
                 _detected_lang = "javascript"  # ROUTE_CODE always produces code, never plain text
             _files = []
         elif route == "ROUTE_COMPUTER":
-            _detected_lang = "multi"
             _parsed = self._parse_multi_file(final_response)
             _files = [
                 {
@@ -1524,6 +1579,10 @@ class Orchestrator:
                 }
                 for f in _parsed
             ]
+            # Use "multi" only when files were written via markers — signals the output card.
+            # When the AI used tool calls and wrote a prose summary, use "text" so it
+            # renders as a normal chat bubble rather than an opaque file block.
+            _detected_lang = "multi" if _parsed else "text"
         else:  # ROUTE_DIRECT
             _detected_lang = "text"
             _files = []
@@ -1536,6 +1595,9 @@ class Orchestrator:
             "route": route,
             "specialist_data": specialist_data,
             "plan": plan,
+            "finish_reason": finish_reason,
+            "truncated": finish_reason == "length",
+            "auto_continuations": auto_continuations,
             "reflection": reflection,
             "tier": self.tier,
             "detected_lang": _detected_lang,
@@ -1549,6 +1611,236 @@ class Orchestrator:
         self.journal.write(reflection)
         self.engine.lessons = self.journal_reader.get_recent_lessons(10)
         return reflection
+
+    async def compact_conversation(self, conversation: list[dict]) -> list[dict]:
+        """Compact a long conversation into an actionable summary + latest artifact.
+
+        Returns 1-2 turns: a user-role summary and optionally the latest code
+        as an assistant turn, so the model can continue editing it.
+        """
+        if not conversation:
+            return []
+
+        # Find the latest code artifact (HTML page, script, etc.)
+        latest_code = ""
+        for msg in reversed(conversation):
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                if not isinstance(content, str):
+                    continue
+                s = content.strip()
+                is_bare_html = s.lower().startswith(("<!doctype", "<html"))
+                is_bare_script = (
+                    len(s) > 200
+                    and s.startswith((
+                        "import ", "from ", "def ", "class ",
+                        "const ", "let ", "var ", "function ",
+                    ))
+                    and "```" not in s[:200]
+                )
+                if is_bare_html or is_bare_script:
+                    latest_code = content
+                    break
+
+        # Build a transcript, skipping slim placeholders and truncating large blobs
+        lines = []
+        for m in conversation:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            # Tool call turns: summarize each called function
+            if role == "assistant" and m.get("tool_calls"):
+                calls_desc = []
+                for tc in m["tool_calls"]:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "?")
+                    try:
+                        import json as _json
+                        args = _json.loads(fn.get("arguments", "{}"))
+                        if name == "bash":
+                            calls_desc.append(f"bash({args.get('command','?')[:80]})")
+                        elif name == "write_file":
+                            calls_desc.append(f"write_file({args.get('path','?')})")
+                        elif name == "read_file":
+                            calls_desc.append(f"read_file({args.get('path','?')})")
+                        else:
+                            calls_desc.append(name)
+                    except Exception:
+                        calls_desc.append(name)
+                lines.append(f"ASSISTANT [tool]: {', '.join(calls_desc)}")
+                continue
+            # Tool result turns
+            if role == "tool":
+                result_preview = (str(content)[:300] + "…") if len(str(content)) > 300 else str(content)
+                lines.append(f"TOOL RESULT: {result_preview}")
+                continue
+            if not isinstance(content, str):
+                continue
+            if content.strip() in ("(Previous code output omitted.)",):
+                continue
+            preview = (content[:500] + "…") if len(content) > 500 else content
+            lines.append(f"{role.upper()}: {preview}")
+        transcript = "\n\n".join(lines)
+
+        prompt = (
+            "Summarize this AI assistant conversation into a compact, actionable context block.\n"
+            "Use exactly these section headers:\n"
+            "PROJECT: [what is being built — type, purpose, key requirements]\n"
+            "COMPLETED: [what has been finished — include files created and commands run]\n"
+            "PREFERENCES: [user's style, design, or functional preferences explicitly stated]\n"
+            "CURRENT STATE: [the current output or working state — describe concisely]\n"
+            "PENDING: [unfinished work, errors still to fix, or next steps the user mentioned]\n\n"
+            "Be specific and actionable. Bullet points inside sections are fine.\n"
+            "If this is a workspace/coding session, list the key files created and their purpose.\n"
+            "This summary replaces the full conversation history — make it self-contained.\n\n"
+            f"CONVERSATION TO SUMMARIZE:\n{transcript}"
+        )
+
+        try:
+            raw = await self.engine._call(
+                [{"role": "user", "content": prompt}],
+                max_tokens=700,
+                temperature=0.1,
+                enable_thinking=False,
+            )
+            summary = raw if isinstance(raw, str) else raw.get("text", "")
+            summary = strip_think_tags(summary).strip()
+        except Exception as e:
+            print(f"[orch] compact_conversation summary failed: {e}")
+            summary = f"Previous conversation with {len(conversation)} messages."
+
+        compacted = [{
+            "role": "user",
+            "content": (
+                f"[CONTEXT SUMMARY — {len(conversation)} turns compacted to save memory]\n\n"
+                f"{summary}"
+            ),
+        }]
+
+        if latest_code:
+            # Truncate very large artifacts; enough for the model to edit
+            if len(latest_code) > 12000:
+                latest_code = latest_code[:12000] + "\n\n/* ... truncated for context ... */"
+            compacted.append({"role": "assistant", "content": latest_code})
+
+        return compacted
+
+    @staticmethod
+    def _merge_continuation(existing: str, continuation: str) -> str:
+        """Append a continuation while trimming small repeated overlaps."""
+        if not continuation:
+            return existing
+        if not existing:
+            return continuation
+
+        max_overlap = min(len(existing), len(continuation), 400)
+        for size in range(max_overlap, 24, -1):
+            if existing[-size:] == continuation[:size]:
+                return existing + continuation[size:]
+
+        stripped = continuation.strip()
+        if stripped and stripped in existing[-2000:]:
+            return existing
+        return existing + continuation
+
+    @staticmethod
+    def _continuation_prompt(route: str) -> str:
+        """Instruction used when a response hit the context limit mid-generation."""
+        route_hint = {
+            "ROUTE_DESIGN": "Continue the same HTML/CSS/JS document.",
+            "ROUTE_CODE": "Continue the same code output.",
+            "ROUTE_COMPUTER": "Continue the same multi-file output.",
+            "ROUTE_DIRECT": "Continue the same answer.",
+        }.get(route, "Continue the same response.")
+        return (
+            "The previous assistant response was cut off because the context window was exhausted.\n"
+            f"{route_hint}\n"
+            "Continue exactly from where the previous assistant message stopped.\n"
+            "Rules:\n"
+            "- Do not restart from the top.\n"
+            "- Do not repeat content that is already present.\n"
+            "- Do not explain what happened.\n"
+            "- Output only the missing continuation.\n"
+            "- Preserve the same format, indentation, file markers, and style.\n"
+            "- If the previous output ended mid-tag, mid-line, or mid-token, resume naturally."
+        )
+
+    async def _continue_after_length(
+        self,
+        draft: str,
+        draft_thinking: str,
+        finish_reason: str | None,
+        goal_text: str,
+        route: str,
+        continuation_context: list[dict],
+        specialist_data: dict | None,
+        plan: dict | None,
+        task_ovr: dict,
+        emit,
+        on_token,
+        tools: list[dict] | None = None,
+        tool_executor=None,
+    ) -> tuple[str, str, str | None, int]:
+        """Compact older history and continue when generation hit a length/context stop."""
+        attempts = 0
+        current_reason = finish_reason
+        if current_reason != "length" or not draft.strip():
+            return draft, draft_thinking, current_reason, attempts
+
+        while current_reason == "length" and attempts < 3:
+            attempts += 1
+            emit(
+                "compacting",
+                message="Context limit reached — compacting older history and continuing…",
+                source="generation",
+                attempt=attempts,
+            )
+
+            compacted_history = await self.compact_conversation(
+                continuation_context
+                or [{"role": "user", "content": goal_text}]
+            )
+            summary_turn = (
+                compacted_history[:1]
+                if compacted_history
+                else [{"role": "user", "content": f"[CONTEXT SUMMARY]\nCurrent request: {goal_text}"}]
+            )
+            continuation_conversation = [
+                *summary_turn,
+                {"role": "assistant", "content": draft},
+            ]
+
+            continuation_result = await self.engine.generate(
+                self._continuation_prompt(route),
+                route,
+                specialist_data=specialist_data,
+                plan=plan,
+                conversation=continuation_conversation,
+                on_token=on_token,
+                task_overrides=task_ovr,
+                tools=tools,
+                tool_executor=tool_executor,
+            )
+            continuation_text = continuation_result.get("text", "")
+            draft = self._merge_continuation(draft, continuation_text)
+            cont_thinking = continuation_result.get("thinking", "")
+            if cont_thinking:
+                draft_thinking = (
+                    f"{draft_thinking}\n\n{cont_thinking}" if draft_thinking else cont_thinking
+                )
+            current_reason = continuation_result.get("finish_reason")
+
+        if attempts > 0:
+            emit(
+                "continued",
+                message=(
+                    "" if current_reason != "length"
+                    else "Response still hit the context limit after continuing. The message may be incomplete."
+                ),
+                source="generation",
+                attempt=attempts,
+                truncated=(current_reason == "length"),
+            )
+        return draft, draft_thinking, current_reason, attempts
 
     async def _classify_is_question(self, message: str) -> bool:
         """Use the LLM to decide if a message is asking for information vs. requesting action.

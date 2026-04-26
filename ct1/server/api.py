@@ -5,7 +5,7 @@ import yaml
 import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse as _BaseStreamingResponse
 
 
@@ -116,6 +116,7 @@ _cache: ComponentCache | None = None
 _workspace: WorkspaceManager | None = None
 _swapping: bool = False          # True while model swap is in progress
 _shutting_down: bool = False     # True during application shutdown
+_pending_approvals: dict = {}    # approval_id -> asyncio.Future[bool]
 _active_think_tasks: set = set() # Active /ws/think asyncio tasks
 _health_task: asyncio.Task | None = None  # Background health monitor task
 _is_generating: int = 0          # Active generation count (blocks server update)
@@ -163,6 +164,52 @@ _TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["url"],
+            },
+        },
+    },
+]
+
+_COMPUTER_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Run a shell command in the workspace directory. Returns stdout and stderr combined. Use to install packages, run scripts, test code.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to run"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write content to a file in the workspace. Creates parent directories automatically.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative file path, e.g. 'src/app.py'"},
+                    "content": {"type": "string", "description": "Full file content to write"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a file from the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative file path"},
+                },
+                "required": ["path"],
             },
         },
     },
@@ -254,6 +301,136 @@ def _make_tool_executor(queue: asyncio.Queue):
 
         return results
 
+    return _executor
+
+
+def _make_computer_tool_executor(queue: asyncio.Queue, workspace, ws_id: str, require_approval: bool = False):
+    """Tool executor for Computer Mode: bash, write_file, read_file."""
+    import uuid as _uuid
+    _used = {"count": 0}
+
+    async def _executor(tool_calls: list[dict]) -> list[str]:
+        import sys as _sys
+        results: list[str] = []
+        for tc in tool_calls:
+            name = tc.get("name", "")
+            args = tc.get("args", {})
+            _used["count"] += 1
+
+            if name == "bash":
+                cmd = args.get("command", "").strip()
+                if not cmd:
+                    results.append("Error: empty command")
+                    continue
+                if not is_command_safe(cmd):
+                    out = f"$ {cmd}\nBlocked: command not allowed\n"
+                    try:
+                        queue.put_nowait({"event": "terminal_output", "text": out})
+                    except asyncio.QueueFull:
+                        pass
+                    results.append(out)
+                    continue
+                if require_approval:
+                    approval_id = str(_uuid.uuid4())
+                    loop = asyncio.get_event_loop()
+                    fut: asyncio.Future = loop.create_future()
+                    _pending_approvals[approval_id] = fut
+                    try:
+                        queue.put_nowait({"event": "command_approval_request",
+                                          "approval_id": approval_id, "command": cmd})
+                    except asyncio.QueueFull:
+                        pass
+                    try:
+                        approved = await asyncio.wait_for(asyncio.shield(fut), timeout=120)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        _pending_approvals.pop(approval_id, None)
+                        results.append(f"[command timed out waiting for approval: {cmd}]")
+                        continue
+                    if not approved:
+                        try:
+                            queue.put_nowait({"event": "terminal_output",
+                                              "text": f"[rejected: {cmd}]\n"})
+                        except asyncio.QueueFull:
+                            pass
+                        results.append(f"Command rejected by user: {cmd}")
+                        continue
+                try:
+                    queue.put_nowait({"event": "terminal_output", "text": f"$ {cmd}\n"})
+                except asyncio.QueueFull:
+                    pass
+                try:
+                    ws_dir = str(workspace._resolve_safe(ws_id))
+                    shell = "cmd.exe" if _sys.platform == "win32" else "/bin/bash"
+                    flag = "/c" if _sys.platform == "win32" else "-c"
+                    proc = await asyncio.create_subprocess_exec(
+                        shell, flag, cmd,
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                        cwd=ws_dir,
+                    )
+                    if proc.stdin:
+                        proc.stdin.close()
+                        await proc.stdin.wait_closed()
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    output = stdout.decode("utf-8", errors="replace") if stdout else ""
+                    exit_info = f"[exit {proc.returncode}]\n" if proc.returncode else ""
+                    full_out = output + exit_info
+                    try:
+                        queue.put_nowait({"event": "terminal_output", "text": full_out})
+                    except asyncio.QueueFull:
+                        pass
+                    results.append(full_out or "(no output)")
+                except asyncio.TimeoutError:
+                    try:
+                        proc.kill()
+                        await proc.wait()
+                    except Exception:
+                        pass
+                    msg = "[timed out — script may block on input]\n"
+                    try:
+                        queue.put_nowait({"event": "terminal_output", "text": msg})
+                    except asyncio.QueueFull:
+                        pass
+                    results.append(msg)
+                except Exception as e:
+                    results.append(f"Error: {e}")
+
+            elif name == "write_file":
+                path = args.get("path", "").strip()
+                content = args.get("content", "")
+                if not path:
+                    results.append("Error: empty path")
+                    continue
+                try:
+                    workspace.write_file(ws_id, path, content)
+                    try:
+                        queue.put_nowait({"event": "file_saved", "path": path, "workspace_id": ws_id})
+                    except asyncio.QueueFull:
+                        pass
+                    results.append(f"Written {path} ({len(content)} bytes)")
+                except Exception as e:
+                    results.append(f"Error writing {path}: {e}")
+
+            elif name == "read_file":
+                path = args.get("path", "").strip()
+                if not path:
+                    results.append("Error: empty path")
+                    continue
+                try:
+                    content = workspace.read_file(ws_id, path)
+                    results.append(content)
+                except FileNotFoundError:
+                    results.append(f"File not found: {path}")
+                except Exception as e:
+                    results.append(f"Error reading {path}: {e}")
+
+            else:
+                results.append(f"Unknown tool: {name}")
+
+        return results
+
+    _executor._used = _used
     return _executor
 
 
@@ -770,6 +947,25 @@ async def get_config():
         "inference_backend_preference": _raw_cfg.get("inference_backend", "local"),
         "external_connected": bool(_external_backend),
     }
+
+
+class CompactRequest(BaseModel):
+    conversation: list[dict]
+
+@app.post("/api/compact")
+async def compact_conversation(body: CompactRequest):
+    if _orch is None:
+        return {"error": "No model loaded", "conversation": body.conversation}
+    try:
+        compacted = await _orch.compact_conversation(body.conversation)
+        return {
+            "conversation": compacted,
+            "original_turns": len(body.conversation),
+            "compacted_turns": len(compacted),
+        }
+    except Exception as e:
+        print(f"[api] compact endpoint error: {e}")
+        return {"error": str(e), "conversation": body.conversation}
 
 
 async def _refresh_lm_studio_state() -> None:
@@ -1565,6 +1761,27 @@ async def create_conversation_endpoint(body: CreateConversationBody):
     return {"id": conv_id}
 
 
+class ForkConversationBody(BaseModel):
+    upto_position: int | None = None
+    title: str | None = None
+    conversation: list[dict] | None = None
+
+
+@app.post("/api/conversations/{conv_id}/fork")
+async def fork_conversation_endpoint(conv_id: str, body: ForkConversationBody):
+    if body.conversation is not None:
+        forked = await _db.fork_conversation_from_messages(
+            conv_id, body.conversation, body.title
+        )
+    elif body.upto_position is not None:
+        forked = await _db.fork_conversation(conv_id, body.upto_position, body.title)
+    else:
+        raise HTTPException(status_code=400, detail="Missing fork source")
+    if forked is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return forked
+
+
 @app.delete("/api/conversations/{conv_id}")
 async def delete_conversation(conv_id: str):
     deleted = await _db.delete_conversation(conv_id)
@@ -1690,8 +1907,12 @@ async def ws_think(websocket: WebSocket):
                     actual_goal = goal
                     ws_id = msg.get("workspace_id")
                     incoming_conv_id = msg.get("conversation_id")
+                    force_clear_kv = bool(msg.get("force_clear_kv"))
 
-                    if _orch and should_clear_kv_cache(
+                    if _orch and force_clear_kv:
+                        await _orch.clear_kv_cache()
+                        slot_conversation_id = None
+                    elif _orch and should_clear_kv_cache(
                         slot_conversation_id, incoming_conv_id, conversation,
                     ):
                         await _orch.clear_kv_cache()
@@ -1705,9 +1926,7 @@ async def ws_think(websocket: WebSocket):
                             if existing:
                                 file_list = "\n".join(f"  - {p}" for p in existing[:60])
                                 ctx_prefix = (
-                                    f"[EXISTING WORKSPACE FILES]\n{file_list}\n\n"
-                                    "Only output files that need to be created or changed. "
-                                    "Files not listed in your output remain unchanged.\n\n"
+                                    f"[WORKSPACE FILES]\n{file_list}\n\n"
                                 )
                                 if isinstance(actual_goal, str):
                                     actual_goal = ctx_prefix + actual_goal
@@ -1845,8 +2064,17 @@ async def ws_think(websocket: WebSocket):
                     _search_capability = bool(
                         msg.get("search_capability", msg.get("web_search", False))
                     )
-                    _tools = _TOOL_SCHEMAS if _search_capability else None
-                    _tool_executor = _make_tool_executor(queue) if _search_capability else None
+                    _is_computer = mode_override == "computer" and bool(ws_id) and _workspace is not None
+                    if _is_computer:
+                        _tools = _COMPUTER_TOOL_SCHEMAS + (_TOOL_SCHEMAS if _search_capability else [])
+                        _require_approval = bool(msg.get("require_command_approval", False))
+                        _tool_executor = _make_computer_tool_executor(queue, _workspace, ws_id, _require_approval)
+                    elif _search_capability:
+                        _tools = _TOOL_SCHEMAS
+                        _tool_executor = _make_tool_executor(queue)
+                    else:
+                        _tools = None
+                        _tool_executor = None
 
                     result = await _orch.think(
                         actual_goal, on_event=on_event, conversation=conversation,
@@ -1857,7 +2085,14 @@ async def ws_think(websocket: WebSocket):
                         tool_executor=_tool_executor,
                     )
                     # Computer mode: save files → run → inspect → fix loop
-                    if result.get("route") == "ROUTE_COMPUTER" and _workspace:
+                    # Skipped when the AI used tool calls (bash/write_file) — the
+                    # Engine's tool loop already handled everything iteratively.
+                    _used_tool_calls = (
+                        _tool_executor is not None
+                        and hasattr(_tool_executor, "_used")
+                        and _tool_executor._used.get("count", 0) > 0
+                    )
+                    if result.get("route") == "ROUTE_COMPUTER" and _workspace and not _used_tool_calls:
                         # ws_id already resolved above for workspace context injection
                         if not ws_id:
                             try:
@@ -2056,6 +2291,10 @@ async def ws_think(websocket: WebSocket):
                         "reflection": result.get("reflection", {}),
                         "detected_lang": result.get("detected_lang", "text"),
                         "files": result.get("files", []),
+                        "finish_reason": result.get("finish_reason"),
+                        "truncated": result.get("truncated", False),
+                        "auto_continuations": result.get("auto_continuations", 0),
+                        "explanation": result.get("explanation"),
                     })
 
                     # Auto-persist conversation
@@ -2066,7 +2305,7 @@ async def ws_think(websocket: WebSocket):
                             if not conv_id:
                                 title_text = goal if isinstance(goal, str) else (goal[0].get("text", "") if isinstance(goal, list) else str(goal))
                                 title = _heuristic_title(title_text)
-                                conv_id = await _db.create_conversation(title, _raw_cfg.get("active_preset", ""))
+                                conv_id = await _db.create_conversation(title, _raw_cfg.get("active_preset", ""), ws_id or None)
                                 await websocket.send_json({"event": "conversation_id", "id": conv_id})
                                 _is_new_conv = True
 
@@ -2122,7 +2361,13 @@ async def ws_think(websocket: WebSocket):
                 try:
                     await asyncio.gather(current_think_task, stream_task)
                 except asyncio.CancelledError:
-                    await queue.put({"event": "done", "response": "", "route": ""})
+                    await queue.put({
+                        "event": "done",
+                        "response": "",
+                        "route": "",
+                        "truncated": False,
+                        "auto_continuations": 0,
+                    })
                     await stream_task
                 finally:
                     cancel_task.cancel()
@@ -2203,6 +2448,25 @@ async def delete_workspace_file(ws_id: str, file_path: str):
 @app.delete("/api/workspaces/{ws_id}")
 async def delete_workspace(ws_id: str):
     return {"deleted": _workspace.delete_workspace(ws_id)}
+
+
+@app.get("/api/workspaces/{ws_id}/conversation")
+async def get_workspace_conversation(ws_id: str):
+    if not _db or not getattr(_db, '_conn', None):
+        return {}
+    conv = await _db.get_latest_conversation_for_workspace(ws_id)
+    return conv if conv else {}
+
+
+class CommandApprovalBody(BaseModel):
+    approved: bool
+
+@app.post("/api/command-approve/{approval_id}")
+async def command_approve(approval_id: str, body: CommandApprovalBody):
+    fut = _pending_approvals.pop(approval_id, None)
+    if fut and not fut.done():
+        fut.set_result(body.approved)
+    return {"ok": True}
 
 
 # ── Terminal WebSocket (Computer Mode) ───────────────────────────────

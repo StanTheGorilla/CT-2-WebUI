@@ -11,6 +11,49 @@ import re as _re
 from ct1.prompts.manager import _get_prompt_manager as _pm
 
 
+def _compact_tool_history(head_len: int, current_messages: list) -> list:
+    """Compact accumulated tool-call history into a summary when context overflows.
+
+    Keeps the original setup messages (system + user goal), replaces all tool
+    call/result turns with a brief summary, so the model can continue the task.
+    """
+    head = current_messages[:head_len]
+    tool_turns = current_messages[head_len:]
+    if not tool_turns:
+        return current_messages
+
+    steps = []
+    last_output = ""
+    for m in tool_turns:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                fn = tc.get("function", {})
+                name = fn.get("name", "?")
+                try:
+                    args = json.loads(fn.get("arguments", "{}"))
+                    if name == "bash":
+                        steps.append(f"ran: {args.get('command', '?')[:120]}")
+                    elif name == "write_file":
+                        steps.append(f"wrote: {args.get('path', '?')}")
+                    elif name == "read_file":
+                        steps.append(f"read: {args.get('path', '?')}")
+                    else:
+                        steps.append(f"called {name}")
+                except Exception:
+                    steps.append(f"called {name}")
+        elif m.get("role") == "tool":
+            last_output = str(m.get("content", ""))[:400]
+
+    step_list = "\n".join(f"  - {s}" for s in steps) if steps else "  (steps not recorded)"
+    summary = (
+        f"[SESSION CONTEXT COMPACTED — {len(tool_turns)} messages summarized to save memory]\n"
+        f"Steps you have already completed:\n{step_list}"
+        + (f"\n\nMost recent command output:\n{last_output}" if last_output else "")
+        + "\n\nContinue working on the original task. Do not repeat completed steps."
+    )
+    return head + [{"role": "user", "content": summary}]
+
+
 def _repair_json(text: str) -> str:
     """Fix common LLM JSON mistakes so json.loads succeeds.
 
@@ -322,15 +365,26 @@ class Engine:
                 request=r.request, response=r,
             )
 
+        response_json = r.json()
+        choice = response_json["choices"][0]
+
         if enable_thinking:
-            msg = r.json()["choices"][0]["message"]
+            msg = choice["message"]
             content = msg.get("content", "").strip()
             reasoning = msg.get("reasoning_content", "").strip()
             text = content if content else reasoning
             thinking = reasoning if content else ""
-            return {"text": text, "thinking": thinking}
+            return {
+                "text": text,
+                "thinking": thinking,
+                "finish_reason": choice.get("finish_reason"),
+            }
 
-        return r.json()["choices"][0]["message"]["content"].strip()
+        return {
+            "text": choice["message"]["content"].strip(),
+            "thinking": "",
+            "finish_reason": choice.get("finish_reason"),
+        }
 
 
     # ── Streaming call ────────────────────────────────────────────────
@@ -528,9 +582,11 @@ class Engine:
 
             return pending_tool_calls, finish_reason, text[start_len:]
 
+        original_msg_len = len(messages)
         current_messages = list(messages)
         pending_tool_calls, finish_reason, pass_text = await _stream_once(current_messages)
 
+        _compact_count = 0
         while finish_reason == "tool_calls" and tool_executor and pending_tool_calls:
             parsed_calls = []
             for tc in pending_tool_calls:
@@ -578,10 +634,22 @@ class Engine:
 
             pending_tool_calls, finish_reason, pass_text = await _stream_once(current_messages)
 
+            # Context overflow mid-loop: compact history and retry so the task continues
+            if (finish_reason == "length" and tool_executor
+                    and _compact_count < 3
+                    and len(current_messages) > original_msg_len + 2):
+                _compact_count += 1
+                current_messages = _compact_tool_history(original_msg_len, current_messages)
+                pending_tool_calls, finish_reason, pass_text = await _stream_once(current_messages)
+
         # Fallback: if model emitted only reasoning (no content), use reasoning as response
         if not text and thinking:
             text, thinking = thinking, ""
-        return {"text": text.strip(), "thinking": thinking.strip()}
+        return {
+            "text": text.strip(),
+            "thinking": thinking.strip(),
+            "finish_reason": finish_reason,
+        }
 
     @staticmethod
     def _trim_repetition(text: str) -> str:
@@ -1222,7 +1290,7 @@ class Engine:
             messages, max_tokens=self.max_tokens,
             enable_thinking=False,
         )
-        # _call with enable_thinking=False returns a plain string
+        # _call now returns a metadata dict even with thinking disabled.
         text = raw if isinstance(raw, str) else raw.get("text", "")
         return {"text": text}
 

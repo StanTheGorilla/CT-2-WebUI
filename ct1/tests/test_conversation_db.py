@@ -174,3 +174,84 @@ async def test_message_count_in_list(db):
 
     assert conv1_data["message_count"] == 3
     assert conv2_data["message_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fork_conversation_copies_messages_up_to_position(db):
+    """Forking should create a branch conversation trimmed to the selected turn."""
+    conv_id = await db.create_conversation("Branch Me", preset="default")
+    await db.add_message(conv_id, "user", "First", position=0)
+    await db.add_message(
+        conv_id,
+        "assistant",
+        "First reply",
+        position=1,
+        thinking="thinking-1",
+        draft="draft-1",
+        route="ROUTE_DIRECT",
+        specialist_data='{"route":"direct"}',
+        reflection='{"score": 0.8}',
+        detected_lang="markdown",
+    )
+    await db.add_message(conv_id, "user", "Second", position=2)
+    await db.add_message(conv_id, "assistant", "Second reply", position=3)
+
+    forked = await db.fork_conversation(conv_id, upto_position=2)
+
+    assert forked is not None
+    assert forked["id"] != conv_id
+    assert forked["title"] == "Branch Me (branch)"
+
+    forked_conv = await db.get_conversation(forked["id"])
+    assert forked_conv is not None
+    assert forked_conv["preset"] == "default"
+    assert [m["content"] for m in forked_conv["messages"]] == [
+        "First",
+        "First reply",
+        "Second",
+    ]
+    assert [m["position"] for m in forked_conv["messages"]] == [0, 1, 2]
+    assert forked_conv["messages"][1]["thinking"] == "thinking-1"
+    assert forked_conv["messages"][1]["draft"] == "draft-1"
+    assert forked_conv["messages"][1]["route"] == "ROUTE_DIRECT"
+    assert forked_conv["messages"][1]["specialist_data"] == '{"route":"direct"}'
+    assert forked_conv["messages"][1]["reflection"] == '{"score": 0.8}'
+    assert forked_conv["messages"][1]["detected_lang"] == "markdown"
+
+
+@pytest.mark.asyncio
+async def test_fork_conversation_from_messages_uses_visible_history(db):
+    """Forking from frontend-visible turns should preserve the trimmed branch state."""
+    conv_id = await db.create_conversation("Visible History", preset="default")
+
+    forked = await db.fork_conversation_from_messages(
+        conv_id,
+        [
+            {"role": "assistant", "content": "Summary of older turns"},
+            {
+                "role": "user",
+                "content": "Keep this request",
+                "specialistData": {"mode": "design"},
+            },
+            {
+                "role": "assistant",
+                "content": "Keep this reply",
+                "thinking": "kept-thinking",
+                "reflection": {"score": 0.95},
+                "detectedLang": "html",
+            },
+        ],
+    )
+
+    forked_conv = await db.get_conversation(forked["id"])
+    assert forked_conv is not None
+    assert forked_conv["title"] == "Visible History (branch)"
+    assert [m["content"] for m in forked_conv["messages"]] == [
+        "Summary of older turns",
+        "Keep this request",
+        "Keep this reply",
+    ]
+    assert forked_conv["messages"][1]["specialist_data"] == '{"mode": "design"}'
+    assert forked_conv["messages"][2]["thinking"] == "kept-thinking"
+    assert forked_conv["messages"][2]["reflection"] == '{"score": 0.95}'
+    assert forked_conv["messages"][2]["detected_lang"] == "html"
