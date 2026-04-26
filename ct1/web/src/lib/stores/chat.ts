@@ -1,7 +1,7 @@
 import { writable, get } from 'svelte/store';
 import { WS } from '$lib/ws';
 import { preferences } from '$lib/stores/preferences';
-import { updateConversationTitle } from '$lib/stores/conversations';
+import { activeConversationId, loadConversations, updateConversationTitle } from '$lib/stores/conversations';
 
 export interface Attachment {
     type: 'image' | 'file';
@@ -58,6 +58,16 @@ export interface Turn {
     alternatives?: string[];
     /** Currently displayed version index; alternatives.length = current/latest */
     altIndex?: number;
+    /** True for the synthetic summary turn inserted after compaction */
+    isCompacted?: boolean;
+    /** Original persisted message position when loaded from history */
+    messagePosition?: number;
+    /** Backend reported finish reason for the final generation call */
+    finishReason?: string;
+    /** True if the backend still hit a length stop after auto-continuation */
+    truncated?: boolean;
+    /** Number of automatic compact-and-continue passes used */
+    autoContinuations?: number;
 }
 
 export interface Reflection {
@@ -156,6 +166,7 @@ interface ChatState {
     undoStack: string[];
     terminalOutput: string;
     pendingCommands: string[];
+    pendingApproval: { id: string; command: string } | null;
     contextFiles: string[];
     workspaceId: string | null;
     phase: 'idle' | 'routing' | 'planning' | 'generating'
@@ -173,6 +184,7 @@ interface ChatState {
     tokenCount: number;
     genStartTime: number;
     tokensPerSec: number;
+    isCompacting: boolean;
     savedFiles: string[];
     fetchingUrls: { url: string; status: 'fetching' | 'done' | 'failed'; error?: string }[];
     fetchedContent: { url: string; title: string; content: string;
@@ -183,6 +195,7 @@ interface ChatState {
     atlasCandidates: AtlasCandidate[];
     atlasPhase: 'estimating' | 'generating' | 'testing' | 'selecting' | 'repairing' | null;
     atlasEffort: AtlasEffort | null;
+    forceClearKvOnNextThink: boolean;
 }
 
 const initial: ChatState = {
@@ -210,6 +223,7 @@ const initial: ChatState = {
     undoStack: [],
     terminalOutput: '',
     pendingCommands: [],
+    pendingApproval: null,
     contextFiles: [],
     workspaceId: null,
     phase: 'idle',
@@ -218,6 +232,7 @@ const initial: ChatState = {
     tokenCount: 0,
     genStartTime: 0,
     tokensPerSec: 0,
+    isCompacting: false,
     savedFiles: [],
     fetchingUrls: [],
     fetchedContent: [],
@@ -226,11 +241,37 @@ const initial: ChatState = {
     atlasCandidates: [],
     atlasPhase: null,
     atlasEffort: null,
+    forceClearKvOnNextThink: false,
 };
 
 export const chat = writable<ChatState>({ ...initial });
 
 export const pendingInputPrompt = writable<string>('');
+
+// Model context size — set once from /api/config so sendThink can decide when to compact
+let _contextSize = 0;
+export function setContextSize(n: number) { _contextSize = n; }
+
+function estimateContentTokens(content: unknown): number {
+    if (typeof content === 'string') {
+        return Math.round(content.length / 3.0);
+    }
+    if (Array.isArray(content)) {
+        return content.reduce((acc, part) => {
+            if (!part || typeof part !== 'object') return acc;
+            const typedPart = part as Record<string, any>;
+            if (typedPart.type === 'text') {
+                return acc + Math.round(String(typedPart.text ?? '').length / 3.0);
+            }
+            if (typedPart.type === 'image_url') {
+                // Images consume prompt budget too, but nowhere near the size of the data URL.
+                return acc + 85;
+            }
+            return acc + 16;
+        }, 0);
+    }
+    return Math.round(JSON.stringify(content ?? '').length / 3.0);
+}
 
 let ws: WS | null = null;
 
@@ -243,11 +284,13 @@ const ALLOWED_CANCEL_EVENTS = new Set([
     'title_update',
     'file_saved',
     'terminal_output',
+    'command_approval_request',
 ]);
 
 function clearWorkspaceSessionState(s: ChatState) {
     s.contextFiles = [];
     s.pendingCommands = [];
+    s.pendingApproval = null;
     s.savedFiles = [];
     s.terminalOutput = '';
 }
@@ -402,6 +445,7 @@ function handleEvent(data: Record<string, any>) {
                 if (s.phase === 'done' && lastTurn?.role === 'assistant') {
                     break;
                 }
+                s.isCompacting = false;
                 s.phase = 'done';
                 s.response = data.response || s.streamingText || '';
                 s.thinking = data.thinking || s.streamingThinking || '';
@@ -416,6 +460,11 @@ function handleEvent(data: Record<string, any>) {
                 if (!s.route) s.route = data.route || '';
                 if (!s.specialistData) s.specialistData = data.specialist_data || null;
                 s.reflection = data.reflection;
+                if (data.truncated) {
+                    s.warning = 'The response still hit the context limit after auto-continuation, so it may be incomplete.';
+                } else if (s.warning.startsWith('The response still hit the context limit')) {
+                    s.warning = '';
+                }
                 // Only treat as code file if the route is code-type AND actual code was detected
                 // (detected_lang 'text' means the AI answered in prose — show it as a chat bubble)
                 const _detectedLang = data.detected_lang ?? 'text';
@@ -449,6 +498,9 @@ function handleEvent(data: Record<string, any>) {
                         files: data.files ?? [],
                         alternatives: newAlts,
                         altIndex: newAltIdx,
+                        finishReason: data.finish_reason || undefined,
+                        truncated: !!data.truncated,
+                        autoContinuations: Number(data.auto_continuations || 0),
                     },
                 ];
                 break;
@@ -527,6 +579,9 @@ function handleEvent(data: Record<string, any>) {
             case 'terminal_output':
                 // Computer mode: command execution output
                 s.terminalOutput += data.text || '';
+                break;
+            case 'command_approval_request':
+                s.pendingApproval = { id: data.approval_id, command: data.command };
                 break;
             case 'run_commands':
                 // Computer mode: AI wants to run these commands in the interactive terminal
@@ -653,10 +708,21 @@ function handleEvent(data: Record<string, any>) {
                 break;
             case 'atlas_repair_result':
                 break;
+            case 'compacting':
+                s.isCompacting = true;
+                if (data.message) s.warning = data.message;
+                break;
+            case 'continued':
+                s.isCompacting = false;
+                s.warning = data.truncated
+                    ? (data.message || 'The response still hit the context limit and may be incomplete.')
+                    : '';
+                break;
             case 'warning':
                 s.warning = data.message || '';
                 break;
             case 'error':
+                s.isCompacting = false;
                 s.phase = 'done';
                 s.response = `**Error:** ${data.message || 'Unknown error'}`;
                 break;
@@ -686,6 +752,7 @@ export function loadFromHistory(conv: {
         id?: string;
         role: string;
         content: string;
+        position?: number;
         thinking?: string;
         draft?: string;
         route?: string;
@@ -699,8 +766,11 @@ export function loadFromHistory(conv: {
         s.conversationId = conv.id;
         s.conversation = conv.messages.map((m) => {
             const route = m.route || undefined;
-            // Derive isCode from route, or detect HTML for old messages without route
-            const isCode = route === 'ROUTE_DESIGN' || route === 'ROUTE_CODE' || route === 'ROUTE_COMPUTER'
+            // Derive isCode from route, or detect HTML for old messages without route.
+            // ROUTE_COMPUTER only counts as "code" when detected_lang is "multi" (file markers
+            // were used). A prose summary from the tool-call path has detected_lang "text".
+            const isCode = route === 'ROUTE_DESIGN' || route === 'ROUTE_CODE'
+                || (route === 'ROUTE_COMPUTER' && (m.detected_lang ?? 'text') !== 'text')
                 || (m.role === 'assistant' && /^<!doctype\s/i.test(m.content.trim()));
 
             // Derive detectedLang: use saved value, or fall back from route for older messages
@@ -722,6 +792,7 @@ export function loadFromHistory(conv: {
                 role: m.role as 'user' | 'assistant',
                 content: m.content,
                 messageId: m.id,
+                messagePosition: m.position,
                 thinking: m.thinking || undefined,
                 route,
                 isCode,
@@ -762,9 +833,29 @@ export function newConversation() {
     chat.set({ ...initial });
 }
 
-export function revertToTurn(userTurnIdx: number) {
+export async function revertToTurn(userTurnIdx: number) {
+    let sourceConversationId: string | null = null;
+    let forkConversation: Array<Record<string, any>> = [];
+
     chat.update((s) => {
-        s.conversation = s.conversation.slice(0, userTurnIdx + 2);
+        sourceConversationId = s.conversationId;
+        const trimmedConversation = s.conversation.slice(0, userTurnIdx + 1);
+        forkConversation = trimmedConversation.map((turn) => ({
+            role: turn.role,
+            content: turn.content,
+            thinking: turn.thinking,
+            draftThinking: turn.draftThinking,
+            route: turn.route,
+            specialistData: turn.specialistData,
+            reflection: turn.reflection,
+            feedback: turn.feedback,
+            detectedLang: turn.detectedLang,
+        }));
+        s.conversation = trimmedConversation.map((turn) => ({
+            ...turn,
+            messageId: undefined,
+            messagePosition: undefined,
+        }));
         s.phase = 'idle';
         s.response = '';
         s.route = '';
@@ -775,9 +866,42 @@ export function revertToTurn(userTurnIdx: number) {
         s.thinking = '';
         s.draft = '';
         s.draftThinking = '';
+        s.events = [];
+        s.undoStack = [];
+        s.forceClearKvOnNextThink = true;
         clearTransientTurnState(s);
         return s;
     });
+
+    if (!sourceConversationId) {
+        activeConversationId.set(null);
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/conversations/${sourceConversationId}/fork`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ conversation: forkConversation }),
+        });
+        if (!res.ok) {
+            throw new Error(`fork failed: ${res.status}`);
+        }
+        const data = await res.json();
+        chat.update((s) => {
+            s.conversationId = data.id;
+            s.forceClearKvOnNextThink = false;
+            return s;
+        });
+        activeConversationId.set(data.id);
+        await loadConversations();
+    } catch {
+        chat.update((s) => {
+            s.conversationId = null;
+            return s;
+        });
+        activeConversationId.set(null);
+    }
 }
 
 export function setMode(mode: ModeOverride) {
@@ -884,8 +1008,8 @@ export function setWorkspaceId(id: string | null) {
     } catch {}
 }
 
-/** Restore workspace ID from localStorage after a server restart. */
-export function restoreWorkspace() {
+/** Restore workspace ID from localStorage. Returns the ID if one was restored, null otherwise. */
+export function restoreWorkspace(): string | null {
     try {
         const id = localStorage.getItem('ct2_workspace_id');
         if (id) {
@@ -895,13 +1019,19 @@ export function restoreWorkspace() {
                 }
                 return s;
             });
+            return id;
         }
     } catch {}
+    return null;
 }
 
 /** Clear the pending command queue (called after TerminalPanel has consumed them). */
 export function clearPendingCommands() {
     chat.update(s => { s.pendingCommands = []; return s; });
+}
+
+export function clearPendingApproval() {
+    chat.update(s => { s.pendingApproval = null; return s; });
 }
 
 export function toggleContextFile(path: string) {
@@ -938,7 +1068,7 @@ export function stopGeneration() {
         } else if (partial) {
             // Push partial response as a real assistant turn so it stays
             // in history with feedback + regenerate buttons
-            const codeRoute = s.route === 'ROUTE_DESIGN' || s.route === 'ROUTE_CODE' || s.route === 'ROUTE_COMPUTER';
+            const codeRoute = s.route === 'ROUTE_DESIGN' || s.route === 'ROUTE_CODE';
             s.conversation = [
                 ...s.conversation,
                 {
@@ -979,20 +1109,127 @@ export function stopGeneration() {
     });
 }
 
-export function sendThink(goal: string, attachments: Attachment[] = []) {
+export async function sendThink(goal: string, attachments: Attachment[] = []) {
     let conv: Turn[] = [];
     let mode: ModeOverride = 'auto';
     let wsId: string | null = null;
     let convId: string | null = null;
     let s_contextFiles: string[] = [];
+    let forceClearKv = false;
     const unsub = chat.subscribe((s) => {
         conv = s.conversation;
         mode = s.modeOverride;
         wsId = s.workspaceId;
         convId = s.conversationId;
         s_contextFiles = s.contextFiles;
+        forceClearKv = s.forceClearKvOnNextThink;
     });
     unsub();
+
+    // Build current message content first so compaction can reserve room for it.
+    let textPrefix = '';
+    const imageAtts: Attachment[] = [];
+    for (const att of attachments) {
+        if (att.type === 'file' && att.textContent) {
+            textPrefix += `[File: ${att.name}]\n${att.textContent}\n\n`;
+        } else if (att.type === 'image') {
+            imageAtts.push(att);
+        }
+    }
+
+    const fullGoal = textPrefix ? `${textPrefix}${goal}` : goal;
+
+    let goalContent: any = fullGoal;
+    if (imageAtts.length > 0) {
+        const parts: any[] = [{ type: 'text', text: fullGoal }];
+        for (const att of imageAtts) {
+            parts.push({ type: 'image_url', image_url: { url: att.dataUrl } });
+        }
+        goalContent = parts;
+    }
+
+    // Build conversation for backend — convert attachments to multimodal content
+    let backendConv = conv.map(t => {
+        if (t.attachments && t.attachments.length > 0) {
+            let text = t.content;
+            const images: Attachment[] = [];
+            for (const att of t.attachments) {
+                if (att.type === 'file' && att.textContent) {
+                    text = `[File: ${att.name}]\n${att.textContent}\n\n${text}`;
+                } else if (att.type === 'image') {
+                    images.push(att);
+                }
+            }
+            if (images.length > 0) {
+                const content: any[] = [{ type: 'text', text }];
+                for (const att of images) {
+                    content.push({ type: 'image_url', image_url: { url: att.dataUrl } });
+                }
+                return { role: t.role, content };
+            }
+            return { role: t.role, content: text };
+        }
+        return { role: t.role, content: t.content };
+    });
+
+    // Auto-compact before the model context fills up.
+    // Reserve room for the new user message and for the next reply, otherwise small
+    // contexts like 2K can still start a turn that gets clipped mid-generation.
+    if (_contextSize > 0 && conv.length >= 2) {
+        const historyTokens = backendConv.reduce(
+            (acc: number, t: any) => acc + estimateContentTokens(t.content),
+            0
+        );
+        const pendingUserTokens = estimateContentTokens(goalContent);
+        const overhead = Math.min(800, Math.round(_contextSize * 0.4));
+        const effectiveCtx = Math.max(512, _contextSize - overhead);
+        const replyReserve = Math.min(
+            1024,
+            Math.max(256, Math.round(effectiveCtx * 0.45))
+        );
+        const projectedPrompt = historyTokens + pendingUserTokens;
+        if (projectedPrompt > effectiveCtx - replyReserve || historyTokens / effectiveCtx >= 0.75) {
+            chat.update(s => { s.isCompacting = true; return s; });
+            try {
+                const res = await fetch('/api/compact', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ conversation: backendConv }),
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.conversation?.length > 0) {
+                        backendConv = data.conversation;
+                        // Replace frontend conversation with the compacted view
+                        chat.update(s => {
+                            const summaryTurn: Turn = {
+                                role: 'assistant',
+                                content: data.conversation[0].content,
+                                isCompacted: true,
+                            };
+                            // Preserve latest code turn if compaction produced one
+                            const codeTurn = data.conversation.length > 1
+                                ? data.conversation[data.conversation.length - 1]
+                                : null;
+                            s.conversation = codeTurn
+                                ? [summaryTurn, { role: 'assistant', content: codeTurn.content, isCode: true }]
+                                : [summaryTurn];
+                            s.isCompacting = false;
+                            return s;
+                        });
+                        // Update `conv` so position count is correct
+                        conv = get(chat).conversation;
+                    } else {
+                        chat.update(s => { s.isCompacting = false; return s; });
+                    }
+                } else {
+                    chat.update(s => { s.isCompacting = false; return s; });
+                }
+            } catch {
+                chat.update(s => { s.isCompacting = false; return s; });
+            }
+        }
+    }
 
     chat.update((s) => {
         s.conversation = [...s.conversation, {
@@ -1028,54 +1265,9 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         s.atlasCandidates = [];
         s.atlasPhase = null;
         s.atlasEffort = null;
+        s.forceClearKvOnNextThink = false;
         return s;
     });
-
-    // Build conversation for backend — convert attachments to multimodal content
-    const backendConv = conv.map(t => {
-        if (t.attachments && t.attachments.length > 0) {
-            let text = t.content;
-            const images: Attachment[] = [];
-            for (const att of t.attachments) {
-                if (att.type === 'file' && att.textContent) {
-                    text = `[File: ${att.name}]\n${att.textContent}\n\n${text}`;
-                } else if (att.type === 'image') {
-                    images.push(att);
-                }
-            }
-            if (images.length > 0) {
-                const content: any[] = [{ type: 'text', text }];
-                for (const att of images) {
-                    content.push({ type: 'image_url', image_url: { url: att.dataUrl } });
-                }
-                return { role: t.role, content };
-            }
-            return { role: t.role, content: text };
-        }
-        return { role: t.role, content: t.content };
-    });
-
-    // Build current message content (may include images and text files)
-    let textPrefix = '';
-    const imageAtts: Attachment[] = [];
-    for (const att of attachments) {
-        if (att.type === 'file' && att.textContent) {
-            textPrefix += `[File: ${att.name}]\n${att.textContent}\n\n`;
-        } else if (att.type === 'image') {
-            imageAtts.push(att);
-        }
-    }
-
-    const fullGoal = textPrefix ? `${textPrefix}${goal}` : goal;
-
-    let goalContent: any = fullGoal;
-    if (imageAtts.length > 0) {
-        const parts: any[] = [{ type: 'text', text: fullGoal }];
-        for (const att of imageAtts) {
-            parts.push({ type: 'image_url', image_url: { url: att.dataUrl } });
-        }
-        goalContent = parts;
-    }
 
     const prefs = get(preferences);
     const searchEnabled = prefs.webSearchEnabled;
@@ -1101,5 +1293,7 @@ export function sendThink(goal: string, attachments: Attachment[] = []) {
         ...(atlasSettings ? { atlas: atlasSettings } : {}),
         ...(s_contextFiles.length > 0 ? { context_files: s_contextFiles } : {}),
         ...(searchEnabled ? { search_capability: true } : {}),
+        ...(forceClearKv ? { force_clear_kv: true } : {}),
+        ...(prefs.requireCommandApproval ? { require_command_approval: true } : {}),
     });
 }

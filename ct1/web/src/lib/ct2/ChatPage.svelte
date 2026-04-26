@@ -1,9 +1,22 @@
 <script lang="ts">
     import { tick, onMount } from 'svelte';
-    import { chat, sendThink, stopGeneration, setMode, revertToTurn, setFeedback, regenerate, type Attachment } from '$lib/stores/chat';
+    import { chat, sendThink, stopGeneration, setMode, revertToTurn, setFeedback, regenerate, setContextSize, clearPendingCommands, clearPendingApproval, type Attachment } from '$lib/stores/chat';
     import { preferences } from '$lib/stores/preferences';
     import { render } from '$lib/markdown';
     import PreviewPanel from './PreviewPanel.svelte';
+    import ContextSummaryBlock from '$lib/components/ContextSummaryBlock.svelte';
+    import FileTree from '$lib/components/FileTree.svelte';
+    import TerminalPanel from '$lib/components/TerminalPanel.svelte';
+    import {
+        CHAT_MODE_ITEMS,
+        CHAT_MODE_LABELS,
+        copyText,
+        getPhaseLabel,
+        getRouteLabel,
+        getTurnOutputExt,
+        getTurnOutputFilename,
+        stripCodeFences,
+    } from '$lib/chatUi';
 
     // ── Composer state ───────────────────────────────────────────
     let text = $state('');
@@ -13,12 +26,20 @@
     let contextSize = $state(0);
     let expandedThinking = $state(new Set<number>());
     let expandedSearches = $state(new Set<number>());
+    let latestCompactionOpen = $state(false);
+    let latestCompactionKey = $state('');
     let liveThinkingOpen = $state(false);
 
     onMount(async () => {
         try {
-            const cfg = await (await fetch('/api/config')).json();
-            contextSize = cfg.context_size ?? 0;
+            const [cfg, mdl] = await Promise.all([
+                fetch('/api/config').then(r => r.json()),
+                fetch('/api/model').then(r => r.json()),
+            ]);
+            // /api/model is more reliable for context_size (reads raw config directly)
+            const sz = mdl.context_size ?? cfg.context_size ?? 0;
+            contextSize = sz;
+            setContextSize(sz);
         } catch {}
     });
 
@@ -34,7 +55,11 @@
     let ctxLabel = $derived(usedTokens >= 1000 ? `${(usedTokens / 1000).toFixed(1)}K` : `${usedTokens}`);
     let ctxMax   = $derived(contextSize >= 1000 ? `${Math.round(contextSize / 1000)}K` : `${contextSize}`);
     let showCtxBar = $derived(contextSize > 0 && $chat.conversation.length > 0);
-    let canSend   = $derived(!isActive && text.trim().length > 0);
+    let latestCompactedTurn = $derived(
+        [...$chat.conversation].reverse().find((turn) => !!turn.isCompacted) ?? null
+    );
+    let latestCompactionSummary = $derived(latestCompactedTurn?.content ?? '');
+    let canSend   = $derived(!isActive && !$chat.isCompacting && text.trim().length > 0);
     let isDesign  = $derived($chat.modeOverride === 'design');
 
     // ── Preview panel ────────────────────────────────────────────
@@ -42,16 +67,67 @@
     let previewOverride = $state<string | null>(null);
     let previewWidth = $state(44);
     let isHtmlOutput = $derived($chat.route === 'ROUTE_DESIGN');
-    function stripFences(s: string) {
-        return s.replace(/^```\w*\s*\n/, '').replace(/\n?```\s*$/, '');
-    }
     let previewCode = $derived(
         (isActive && isHtmlOutput && $chat.streamingText)
-            ? stripFences($chat.streamingText)
+            ? stripCodeFences($chat.streamingText)
             : previewOverride ?? $chat.response ?? ''
     );
     let previewVisible = $derived(showPreview && !!previewCode);
     function previewHistoryCode(code: string) { previewOverride = code; showPreview = true; }
+
+    // ── Workspace panel ──────────────────────────────────────────
+    let isWorkspace = $derived(!!$chat.workspaceId);
+    let wsTab = $state<'files' | 'terminal'>('files');
+    let wsPanelWidth = $state(38); // percentage, like PreviewPanel
+    let viewingFile = $state<{ path: string; content: string } | null>(null);
+    let fileTreeRef = $state<FileTree | null>(null);
+    let fileRequestId = $state(0);
+    let lastWsId = $state<string | null>(null);
+
+    $effect(() => {
+        const wsId = $chat.workspaceId;
+        if (wsId !== lastWsId) {
+            lastWsId = wsId;
+            viewingFile = null;
+            wsTab = 'files';
+            fileRequestId += 1;
+        }
+    });
+
+    $effect(() => {
+        if ($chat.pendingCommands.length > 0 && isWorkspace) wsTab = 'terminal';
+    });
+
+    $effect(() => {
+        const lastEvent = $chat.events?.[$chat.events.length - 1];
+        if (lastEvent?.event === 'file_saved') fileTreeRef?.refresh?.();
+    });
+
+    async function onFileSelect(path: string) {
+        const wsId = $chat.workspaceId;
+        if (!wsId) return;
+        const reqId = ++fileRequestId;
+        try {
+            const data = await fetch(`/api/workspaces/${wsId}/files/${path}`).then(r => r.json());
+            if (reqId !== fileRequestId || wsId !== $chat.workspaceId) return;
+            if (data.content != null) viewingFile = { path, content: data.content };
+        } catch {}
+    }
+
+    function startWsResize(e: PointerEvent) {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startW = wsPanelWidth;
+        function onMove(mv: PointerEvent) {
+            wsPanelWidth = Math.max(22, Math.min(65, startW + (startX - mv.clientX) / window.innerWidth * 100));
+        }
+        function onUp() {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+        }
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+    }
 
     const suggestions = [
         { label: 'Design a landing page',  hint: 'a landing page for a focus app called FlowState' },
@@ -59,16 +135,6 @@
         { label: 'Explain a concept',      hint: 'how self-attention works, for a non-technical reader' },
         { label: 'Debug code',             hint: 'why my React effect fires twice on mount' },
     ] as const;
-
-    const MODE_ITEMS = ['auto', 'chat', 'design', 'code'] as const;
-    const MODE_LABEL: Record<string, string> = { auto: 'Auto', chat: 'Chat', design: 'Design', code: 'Code' };
-
-    const PHASE_LABEL: Record<string, string> = {
-        routing: 'Classifying', planning: 'Planning', generating: 'Generating',
-        polishing: 'Polishing', refining: 'Refining', validating: 'Validating',
-        fixing: 'Fixing', spec_generating: 'Speccing',
-        component_generating: 'Building', assembling: 'Assembling',
-    };
 
     // ── Auto scroll ───────────────────────────────────────────────
     $effect(() => {
@@ -98,6 +164,20 @@
         if (!isActive && isHtmlOutput && $chat.response) previewOverride = null;
     });
 
+    $effect(() => {
+        const summary = latestCompactionSummary;
+        const key = summary.slice(0, 160);
+        if (!summary) {
+            latestCompactionKey = '';
+            latestCompactionOpen = false;
+            return;
+        }
+        if (key !== latestCompactionKey) {
+            latestCompactionKey = key;
+            latestCompactionOpen = true;
+        }
+    });
+
     function send() {
         if (!canSend) return;
         const msg = text.trim();
@@ -114,28 +194,13 @@
         tick().then(() => taEl?.focus());
     }
 
-    function copyText(t: string) {
-        navigator.clipboard.writeText(t).catch(() => {});
-    }
-
-    function phaseLabel(p: string): string { return PHASE_LABEL[p] ?? p; }
-
-    function routeLabel(r: string): string {
-        if (!r) return '';
-        const s = r.replace('ROUTE_', '');
-        return s.charAt(0) + s.slice(1).toLowerCase();
-    }
-
-    function fileExt(turn: { detectedLang?: string; route?: string }): string {
-        if (turn.detectedLang && turn.detectedLang !== 'text') return turn.detectedLang;
-        if (turn.route === 'ROUTE_DESIGN') return 'html';
-        if (turn.route === 'ROUTE_CODE') return 'py';
-        return 'txt';
-    }
 </script>
 
 <div class="c2-page-frame">
-<div class="c2-chat" style:right={previewVisible ? previewWidth + '%' : '0'}>
+<div class="c2-chat"
+    class:c2-chat-no-tr={isWorkspace}
+    style:right={isWorkspace ? wsPanelWidth + '%' : previewVisible ? previewWidth + '%' : '0'}
+>
     <!-- ── Feed ──────────────────────────────────────────────── -->
     <div class="c2-feed scroll" bind:this={feedEl}>
         {#if $chat.conversation.length === 0 && !isActive}
@@ -169,6 +234,8 @@
                     {#if turn.role === 'user'}
                         <!-- User message -->
                         <div class="c2-turn-user"
+                            role="group"
+                            aria-label="User message"
                             onmouseenter={() => hoveredTurn = i}
                             onmouseleave={() => hoveredTurn = null}
                         >
@@ -183,9 +250,13 @@
                                 </button>
                             </div>
                         </div>
+                    {:else if turn.isCompacted}
+                        <!-- Rendered below as an inline chat event near the latest turn -->
                     {:else}
                         <!-- Assistant turn -->
                         <div class="c2-turn-assistant"
+                            role="group"
+                            aria-label="Assistant response"
                             onmouseenter={() => hoveredTurn = i}
                             onmouseleave={() => hoveredTurn = null}
                         >
@@ -197,7 +268,7 @@
                             {#if turn.route}
                                 <div class="c2-route-tag">
                                     <span class="c2-route-dot"></span>
-                                    Routed → {routeLabel(turn.route)}
+                                    Routed → {getRouteLabel(turn.route)}
                                 </div>
                             {/if}
 
@@ -284,11 +355,13 @@
 
                             <!-- Content -->
                             {#if turn.isCode && turn.content}
+                                {@const outputExt = getTurnOutputExt(turn)}
+                                {@const outputName = getTurnOutputFilename(turn)}
                                 <!-- Output card -->
                                 <div class="c2-output-card">
                                     <div class="c2-output-header">
-                                        <span class="c2-output-ext">{fileExt(turn)}</span>
-                                        <span class="c2-output-name">{fileExt(turn) === 'html' ? 'output.html' : 'output.' + fileExt(turn)}</span>
+                                        <span class="c2-output-ext">{outputExt}</span>
+                                        <span class="c2-output-name">{outputName}</span>
                                         <span class="c2-output-chars">{turn.content.length.toLocaleString()} chars</span>
                                         <div style="flex:1"></div>
                                         <button class="c2-out-btn" onclick={() => copyText(turn.content)}>
@@ -302,7 +375,7 @@
                                             const b = new Blob([turn.content], { type: 'text/plain' });
                                             const a = document.createElement('a');
                                             a.href = URL.createObjectURL(b);
-                                            a.download = 'output.' + fileExt(turn);
+                                            a.download = outputName;
                                             a.click();
                                         }}>
                                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
@@ -358,6 +431,32 @@
                     {/if}
                 {/each}
 
+                {#if latestCompactedTurn}
+                    <div class="c2-turn-assistant">
+                        <span class="c2-rail"></span>
+                        <span class="c2-rail-node"><span class="c2-rail-inner"></span></span>
+                        <ContextSummaryBlock
+                            summary={latestCompactedTurn.content}
+                            open={latestCompactionOpen}
+                            onToggle={() => latestCompactionOpen = !latestCompactionOpen}
+                            variant="ct2"
+                        />
+                    </div>
+                {/if}
+
+                <!-- ── Compacting indicator ──────────────────────── -->
+                {#if $chat.isCompacting}
+                    <div class="c2-turn-assistant">
+                        <span class="c2-rail"></span>
+                        <span class="c2-rail-node"><span class="c2-rail-inner"></span></span>
+                        <div class="c2-status-line">
+                            <span class="c2-pulse-dot"></span>
+                            <span>Compacting context…</span>
+                            <span class="c2-sl-meta">summarizing conversation history</span>
+                        </div>
+                    </div>
+                {/if}
+
                 <!-- ── Live generation turn ──────────────────────── -->
                 {#if isActive}
                     <div class="c2-turn-assistant">
@@ -369,14 +468,14 @@
                         {#if $chat.route}
                             <div class="c2-route-tag">
                                 <span class="c2-route-dot"></span>
-                                Routed → {routeLabel($chat.route)}
+                                Routed → {getRouteLabel($chat.route)}
                             </div>
                         {/if}
 
                         <!-- Active status line -->
                         <div class="c2-status-line">
                             <span class="c2-pulse-dot"></span>
-                            <span>{phaseLabel($chat.phase)}</span>
+                            <span>{getPhaseLabel($chat.phase)}</span>
                             {#if $chat.tokensPerSec > 0}
                                 <span class="c2-sl-meta">{$chat.tokensPerSec} tok/s</span>
                             {/if}
@@ -427,7 +526,7 @@
                             <div class="c2-gen-card">
                                 <div class="c2-gen-header">
                                     <span class="c2-pulse-dot"></span>
-                                    <span class="c2-gen-title">{phaseLabel($chat.phase)}</span>
+                                    <span class="c2-gen-title">{getPhaseLabel($chat.phase)}</span>
                                     <span class="c2-sl-meta">{$chat.streamingText.length.toLocaleString()} chars</span>
                                     {#if $chat.tokensPerSec > 0}
                                         <span class="c2-sl-meta">· {$chat.tokensPerSec} tok/s</span>
@@ -468,22 +567,23 @@
                         placeholder="Ask CT-2 anything…"
                         rows={1}
                         onkeydown={handleKey}
-                        disabled={isActive}
+                        disabled={isActive || $chat.isCompacting}
                     ></textarea>
                 </div>
 
                 <div class="c2-composer-toolbar">
                     <div class="c2-mode-pills">
-                        {#each MODE_ITEMS as m}
-                            <button
-                                class="c2-mode-pill"
-                                class:c2-mode-active={$chat.modeOverride === m}
-                                onclick={() => setMode(m)}
-                                disabled={isActive}
-                            >{MODE_LABEL[m]}</button>
-                        {/each}
-
-                        <div class="c2-pill-sep"></div>
+                        {#if !isWorkspace}
+                            {#each CHAT_MODE_ITEMS as m}
+                                <button
+                                    class="c2-mode-pill"
+                                    class:c2-mode-active={$chat.modeOverride === m}
+                                    onclick={() => setMode(m)}
+                                    disabled={isActive}
+                                >{CHAT_MODE_LABELS[m]}</button>
+                            {/each}
+                            <div class="c2-pill-sep"></div>
+                        {/if}
 
                         <button
                             class="c2-mode-pill"
@@ -514,6 +614,11 @@
                                 ></div>
                             </div>
                             <span class="c2-ctx-label">{ctxLabel} / {ctxMax}</span>
+                            {#if $chat.isCompacting}
+                                <span class="c2-ctx-badge compacting">Compacting…</span>
+                            {:else if latestCompactionSummary}
+                                <span class="c2-ctx-badge compacted">Summary ready</span>
+                            {/if}
                         </div>
                     {/if}
 
@@ -540,10 +645,79 @@
         </div>
     </div>
 </div>
+{#if isWorkspace}
+<aside class="c2-ws-panel" style="width:{wsPanelWidth}%">
+    <!-- Resize handle -->
+    <button class="c2-ws-handle" onpointerdown={startWsResize} aria-label="Resize workspace panel">
+        <svg class="c2-ws-grip" width="4" height="18" viewBox="0 0 4 18" fill="currentColor">
+            <circle cx="2" cy="2" r="1.4"/><circle cx="2" cy="7" r="1.4"/>
+            <circle cx="2" cy="12" r="1.4"/><circle cx="2" cy="17" r="1.4"/>
+        </svg>
+    </button>
+
+    <!-- Header -->
+    <div class="c2-ws-header">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" class="c2-ws-title-icon">
+            <polyline points="4 17 10 11 4 5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="12" y1="19" x2="20" y2="19" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+        </svg>
+        <span class="c2-ws-title">Computer</span>
+        <div style="flex:1"></div>
+        <div class="c2-ws-seg">
+            <button class="c2-ws-seg-btn" class:c2-ws-seg-active={wsTab === 'files'} onclick={() => wsTab = 'files'}>Files</button>
+            <button class="c2-ws-seg-btn" class:c2-ws-seg-active={wsTab === 'terminal'} onclick={() => wsTab = 'terminal'}>Terminal</button>
+        </div>
+    </div>
+
+    <!-- Files tab: two-column grid -->
+    {#if wsTab === 'files'}
+        <div class="c2-ws-files-grid">
+            <div class="c2-ws-tree-col scroll">
+                <FileTree
+                    workspaceId={$chat.workspaceId ?? ''}
+                    onFileSelect={onFileSelect}
+                    activeFile={viewingFile?.path ?? ''}
+                    bind:this={fileTreeRef}
+                />
+            </div>
+            <div class="c2-ws-content-col">
+                {#if viewingFile}
+                    <div class="c2-ws-file-header">
+                        <span class="c2-ws-file-path">{viewingFile.path}</span>
+                        <button class="c2-ws-close" onclick={() => viewingFile = null} aria-label="Close file" style="margin-left:auto">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                                <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <pre class="c2-ws-file-code scroll">{viewingFile.content}</pre>
+                {:else}
+                    <div class="c2-ws-no-file">Select a file to view</div>
+                {/if}
+            </div>
+        </div>
+    {:else}
+        <!-- Terminal tab -->
+        <div class="c2-ws-terminal">
+            <TerminalPanel
+                workspaceId={$chat.workspaceId ?? ''}
+                onClose={() => wsTab = 'files'}
+                externalOutput={$chat.terminalOutput}
+                pendingCommands={$chat.pendingCommands}
+                onCommandsConsumed={clearPendingCommands}
+                pendingApproval={$chat.pendingApproval}
+                onApprovalHandled={clearPendingApproval}
+            />
+        </div>
+    {/if}
+</aside>
+{/if}
+
 <PreviewPanel
     code={previewCode}
     open={previewVisible}
     width={previewWidth}
+    isStreaming={isActive}
     onClose={() => showPreview = false}
     onWidthChange={(w) => previewWidth = w}
 />
@@ -1157,13 +1331,6 @@
         margin: 0 4px;
     }
 
-    .c2-composer-hint {
-        font-family: 'Geist Mono', monospace;
-        font-size: 10.5px;
-        color: var(--c2-fg-3);
-        white-space: nowrap;
-    }
-
     .c2-send-btn {
         width: 30px; height: 30px;
         border-radius: 8px;
@@ -1226,6 +1393,28 @@
         font-size: 10.5px;
         color: var(--c2-fg-3);
         white-space: nowrap;
+    }
+    .c2-ctx-badge {
+        display: inline-flex;
+        align-items: center;
+        height: 20px;
+        padding: 0 8px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        white-space: nowrap;
+        border: 1px solid transparent;
+    }
+    .c2-ctx-badge.compacting {
+        color: var(--c2-warn);
+        background: color-mix(in srgb, var(--c2-warn) 12%, transparent);
+        border-color: color-mix(in srgb, var(--c2-warn) 24%, transparent);
+    }
+    .c2-ctx-badge.compacted {
+        color: var(--c2-fg-2);
+        background: var(--c2-bg-1);
+        border-color: var(--c2-border-1);
     }
 
     /* ── Thinking block ───────────────────────────────────────── */
@@ -1352,4 +1541,177 @@
 
     /* ── Utility ───────────────────────────────────────────────── */
     .c2-visible { opacity: 1 !important; }
+
+    /* ── No-transition override (workspace resize) ─────────────── */
+    .c2-chat-no-tr { transition: none !important; }
+
+    /* ── Workspace panel ───────────────────────────────────────── */
+    .c2-ws-panel {
+        position: absolute;
+        top: 0; right: 0; bottom: 0;
+        background: var(--c2-bg-1);
+        border-left: 1px solid var(--c2-border-2);
+        box-shadow: -8px 0 32px oklch(0 0 0 / 0.30);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        z-index: 20;
+    }
+
+    .c2-ws-handle {
+        position: absolute;
+        left: -4px; top: 0; bottom: 0;
+        width: 8px;
+        cursor: col-resize;
+        background: transparent;
+        border: none;
+        padding: 0;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .c2-ws-grip {
+        color: var(--c2-fg-3);
+        opacity: 0;
+        transition: opacity 150ms;
+        pointer-events: none;
+    }
+    .c2-ws-handle:hover .c2-ws-grip { opacity: 1; }
+
+    /* Header bar */
+    .c2-ws-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--c2-border-1);
+        flex-shrink: 0;
+        background: var(--c2-bg-1);
+    }
+    .c2-ws-title-icon { color: oklch(0.72 0.14 55); flex-shrink: 0; }
+    .c2-ws-title { font-size: 13px; font-weight: 500; color: var(--c2-fg-0); }
+
+    /* Segment control */
+    .c2-ws-seg {
+        display: inline-flex;
+        padding: 2px;
+        border-radius: 8px;
+        background: var(--c2-bg-2);
+        border: 1px solid var(--c2-border-1);
+        gap: 1px;
+    }
+    .c2-ws-seg-btn {
+        height: 24px;
+        padding: 0 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        font-family: inherit;
+        color: var(--c2-fg-2);
+        background: transparent;
+        border: 1px solid transparent;
+        cursor: pointer;
+        transition: all 120ms;
+    }
+    .c2-ws-seg-btn:hover:not(.c2-ws-seg-active) { color: var(--c2-fg-0); }
+    .c2-ws-seg-active {
+        background: var(--c2-bg-0);
+        color: var(--c2-fg-0);
+        border-color: var(--c2-border-2);
+        box-shadow: 0 1px 0 var(--c2-border-2) inset;
+    }
+
+    .c2-ws-close {
+        width: 28px;
+        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 7px;
+        background: none;
+        border: none;
+        color: var(--c2-fg-2);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: color 120ms, background 120ms;
+    }
+    .c2-ws-close:hover { color: var(--c2-fg-0); background: var(--c2-bg-2); }
+
+    /* Files tab: two-column grid */
+    .c2-ws-files-grid {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .c2-ws-tree-col {
+        border-right: 1px solid var(--c2-border-1);
+        padding: 8px 4px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: var(--c2-border-2) transparent;
+    }
+
+    .c2-ws-content-col {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        min-width: 0;
+        background: var(--c2-bg-0);
+    }
+
+    .c2-ws-file-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 14px;
+        border-bottom: 1px solid var(--c2-border-1);
+        flex-shrink: 0;
+        background: var(--c2-bg-1);
+    }
+    .c2-ws-file-path {
+        flex: 1;
+        font-family: 'Geist Mono', monospace;
+        font-size: 12px;
+        color: var(--c2-fg-1);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .c2-ws-file-code {
+        flex: 1;
+        margin: 0;
+        padding: 14px 16px;
+        font-family: 'Geist Mono', monospace;
+        font-size: 12px;
+        line-height: 1.65;
+        color: var(--c2-fg-1);
+        overflow: auto;
+        white-space: pre;
+        background: var(--c2-bg-0);
+        scrollbar-width: thin;
+        scrollbar-color: var(--c2-border-2) transparent;
+    }
+
+    .c2-ws-no-file {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12.5px;
+        color: var(--c2-fg-3);
+    }
+
+    /* Terminal tab */
+    .c2-ws-terminal {
+        flex: 1;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
 </style>

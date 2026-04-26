@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, clearPendingCommands, revertToTurn, pendingInputPrompt } from '$lib/stores/chat';
+    import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, loadFromHistory, clearPendingCommands, clearPendingApproval, revertToTurn, pendingInputPrompt } from '$lib/stores/chat';
     import { preferences } from '$lib/stores/preferences';
     import Ct2Chat from '$lib/ct2/ChatPage.svelte';
     import type { SearchActivity, SearchResult } from '$lib/stores/chat';
@@ -15,6 +15,8 @@
     import TerminalPanel from '$lib/components/TerminalPanel.svelte';
     import FileTree from '$lib/components/FileTree.svelte';
     import AtlasProgress from '$lib/components/AtlasProgress.svelte';
+    import ContextSummaryBlock from '$lib/components/ContextSummaryBlock.svelte';
+    import { copyText, getRouteLabel, stripCodeFences } from '$lib/chatUi';
 
     let isComputerRoute = $derived($chat.route === 'ROUTE_COMPUTER');
     let isCode = $derived(
@@ -31,13 +33,9 @@
 
     let showPreview = $state(false);
     let previewOverride = $state<string | null>(null);
-    function stripFences(code: string): string {
-        // Strip opening ```html\n and trailing ```
-        return code.replace(/^```\w*\s*\n/, '').replace(/\n?```\s*$/, '');
-    }
     let previewCode = $derived(
         ($chat.phase === 'generating' || $chat.phase === 'fixing' || $chat.phase === 'polishing') && $chat.streamingText
-            ? stripFences($chat.streamingText)
+            ? stripCodeFences($chat.streamingText)
             : previewOverride || $chat.response || $chat.streamingText || ''
     );
     let codeExpanded = $state(false);
@@ -85,10 +83,39 @@
         return [];
     }
 
+    // Persist conversationId to sessionStorage so F5 can restore non-workspace chats
     $effect(() => {
-        // On mount: try to restore workspace from localStorage (survives server restarts)
-        restoreWorkspace();
+        const convId = $chat.conversationId;
+        const wsId = $chat.workspaceId;
+        if (convId && !wsId) {
+            try { sessionStorage.setItem('ct2_last_conv', convId); } catch {}
+        }
     });
+
+    $effect(() => {
+        // On mount: restore workspace + its conversation, or last non-workspace conversation
+        doRestoreSession();
+    });
+
+    async function doRestoreSession() {
+        const wsId = restoreWorkspace();
+        if (wsId) {
+            // Workspace restored — also load its conversation so the panel isn't empty
+            try {
+                const conv = await fetch(`/api/workspaces/${wsId}/conversation`).then(r => r.json());
+                if (conv?.id) loadFromHistory(conv);
+            } catch {}
+            return;
+        }
+        // No workspace — restore last non-workspace conversation (survives F5)
+        try {
+            const convId = sessionStorage.getItem('ct2_last_conv');
+            if (convId) {
+                const conv = await fetch(`/api/conversations/${convId}`).then(r => r.json());
+                if (conv?.id) loadFromHistory(conv);
+            }
+        } catch {}
+    }
 
     $effect(() => {
         // Auto-create workspace when entering computer mode for the first time
@@ -212,6 +239,11 @@
         if (next.has(idx)) next.delete(idx); else next.add(idx);
         expandedHistoryCards = next;
     }
+    let latestCompactionOpen = $state(false);
+    let latestCompactionKey = $state('');
+    function toggleLatestCompaction() {
+        latestCompactionOpen = !latestCompactionOpen;
+    }
 
     let didGenerate = $state(false);
     let userClosedPreview = $state(false);
@@ -255,7 +287,7 @@
         showPreview = !showPreview;
     }
 
-    let messagesEl: HTMLElement;
+    let messagesEl = $state<HTMLElement | null>(null);
     let userNearBottom = $state(true);
 
     function onMessagesScroll() {
@@ -272,10 +304,11 @@
         $chat.checklist;
         $chat.validationIssues;
         $chat.warning;
-        if (!messagesEl) return;
+        const el = messagesEl;
+        if (!el) return;
         requestAnimationFrame(() => {
             if (userNearBottom) {
-                messagesEl.scrollTop = messagesEl.scrollHeight;
+                el.scrollTop = el.scrollHeight;
             }
         });
     });
@@ -306,12 +339,24 @@
         return lastUserIdx > 0 ? conv.slice(0, lastUserIdx) : [];
     });
 
-    const routeLabels: Record<string, string> = {
-        'ROUTE_DESIGN': 'Design',
-        'ROUTE_CODE': 'Code',
-        'ROUTE_DIRECT': 'Chat',
-        'ROUTE_COMPUTER': 'Computer',
-    };
+    let latestCompactedTurn = $derived(
+        [...$chat.conversation].reverse().find((turn) => !!turn.isCompacted) ?? null
+    );
+
+    $effect(() => {
+        const summary = latestCompactedTurn?.content ?? '';
+        const key = summary.slice(0, 160);
+        if (!summary) {
+            latestCompactionKey = '';
+            latestCompactionOpen = false;
+            return;
+        }
+        if (key !== latestCompactionKey) {
+            latestCompactionKey = key;
+            latestCompactionOpen = true;
+        }
+    });
+
     const routeColors: Record<string, string> = {
         'ROUTE_DESIGN': 'var(--specialist)',
         'ROUTE_CODE': '#5B8DEF',
@@ -373,11 +418,10 @@
     }
 
     let copyFeedback = $state<string | null>(null);
-    function copyToClipboard(text: string) {
-        navigator.clipboard.writeText(text).then(() => {
-            copyFeedback = 'Copied!';
-            setTimeout(() => { copyFeedback = null; }, 1500);
-        });
+    async function copyToClipboard(text: string) {
+        const copied = await copyText(text);
+        copyFeedback = copied ? 'Copied!' : 'Copy failed';
+        setTimeout(() => { copyFeedback = null; }, 1500);
     }
 
     function highlightCode(code: string, ext: string): string {
@@ -457,7 +501,7 @@
                             {#if turn.route}
                                 <div class="route-row">
                                     <span class="route-tag" style="--rc: {routeColors[turn.route] || 'var(--accent)'}">
-                                        {routeLabels[turn.route] || turn.route}
+                                        {getRouteLabel(turn.route)}
                                     </span>
                                 </div>
                             {/if}
@@ -556,6 +600,8 @@
                                 </button>
                             </div>
                         </div>
+                    {:else if turn.isCompacted}
+                        <!-- Rendered below as an inline chat event near the latest turn -->
                     {:else if turn.route === 'ROUTE_COMPUTER'}
                         {@const hFiles = parseFileList(turn.content)}
                         <div class="bubble-row">
@@ -695,6 +741,17 @@
                     {/if}
                 {/each}
 
+                {#if latestCompactedTurn}
+                    <div class="bubble-row">
+                        <ContextSummaryBlock
+                            summary={latestCompactedTurn.content}
+                            open={latestCompactionOpen}
+                            onToggle={toggleLatestCompaction}
+                            variant="classic"
+                        />
+                    </div>
+                {/if}
+
                 <!-- ==================== ACTIVE TURN ==================== -->
                 {#if $chat.phase !== 'idle'}
                     {#each $chat.conversation as turn, i}
@@ -725,7 +782,7 @@
                 {#if $chat.route}
                     <div class="route-row">
                         <span class="route-tag" style="--rc: {routeColors[$chat.route] || 'var(--accent)'}">
-                            {routeLabels[$chat.route] || $chat.route}
+                            {getRouteLabel($chat.route)}
                         </span>
                     </div>
                 {/if}
@@ -756,7 +813,7 @@
                     {/if}
 
                     <!-- ==================== PRECISION-DESIGN PIPELINE ==================== -->
-                    {#if $chat.phase === 'spec_generating' || ($chat.phase === 'spec_validated' && $chat.streamingThinking)}
+                    {#if $chat.phase === 'spec_generating' || $chat.phase === 'spec_validated'}
                         <div class="planning-card">
                             <div class="planning-header">
                                 <span class="planning-dot" class:pulse={$chat.phase === 'spec_generating'}></span>
@@ -764,6 +821,13 @@
                             </div>
                             {#if $chat.streamingThinking}
                                 <pre class="planning-body">{$chat.streamingThinking}</pre>
+                            {/if}
+                            {#if $chat.phase === 'spec_validated' && $chat.designSpec?.components?.length}
+                                <div class="spec-chips">
+                                    {#each $chat.designSpec.components as comp}
+                                        <span class="spec-chip">{comp.id}</span>
+                                    {/each}
+                                </div>
                             {/if}
                         </div>
                     {/if}
@@ -836,6 +900,14 @@
 
                 <!-- ==================== ATLAS PROGRESS ==================== -->
                 <AtlasProgress />
+
+                {#if $chat.isCompacting}
+                    <div class="step compacting-step">
+                        <span class="step-dot pulse"></span>
+                        <span class="step-text">Compacting context...</span>
+                        <span class="step-meta">summarizing older turns before sending your next message</span>
+                    </div>
+                {/if}
 
                 <!-- ==================== GENERATION ==================== -->
                 {#if $chat.phase === 'generating' || $chat.phase === 'fixing'}
@@ -1283,6 +1355,8 @@
                         externalOutput={$chat.terminalOutput}
                         pendingCommands={$chat.pendingCommands}
                         onCommandsConsumed={clearPendingCommands}
+                        pendingApproval={$chat.pendingApproval}
+                        onApprovalHandled={clearPendingApproval}
                     />
                 {/if}
             </div>
@@ -1639,6 +1713,13 @@
         animation: springPop var(--spring-duration) var(--spring) both;
     }
 
+    .compacting-step .step-meta {
+        max-width: 320px;
+        white-space: normal;
+        text-align: right;
+        line-height: 1.45;
+    }
+
     /* ================================================================
        PIPELINE STEPS (slim inline indicators)
        ================================================================ */
@@ -1712,14 +1793,19 @@
         border-radius: 0;
         box-shadow: none;
     }
-
-    .spec-stream {
-        background: var(--card); border: 1px solid var(--border); border-radius: 8px;
-        margin: 4px 0; max-height: 200px; overflow-y: auto;
+    .spec-chips {
+        display: flex; flex-wrap: wrap; gap: 6px;
+        padding: 8px 14px 10px;
+        border-top: 1px solid var(--border);
     }
-    .spec-stream-pre {
-        padding: 10px 12px; margin: 0; font-size: 0.75rem; color: var(--text-2);
-        white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono);
+    .spec-chip {
+        font-size: 11px; font-weight: 500;
+        color: var(--brain);
+        background: rgba(232, 133, 12, 0.08);
+        border: 1px solid rgba(232, 133, 12, 0.18);
+        border-radius: var(--radius-pill);
+        padding: 2px 9px;
+        letter-spacing: 0.01em;
     }
 
     /* ================================================================

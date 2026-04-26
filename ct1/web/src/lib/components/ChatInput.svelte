@@ -1,8 +1,9 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, pendingInputPrompt, type Attachment, type ModeOverride } from '$lib/stores/chat';
+    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, pendingInputPrompt, setContextSize, type Attachment, type ModeOverride } from '$lib/stores/chat';
     import { preferences, toggleWebSearch } from '$lib/stores/preferences';
     import { isUpdating } from '$lib/stores/serverUpdate';
+    import { CHAT_MODE_LABELS } from '$lib/chatUi';
 
     let input = $state('');
     let textarea: HTMLTextAreaElement;
@@ -29,10 +30,10 @@
     const attachLabel = $derived(visionSupported ? 'Attach file or image' : 'Attach file (current model has no vision)');
 
     const modes: { key: ModeOverride; label: string }[] = [
-        { key: 'chat', label: 'Chat' },
-        { key: 'design', label: 'Design' },
-        { key: 'code', label: 'Code' },
-        { key: 'auto', label: 'Auto' },
+        { key: 'chat', label: CHAT_MODE_LABELS.chat },
+        { key: 'design', label: CHAT_MODE_LABELS.design },
+        { key: 'code', label: CHAT_MODE_LABELS.code },
+        { key: 'auto', label: CHAT_MODE_LABELS.auto },
     ];
 
     function submit() {
@@ -109,16 +110,21 @@
                 fetch('/api/model'),
                 fetch('/api/config'),
             ]);
+            let modelData: any = null;
+            let cfgData: any = null;
             if (modelRes.ok) {
-                const data = await modelRes.json();
-                visionSupported = data.vision_supported ?? false;
+                modelData = await modelRes.json();
+                visionSupported = modelData.vision_supported ?? false;
             }
             if (cfgRes.ok) {
-                const cfg = await cfgRes.json();
-                contextSize = cfg.context_size ?? 0;
+                cfgData = await cfgRes.json();
             }
+            contextSize = modelData?.context_size ?? cfgData?.context_size ?? 0;
+            setContextSize(contextSize);
         } catch {
             visionSupported = false;
+            contextSize = 0;
+            setContextSize(0);
         }
     }
 
@@ -140,6 +146,7 @@
             : `${contextSize}`
     );
     const showCtxBar = $derived(contextSize > 0 && $chat.conversation.length > 0);
+    const hasCompactedHistory = $derived($chat.conversation.some((turn) => !!turn.isCompacted));
 
     function getExtension(name: string): string {
         const i = name.lastIndexOf('.');
@@ -336,6 +343,11 @@
             <span class="ctx-bar-label" class:ctx-warn={ctxPct >= 70 && ctxPct < 85} class:ctx-danger={ctxPct >= 85}>
                 {ctxLabel} / {ctxMax} tokens
             </span>
+            {#if $chat.isCompacting}
+                <span class="ctx-state-badge compacting">Compacting history…</span>
+            {:else if hasCompactedHistory}
+                <span class="ctx-state-badge compacted">History summarized</span>
+            {/if}
         </div>
     {/if}
 
@@ -949,4 +961,27 @@
     }
     .ctx-bar-label.ctx-warn { color: #e8a000; }
     .ctx-bar-label.ctx-danger { color: var(--error, #ef4444); }
+    .ctx-state-badge {
+        display: inline-flex;
+        align-items: center;
+        height: 20px;
+        padding: 0 9px;
+        border-radius: 999px;
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+        border: 1px solid transparent;
+        flex-shrink: 0;
+    }
+    .ctx-state-badge.compacting {
+        color: var(--brain);
+        background: rgba(232, 133, 12, 0.10);
+        border-color: rgba(232, 133, 12, 0.22);
+    }
+    .ctx-state-badge.compacted {
+        color: var(--text-secondary);
+        background: var(--surface);
+        border-color: var(--border);
+    }
 </style>
