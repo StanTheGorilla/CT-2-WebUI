@@ -95,7 +95,7 @@
     });
 
     $effect(() => {
-        if ($chat.pendingCommands.length > 0 && isWorkspace) wsTab = 'terminal';
+        if (($chat.pendingCommands.length > 0 || !!$chat.pendingApproval) && isWorkspace) wsTab = 'terminal';
     });
 
     $effect(() => {

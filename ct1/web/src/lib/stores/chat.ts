@@ -275,6 +275,11 @@ function estimateContentTokens(content: unknown): number {
 
 let ws: WS | null = null;
 
+// Tracks the timestamp of the last received token to detect tool-execution gaps.
+// When the model pauses for a tool call, no tokens arrive for hundreds of ms.
+// Resetting the speed counter on resumption gives an accurate per-burst tok/s.
+let _lastTokenMs = 0;
+
 // Saved when regenerate() removes the last assistant turn, attached to the new turn on done.
 let _pendingAlt: string | null = null;
 let _pendingPrevAlts: string[] = [];
@@ -386,22 +391,31 @@ function handleEvent(data: Record<string, any>) {
                 s.tokenCount = 0;
                 s.genStartTime = 0;
                 s.tokensPerSec = 0;
+                _lastTokenMs = 0;
                 break;
-            case 'token':
+            case 'token': {
                 if (data.kind === 'thinking') {
                     s.streamingThinking += data.text;
                 } else {
                     s.streamingText += data.text;
                 }
-                s.tokenCount++;
-                if (!s.genStartTime) {
-                    s.genStartTime = Date.now();
+                const _now = Date.now();
+                // Reset speed counter after a tool-execution gap (>400 ms with no tokens).
+                // This gives an accurate reading for the current generation burst rather
+                // than averaging in dead time while bash/write_file was running.
+                if (s.genStartTime && _lastTokenMs && (_now - _lastTokenMs) > 400) {
+                    s.tokenCount = 0;
+                    s.genStartTime = _now;
                 }
-                const elapsed = (Date.now() - s.genStartTime) / 1000;
+                _lastTokenMs = _now;
+                s.tokenCount++;
+                if (!s.genStartTime) s.genStartTime = _now;
+                const elapsed = (_now - s.genStartTime) / 1000;
                 if (elapsed > 0.3) {
                     s.tokensPerSec = Math.round(s.tokenCount / elapsed);
                 }
                 break;
+            }
             case 'draft':
                 s.draft = data.text;
                 s.draftThinking = data.thinking || '';
