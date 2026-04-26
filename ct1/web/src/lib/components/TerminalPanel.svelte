@@ -17,22 +17,6 @@
     let lastPendingLen = 0;
     let lastWorkspaceId: string | null = null;
 
-    const APPROVAL_TIMEOUT = 60;
-    let approvalCountdown = $state(APPROVAL_TIMEOUT);
-    let _approvalTimer: ReturnType<typeof setInterval> | null = null;
-
-    $effect(() => {
-        if (pendingApproval) {
-            approvalCountdown = APPROVAL_TIMEOUT;
-            if (_approvalTimer) clearInterval(_approvalTimer);
-            _approvalTimer = setInterval(() => {
-                approvalCountdown = Math.max(0, approvalCountdown - 1);
-            }, 1000);
-        } else {
-            if (_approvalTimer) { clearInterval(_approvalTimer); _approvalTimer = null; }
-        }
-        return () => { if (_approvalTimer) clearInterval(_approvalTimer); };
-    });
 
     $effect(() => {
         if (!workspaceId) {
@@ -195,9 +179,6 @@
                     <path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                 </svg>
                 <span class="term-approval-label">AI wants to run a command</span>
-                <span class="term-approval-countdown" class:term-countdown-urgent={approvalCountdown <= 15}>
-                    {approvalCountdown}s
-                </span>
             </div>
             <div class="term-approval-cmd">
                 <code class="term-approval-text">{pendingApproval.command}</code>
@@ -360,20 +341,6 @@
         font-weight: 600;
     }
     .term-approval-label { flex: 1; }
-    .term-approval-countdown {
-        font-family: 'Geist Mono', monospace;
-        font-size: 11px;
-        color: rgba(255, 180, 60, 0.65);
-        font-weight: 500;
-    }
-    .term-countdown-urgent {
-        color: rgba(255, 90, 60, 0.9);
-        animation: term-blink 0.6s ease-in-out infinite alternate;
-    }
-    @keyframes term-blink {
-        from { opacity: 1; }
-        to { opacity: 0.4; }
-    }
     .term-approval-cmd {
         background: rgba(0, 0, 0, 0.3);
         border: 1px solid rgba(255,255,255,0.07);
