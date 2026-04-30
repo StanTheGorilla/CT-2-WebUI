@@ -38,6 +38,8 @@ from ct1.server.workspace import WorkspaceManager, is_command_safe
 from ct1.server.cache_policy import should_clear_kv_cache
 from ct1.server.backend_detector import detect as _detect_backend, probe_ollama, probe_lm_studio, stop_managed_proc as _stop_ollama
 
+APP_VERSION = "0.1.0"
+
 _TITLE_STRIP = _re.compile(
     r'^(?:(?:can\s+you|please|could\s+you|i(?:\'d)?\s+(?:like|want|need)(?:\s+you)?\s+to|'
     r'generate|create|make|build|write|design|implement|develop|add|fix|update|'
@@ -638,7 +640,7 @@ async def get_status():
     port = _cfg.get("llama_server", {}).get("port", 8080)
     model_url = f"http://localhost:{port}"
     model = await check_server_health(model_url)
-    return {"model": model}
+    return {"model": model, "version": APP_VERSION}
 
 
 @app.get("/api/events")

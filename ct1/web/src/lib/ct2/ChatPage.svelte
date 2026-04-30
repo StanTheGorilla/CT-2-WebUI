@@ -16,6 +16,7 @@
         getTurnOutputExt,
         getTurnOutputFilename,
         stripCodeFences,
+        stripFileMarkers,
     } from '$lib/chatUi';
 
     // ── Composer state ───────────────────────────────────────────
@@ -423,7 +424,7 @@
                                 <!-- Backward compat: no explanation extracted — show content as markdown -->
                                 {#if !turn.explanation && turn.content}
                                     <div class="c2-ai-bubble">
-                                        <div class="c2-ai-text">{@html render(turn.content)}</div>
+                                        <div class="c2-ai-text">{@html render(stripFileMarkers(turn.content))}</div>
                                         <div class="c2-ai-actions" class:c2-visible={hoveredTurn === i}>
                                             <button class="c2-icon-btn" onclick={() => copyText(turn.content)} title="Copy">
                                                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
@@ -1251,8 +1252,8 @@
     .c2-ai-text :global(li) { margin-bottom: 3px; }
     .c2-ai-text :global(code) {
         font-family: 'Geist Mono', monospace;
-        font-size: 0.86em;
-        padding: 1px 5px;
+        font-size: 0.84em;
+        padding: 2px 7px;
         border-radius: 4px;
         background: var(--c2-bg-2);
         border: 1px solid var(--c2-border-1);
@@ -1814,7 +1815,8 @@
         display: flex;
         flex-direction: column;
         gap: 4px;
-        margin-top: 6px;
+        margin-top: 8px;
+        margin-bottom: 4px;
     }
     .c2-ws-file-card {
         display: flex;

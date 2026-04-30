@@ -11,7 +11,7 @@ interface Preferences {
     designRefinement: boolean;
     webSearchEnabled: boolean;
     requireCommandApproval: boolean;
-    // Atlas Mode (beta)
+    // Atlas Mode
     atlasMode: boolean;
     atlasEffortMode: 'auto' | 'manual';
     atlasEffortLevel: number;

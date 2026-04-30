@@ -52,6 +52,13 @@ export function stripCodeFences(content: string): string {
     return content.replace(/^```\w*\s*\n/, '').replace(/\n?```\s*$/, '');
 }
 
+export function stripFileMarkers(content: string): string {
+    return content
+        .replace(/\[FILE:\s*[^\]]+\]\s*/g, '')
+        .replace(/<!--\s*FILE:\s*.+?\s*-->\s*/g, '')
+        .trim();
+}
+
 export function compactPreviewText(content: string, maxLines = 5): string {
     const trimmed = content.trim();
     if (!trimmed) return 'No summary content returned.';

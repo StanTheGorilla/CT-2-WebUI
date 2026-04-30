@@ -14,7 +14,7 @@ CT-2 wraps any local model in a structured multi-phase pipeline: deterministic r
 - **Streaming generation** — full token-level streaming with thinking traces visible in the UI
 - **Validation** — HTML structural checks, Python AST validation, JS brace matching; deterministic cleanup and repetition trimming
 - **Selective refinement** — optional self-refinement pass (Design mode: spacing, colors, hover states)
-- **Atlas Mode** *(beta)* — test-time compute scaling: generate K candidates, score each, select the best
+- **Atlas Mode** — test-time compute scaling: generate K candidates, score each, select the best
 
 ### Modes
 - **Chat** — direct conversational responses; question detection skips planning overhead
@@ -59,6 +59,48 @@ CT-2 wraps any local model in a structured multi-phase pipeline: deterministic r
 - **Full-text search** — search across all past conversations from the sidebar
 - **Session restore** — conversations grouped by time (Today / Yesterday / This Week / Older); click any to restore
 - **Thumbs up / down feedback** — per-message; positive feedback on design/code responses auto-caches the output
+
+### Atlas Mode
+
+Atlas Mode applies test-time compute scaling to improve output quality for demanding tasks. Instead of generating a single response, CT-2 generates **K candidates** and returns the best one.
+
+**How K is determined**
+
+Atlas estimates task difficulty from four signals before generating anything:
+
+| Signal | Weight | Source |
+|--------|--------|--------|
+| Cache similarity | 30% | How closely the request matches cached component embeddings |
+| Journal pattern match | 25% | Overlap with lessons learned from past interactions |
+| Keyword complexity | 20% | Density of complexity keywords + message length |
+| Conversation depth | 25% | Number of prior turns in the session |
+
+The combined difficulty score (0.0–1.0) maps to a candidate count:
+
+| Difficulty | K candidates |
+|------------|-------------|
+| < 0.4 | 1 (single pass) |
+| 0.4–0.6 | 2 |
+| 0.6–0.8 | 3 |
+| ≥ 0.8 | 5 |
+
+The same score selects a **thinking tier** (nothink → light → standard → hard → extreme) that controls the token budget allocated to the model's reasoning trace.
+
+**How candidates are scored**
+
+- Candidate 0 (baseline) streams live to the UI as normal.
+- Candidates 1+ run silently in the background with a different perspective prompt injected (e.g. "systems architect", "performance engineer", "security-conscious lead").
+- Each candidate is scored by running self-generated test cases against the output and blending the result with the model's own reflection score (60% test / 40% reflection).
+- The highest-scoring candidate is selected and returned.
+- If all candidates score below 0.5 and the model's context window is ≥ 32K, Atlas attempts one iterative repair pass using failure analysis + Plan-Refine Chain of Thought.
+
+**When to use it**
+
+Enable Atlas Mode for tasks where output quality matters more than response time: complex algorithms, multi-constraint code, architecture design, or any request where a single generation pass produces inconsistent results.
+
+**Performance tradeoff**
+
+With K = 2 candidates the total generation time roughly doubles; K = 5 takes ~5×. Candidate 0 streams immediately so the UI is never blank — additional candidates run in the background and the best result is shown when selection completes. For simple or conversational messages Atlas will usually set K = 1 automatically (no overhead).
 
 ---
 

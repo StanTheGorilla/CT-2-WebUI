@@ -278,9 +278,11 @@ function estimateContentTokens(content: unknown): number {
 let ws: WS | null = null;
 
 // Tracks the timestamp of the last received token to detect tool-execution gaps.
-// When the model pauses for a tool call, no tokens arrive for hundreds of ms.
-// Resetting the speed counter on resumption gives an accurate per-burst tok/s.
+// _burst* vars track only the current generation burst for accurate tok/s display.
+// tokenCount in state accumulates across all rounds for the context bar.
 let _lastTokenMs = 0;
+let _burstCount = 0;
+let _burstStartMs = 0;
 
 // Saved when regenerate() removes the last assistant turn, attached to the new turn on done.
 let _pendingAlt: string | null = null;
@@ -369,6 +371,9 @@ function handleEvent(data: Record<string, any>) {
                 break;
             case 'routing':
                 s.phase = 'routing';
+                s.tokenCount = 0;
+                s.genStartTime = 0;
+                s.tokensPerSec = 0;
                 break;
             case 'routed':
                 s.route = data.route;
@@ -390,9 +395,9 @@ function handleEvent(data: Record<string, any>) {
                 }
                 s.streamingText = '';
                 s.streamingThinking = '';
-                s.tokenCount = 0;
-                s.genStartTime = 0;
-                s.tokensPerSec = 0;
+                // tokenCount keeps accumulating across rounds — only burst vars reset per round.
+                _burstCount = 0;
+                _burstStartMs = 0;
                 _lastTokenMs = 0;
                 break;
             case 'token': {
@@ -402,19 +407,20 @@ function handleEvent(data: Record<string, any>) {
                     s.streamingText += data.text;
                 }
                 const _now = Date.now();
-                // Reset speed counter after a tool-execution gap (>400 ms with no tokens).
-                // This gives an accurate reading for the current generation burst rather
-                // than averaging in dead time while bash/write_file was running.
-                if (s.genStartTime && _lastTokenMs && (_now - _lastTokenMs) > 400) {
-                    s.tokenCount = 0;
-                    s.genStartTime = _now;
+                // Reset burst speed counter after a tool-execution gap (>400 ms with no tokens).
+                // tokenCount is NOT reset — it accumulates across all rounds for the context bar.
+                if (_burstStartMs && _lastTokenMs && (_now - _lastTokenMs) > 400) {
+                    _burstCount = 0;
+                    _burstStartMs = 0;
                 }
                 _lastTokenMs = _now;
                 s.tokenCount++;
                 if (!s.genStartTime) s.genStartTime = _now;
-                const elapsed = (_now - s.genStartTime) / 1000;
-                if (elapsed > 0.3) {
-                    s.tokensPerSec = Math.round(s.tokenCount / elapsed);
+                _burstCount++;
+                if (!_burstStartMs) _burstStartMs = _now;
+                const burstElapsed = (_now - _burstStartMs) / 1000;
+                if (burstElapsed > 0.3) {
+                    s.tokensPerSec = Math.round(_burstCount / burstElapsed);
                 }
                 break;
             }
@@ -467,9 +473,9 @@ function handleEvent(data: Record<string, any>) {
                 s.thinking = data.thinking || s.streamingThinking || '';
                 s.streamingThinking = '';
                 s.streamingText = '';
-                if (s.genStartTime && s.tokenCount > 0) {
-                    const elapsed = (Date.now() - s.genStartTime) / 1000;
-                    s.tokensPerSec = elapsed > 0 ? Math.round(s.tokenCount / elapsed) : 0;
+                if (_burstStartMs && _burstCount > 0) {
+                    const elapsed = (Date.now() - _burstStartMs) / 1000;
+                    s.tokensPerSec = elapsed > 0 ? Math.round(_burstCount / elapsed) : 0;
                 }
                 if (!s.draft) s.draft = data.draft || '';
                 if (!s.draftThinking) s.draftThinking = data.draft_thinking || '';

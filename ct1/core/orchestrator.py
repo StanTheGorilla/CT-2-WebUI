@@ -536,14 +536,19 @@ class Orchestrator:
     @staticmethod
     def _extract_narrative(text: str) -> str:
         """Return the narrative/summary text from computer mode output with file blocks removed."""
-        if '[FILE:' in text or '<!-- FILE:' in text:
-            # Remove [FILE: path]...content... blocks
-            result = re.sub(r'\[FILE:\s*[^\]]+\].*?(?=\[FILE:|$)', '', text, flags=re.DOTALL)
-            result = re.sub(r'<!--\s*FILE:\s*.+?\s*-->.*?(?=<!--\s*FILE:|$)', '', result, flags=re.DOTALL)
-        else:
-            # Remove ```filename.ext ... ``` fenced blocks
-            result = re.sub(r'```\S+\.\w+[^\n]*\n.*?```', '', text, flags=re.DOTALL)
-        # Strip "COMPLETED:" label
+        # Strategy 1: take text BEFORE the first [FILE:] marker (most common format).
+        first_file = re.search(r'\[FILE:\s*[^\]]+\]|<!--\s*FILE:\s*', text)
+        if first_file and first_file.start() > 20:
+            before = text[:first_file.start()].strip()
+            if len(before) > 30:
+                return before
+
+        # Strategy 2: strip [FILE: xxx] labels and all fenced code blocks,
+        # returning whatever prose remains (handles narrative-after-files format).
+        result = text
+        result = re.sub(r'\[FILE:\s*[^\]]+\]\s*', '', result)
+        result = re.sub(r'<!--\s*FILE:\s*.+?\s*-->\s*', '', result)
+        result = re.sub(r'```[\w.\-]+[^\n]*\n.*?```', '', result, flags=re.DOTALL)
         result = re.sub(r'(?m)^COMPLETED:\s*', '', result)
         return result.strip()
 
@@ -1304,50 +1309,11 @@ class Orchestrator:
                 emit("polished", code=final_response)
 
         # ── Phase 5: VALIDATE ─────────────────────────────────────────
+        # ROUTE_COMPUTER skips static validation — the AI already ran and tested
+        # the code via tool calls; the static validator produces false positives that
+        # trigger an unnecessary fix pass and break working code.
         fence_type = None  # resolved from model's fence tag; may stay None for edits/direct
-        if is_code and not is_edit and route == "ROUTE_COMPUTER":
-            # Computer mode: validate each parsed file individually
-            parsed_files = self._parse_multi_file(draft)
-            # Fix HTML boilerplate deterministically before validation
-            for f in parsed_files:
-                ext = f["path"].rsplit('.', 1)[-1].lower() if '.' in f["path"] else ''
-                if ext in ('html', 'htm'):
-                    f["content"] = fix_html_structure(f["content"])
-            file_issues = []
-            for f in parsed_files:
-                file_issues.extend(validate_file(f["path"], f["content"]))
-            if file_issues:
-                emit("validating", issues=file_issues,
-                     review={"pass": False, "critical_issues": file_issues,
-                             "fix_instructions": ""})
-                emit("fixing")
-
-                fix_prompt = (
-                    f"Fix ALL these issues in the code:\n"
-                    + "\n".join(f"- {i}" for i in file_issues[:5])
-                    + f"\n\nOriginal output:\n{draft}"
-                )
-
-                def on_fix_token_comp(token, kind):
-                    emit("token", text=token, kind=kind)
-
-                fix_ovr = {**task_ovr}
-                if "thinking_budget" in fix_ovr:
-                    fix_ovr["thinking_budget"] = min(fix_ovr["thinking_budget"], 2048)
-                fix_result = await self.engine.generate(
-                    fix_prompt, route,
-                    on_token=on_fix_token_comp,
-                    task_overrides=fix_ovr,
-                    tools=tools,
-                    tool_executor=tool_executor,
-                )
-                final_response = fix_result["text"]
-                final_thinking = fix_result.get("thinking", "")
-            else:
-                emit("validated", issues=[], review={"pass": True,
-                     "critical_issues": [], "fix_instructions": ""})
-
-        elif is_code and not is_edit:
+        if is_code and not is_edit and route != "ROUTE_COMPUTER":
             # Non-computer code: resolve output type for validation + download.
             # Priority: model's fence language tag > plan > content heuristics.
             # The fence tag (```python, ```typescript …) is the model's own

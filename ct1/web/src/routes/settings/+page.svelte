@@ -803,7 +803,7 @@
 
             <label class="toggle-card atlas-master">
                 <span class="toggle-info">
-                    <span class="toggle-name">Atlas Mode <span class="beta-badge">Beta</span></span>
+                    <span class="toggle-name">Atlas Mode</span>
                     <span class="toggle-hint">The AI generates multiple answers and picks the best one. Significantly improves quality for complex tasks, but takes longer.</span>
                 </span>
                 <button
@@ -1348,20 +1348,6 @@
         cursor: pointer;
         outline: none;
     }
-    .beta-badge {
-        font-size: 10px;
-        font-weight: 600;
-        color: var(--text-muted);
-        background: rgba(210, 153, 34, 0.12);
-        border: 1px solid rgba(210, 153, 34, 0.25);
-        padding: 1px 7px;
-        border-radius: 9999px;
-        vertical-align: middle;
-        margin-left: 4px;
-        text-transform: none;
-        letter-spacing: 0;
-    }
-
     /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
        MODEL SELECTOR
        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
