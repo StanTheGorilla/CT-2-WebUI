@@ -42,6 +42,10 @@ ct1/web/.pnpm-store/
 .pnpm-store/
 node_modules/
 
+# ── Editor / tool config ───────────────────────────────────────────
+.claude/
+.obsidian/
+
 # ── IDE / OS ───────────────────────────────────────────────────────
 .vscode/
 .idea/
@@ -72,5 +76,3 @@ ct2-handoff.zip
 # ── Knowledge graph output (generated, not source) ─────────────────
 graphify-out/
 
-# ── Editor / tool config ───────────────────────────────────────────
-.obsidian/
