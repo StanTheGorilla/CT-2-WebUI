@@ -65,13 +65,16 @@ desktop.ini
 _local/
 CONTEXT.md
 CONTEXT/
-AGENTS.md
 docs/
 SYSTEMPROMPT.md
 
 # ── Dev / handoff archives ─────────────────────────────────────────
 ct2-handoff/
 ct2-handoff.zip
+
+# ── Agent / project context files ──────────────────────────────────
+CLAUDE.md
+AGENTS.md
 
 # ── Knowledge graph output (generated, not source) ─────────────────
 graphify-out/
