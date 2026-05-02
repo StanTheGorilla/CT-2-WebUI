@@ -3,10 +3,14 @@ import { browser } from '$app/environment';
 
 export type Theme = 'light' | 'dark';
 export type UiStyle = 'classic' | 'ct2';
+export type ClassicBg = 'default' | 'image';
+export type Ct2Bg = 'image' | 'none';
 
 interface Preferences {
     theme: Theme;
     uiStyle: UiStyle;
+    classicBg: ClassicBg;
+    ct2Bg: Ct2Bg;
     showThinking: boolean;
     designRefinement: boolean;
     webSearchEnabled: boolean;
@@ -23,6 +27,8 @@ interface Preferences {
 const defaults: Preferences = {
     theme: 'light',
     uiStyle: 'classic',
+    classicBg: 'default',
+    ct2Bg: 'image',
     showThinking: false,
     designRefinement: true,
     webSearchEnabled: false,
@@ -46,6 +52,10 @@ function loadPrefs(): Preferences {
             if (parsed.theme !== 'light' && parsed.theme !== 'dark') {
                 parsed.theme = 'light';
             }
+            // Migrate old 'video' classicBg to 'image'
+            if ((parsed.classicBg as string) === 'video') {
+                parsed.classicBg = 'image';
+            }
             return parsed;
         }
         return defaults;
@@ -62,6 +72,7 @@ function createPreferencesStore() {
             localStorage.setItem('ct2-preferences', JSON.stringify(prefs));
             applyTheme(prefs.theme);
             applyUiStyle(prefs.uiStyle);
+            applyClassicBg(prefs.classicBg ?? 'default');
         });
     }
 
@@ -88,6 +99,19 @@ export function toggleTheme() {
 
 export function setUiStyle(style: UiStyle) {
     preferences.update((p) => ({ ...p, uiStyle: style }));
+}
+
+export function setClassicBg(bg: ClassicBg) {
+    preferences.update((p) => ({ ...p, classicBg: bg }));
+}
+
+export function setCt2Bg(bg: Ct2Bg) {
+    preferences.update((p) => ({ ...p, ct2Bg: bg }));
+}
+
+function applyClassicBg(bg: ClassicBg) {
+    if (!browser) return;
+    document.documentElement.setAttribute('data-classic-bg', bg);
 }
 
 export function toggleWebSearch() {

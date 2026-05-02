@@ -176,6 +176,8 @@
         sidebarOpen.set(false);
         const data = await loadConversation(id);
         if (data) {
+            setWorkspaceId(null);
+            setMode('chat');
             loadFromHistory(data);
             goto('/');
         }
@@ -214,6 +216,9 @@
 
 <!-- Ambient background layers -->
 <div class="c2-shell" aria-hidden="false">
+    {#if ($preferences.ct2Bg ?? 'image') !== 'none'}
+        <div class="c2-img-bg" aria-hidden="true"></div>
+    {/if}
     <div class="c2-ambient" aria-hidden="true"></div>
 
     <!-- Topbar -->
@@ -422,17 +427,19 @@
 
             {#each workspaces as ws (ws.id)}
                 <div
-                    class="c2-conv-item"
-                    class:c2-conv-active={$chat.workspaceId === ws.id}
+                    class="c2-ws-item"
+                    class:c2-ws-active={$chat.workspaceId === ws.id}
                     role="button"
                     tabindex="0"
                     onclick={() => openWorkspace(ws.id)}
                     onkeydown={(e) => e.key === 'Enter' && openWorkspace(ws.id)}
                 >
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" style="flex-shrink:0;color:var(--c2-fg-3)">
-                        <path d="M2 5V3.5A1.5 1.5 0 013.5 2h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 5v7.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V5z" stroke="currentColor" stroke-width="1.1"/>
-                    </svg>
-                    <span class="c2-conv-title">{ws.name}</span>
+                    <div class="c2-ws-row">
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" class="c2-ws-icon">
+                            <path d="M2 5V3.5A1.5 1.5 0 013.5 2h3.379a1.5 1.5 0 011.06.44l.622.62a1.5 1.5 0 001.06.44H12.5A1.5 1.5 0 0114 5v7.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 12.5V5z" stroke="currentColor" stroke-width="1.1"/>
+                        </svg>
+                        <span class="c2-ws-name">{ws.name}</span>
+                    </div>
                     {#if ws.file_count > 0}
                         <span class="c2-ws-count">{ws.file_count}</span>
                     {/if}
@@ -520,11 +527,21 @@
         inset: 0;
         display: flex;
         flex-direction: column;
-        background: var(--c2-bg-0);
+        background: transparent;
         color: var(--c2-fg-0);
         font-family: 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
         font-size: 14px;
         overflow: hidden;
+    }
+
+    /* ── Image background ──────────────────────────────────────── */
+    .c2-img-bg {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+            linear-gradient(oklch(0.10 0.005 70 / 0.76), oklch(0.10 0.005 70 / 0.76)),
+            url('/ascii-art-bg.jpg') center / cover no-repeat;
     }
 
     /* ── Ambient background ────────────────────────────────────── */
@@ -570,9 +587,14 @@
         grid-template-columns: 1fr auto 1fr;
         align-items: center;
         padding: 0 14px;
-        background: var(--c2-bg-0);
+        background: oklch(0.155 0.003 260 / 0.88);
+        backdrop-filter: blur(20px) saturate(1.2);
+        -webkit-backdrop-filter: blur(20px) saturate(1.2);
         border-bottom: 1px solid var(--c2-border-1);
         flex-shrink: 0;
+    }
+    :global([data-theme="light"]) .c2-topbar {
+        background: oklch(0.995 0.002 90 / 0.88);
     }
     .c2-tb-left {
         display: flex;
@@ -930,9 +952,20 @@
     .c2-sb-projects {
         flex: none;
         overflow: visible;
-        border-bottom: 1px solid var(--c2-border-1);
-        padding-bottom: 6px;
-        margin-bottom: 4px;
+        padding-bottom: 10px;
+    }
+    .c2-sb-projects::after {
+        content: "";
+        display: block;
+        height: 1px;
+        margin: 2px 8px 0;
+        background: linear-gradient(
+            to right,
+            transparent,
+            var(--c2-border-1) 15%,
+            var(--c2-border-1) 85%,
+            transparent
+        );
     }
     .c2-sb-proj-head {
         display: flex;
@@ -974,15 +1007,88 @@
     }
     .c2-ws-create-input:focus { border-color: var(--c2-accent); }
     .c2-ws-create-input::placeholder { color: var(--c2-fg-3); }
+
+    /* ── Workspace items ──────────────────────────────────────── */
+    .c2-ws-item {
+        position: relative;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+        margin-bottom: 1px;
+        height: 36px;
+        transition: background 140ms ease, box-shadow 140ms ease;
+        overflow: hidden;
+    }
+    .c2-ws-item:hover {
+        background: var(--c2-bg-2);
+    }
+    .c2-ws-active {
+        background: var(--c2-bg-3);
+        box-shadow: inset 0 0 0 1px var(--c2-border-2);
+    }
+    .c2-ws-active::before {
+        content: "";
+        position: absolute;
+        left: -1px;
+        top: 8px;
+        bottom: 8px;
+        width: 2px;
+        border-radius: 999px;
+        background: var(--c2-accent);
+    }
+
+    .c2-ws-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+    }
+
+    .c2-ws-icon {
+        flex-shrink: 0;
+        color: var(--c2-fg-3);
+        transition: color 140ms ease;
+    }
+    .c2-ws-item:hover .c2-ws-icon,
+    .c2-ws-active .c2-ws-icon {
+        color: var(--c2-fg-2);
+    }
+
+    .c2-ws-name {
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--c2-fg-1);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+        transition: color 140ms ease;
+    }
+    .c2-ws-item:hover .c2-ws-name,
+    .c2-ws-active .c2-ws-name {
+        color: var(--c2-fg-0);
+    }
+
     .c2-ws-count {
         font-family: 'Geist Mono', monospace;
         font-size: 10px;
+        font-weight: 500;
         color: var(--c2-fg-3);
         background: var(--c2-bg-3);
         border: 1px solid var(--c2-border-1);
-        padding: 1px 5px;
+        padding: 2px 6px;
         border-radius: 999px;
         flex-shrink: 0;
+        transition: all 140ms ease;
+    }
+    .c2-ws-item:hover .c2-ws-count {
+        color: var(--c2-fg-2);
+        background: var(--c2-bg-2);
+        border-color: var(--c2-border-2);
     }
     .c2-sb-section-label {
         font-family: 'Geist Mono', monospace;

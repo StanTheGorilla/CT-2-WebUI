@@ -843,6 +843,12 @@ export function loadFromHistory(conv: {
         s.warning = '';
         s.undoStack = [];
         clearWorkspaceSessionState(s);
+        // If we loaded a non-workspace conversation, clear any stale workspace ID
+        if (s.workspaceId) {
+            s.workspaceId = null;
+            s.modeOverride = 'chat';
+            try { localStorage.removeItem('ct2_workspace_id'); } catch {}
+        }
         s.atlasActive = false;
         s.atlasCandidates = [];
         s.atlasPhase = null;
@@ -853,6 +859,8 @@ export function loadFromHistory(conv: {
 
 export function newConversation() {
     chat.set({ ...initial });
+    try { localStorage.removeItem('ct2_workspace_id'); } catch {}
+    try { sessionStorage.removeItem('ct2_last_conv'); } catch {}
 }
 
 export async function revertToTurn(userTurnIdx: number) {

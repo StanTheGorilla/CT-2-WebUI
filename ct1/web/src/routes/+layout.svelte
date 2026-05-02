@@ -25,6 +25,7 @@
 
     let shortcutOverlayOpen = $state(false);
     let isCt2 = $derived($preferences.uiStyle === 'ct2');
+    let classicBg = $derived($preferences.classicBg ?? 'default');
 
     function handleKeydown(e: KeyboardEvent) {
         if (e.ctrlKey && e.key === 'n') {
@@ -115,10 +116,14 @@
         {@render children()}
     </Ct2Layout>
 {:else}
-    <div class="app">
-        <div class="donut-bg" aria-hidden="true">
-            <pre class="donut" bind:this={pre}></pre>
-        </div>
+    <div class="app" class:has-image-bg={classicBg === 'image'}>
+        {#if classicBg === 'image'}
+            <div class="classic-img-bg" aria-hidden="true"></div>
+        {:else}
+            <div class="donut-bg" aria-hidden="true">
+                <pre class="donut" bind:this={pre}></pre>
+            </div>
+        {/if}
 
         <header class="topbar">
             <div class="topbar-left">
@@ -199,6 +204,27 @@
         overflow: hidden;
         position: relative;
         background: var(--bg);
+    }
+    .app.has-image-bg {
+        background: #080808;
+    }
+
+    /* Frosted topbar over the image so icons stay legible */
+    .app.has-image-bg .topbar {
+        background: rgba(0, 0, 0, 0.20);
+        backdrop-filter: blur(16px) saturate(1.2);
+        -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    }
+
+    /* ---- Image background ---- */
+    .classic-img-bg {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        background:
+            linear-gradient(rgba(7, 7, 7, 0.72), rgba(7, 7, 7, 0.72)),
+            url('/ascii-art-bg.jpg') center / cover no-repeat;
     }
 
     /* ---- Spinning donut background ---- */

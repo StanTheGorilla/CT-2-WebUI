@@ -22,6 +22,13 @@
     // ── Composer state ───────────────────────────────────────────
     let text = $state('');
     let feedEl = $state<HTMLDivElement | null>(null);
+    let userNearBottom = $state(true);
+
+    function onFeedScroll() {
+        if (!feedEl) return;
+        const gap = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight;
+        userNearBottom = gap < 120;
+    }
     let taEl   = $state<HTMLTextAreaElement | null>(null);
     let hoveredTurn = $state<number | null>(null);
     let contextSize = $state(0);
@@ -141,7 +148,12 @@
     $effect(() => {
         void $chat.conversation.length;
         void $chat.streamingText;
-        tick().then(() => { if (feedEl) feedEl.scrollTop = feedEl.scrollHeight; });
+        tick().then(() => { if (feedEl && userNearBottom) feedEl.scrollTop = feedEl.scrollHeight; });
+    });
+
+    // Reset scroll-lock when a new generation begins
+    $effect(() => {
+        if ($chat.phase === 'routing') userNearBottom = true;
     });
 
     // ── Auto resize textarea ─────────────────────────────────────
@@ -203,7 +215,7 @@
     style:right={isWorkspace ? wsPanelWidth + '%' : previewVisible ? previewWidth + '%' : '0'}
 >
     <!-- ── Feed ──────────────────────────────────────────────── -->
-    <div class="c2-feed scroll" bind:this={feedEl}>
+    <div class="c2-feed scroll" bind:this={feedEl} onscroll={onFeedScroll}>
         {#if $chat.conversation.length === 0 && !isActive}
             <!-- Welcome ─────────────────────────────────────────── -->
             <div class="c2-welcome">
@@ -608,7 +620,7 @@
                                     <span class="c2-sl-meta">{$chat.streamingThinking.length.toLocaleString()} chars</span>
                                 </button>
                                 {#if liveThinkingOpen}
-                                    <pre class="c2-think-body scroll">{$chat.streamingThinking}<span class="c2-cursor">|</span></pre>
+                                    <pre class="c2-think-body scroll">{$chat.streamingThinking}<span class="c2-cursor" aria-hidden="true"></span></pre>
                                 {/if}
                             </div>
                         {/if}
@@ -633,7 +645,7 @@
                                     {/if}
                                 </div>
                                 <div class="c2-gen-body">
-                                    {$chat.streamingText}<span class="c2-cursor">|</span>
+                                    {$chat.streamingText}<span class="c2-cursor" aria-hidden="true"></span>
                                 </div>
                             </div>
                         {:else if !$chat.pendingApproval}
@@ -650,7 +662,6 @@
 
     <!-- ── Composer ───────────────────────────────────────────── -->
     <div class="c2-composer-wrap">
-        <div class="c2-composer-grad"></div>
         <div class="c2-composer-inner">
             <div class="c2-composer-box">
                 <div class="c2-composer-ta-wrap">
@@ -910,11 +921,13 @@
     }
 
     .c2-welcome-h2 {
-        font-size: 22px;
-        font-weight: 400;
+        font-size: 25px;
+        font-weight: 500;
         color: var(--c2-fg-1);
         margin: 0 0 28px;
-        letter-spacing: -0.2px;
+        letter-spacing: -0.5px;
+        line-height: 1.25;
+        text-align: center;
     }
 
     .c2-sug-wrap {
@@ -943,6 +956,8 @@
         background: var(--c2-bg-2);
         color: var(--c2-fg-0);
         border-color: var(--c2-border-3);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 14px oklch(0 0 0 / 0.18);
     }
 
     /* ── User message ──────────────────────────────────────────── */
@@ -1067,11 +1082,11 @@
     /* ── Pulsing dot (live) ────────────────────────────────────── */
     .c2-pulse-dot {
         display: inline-block;
-        width: 6px; height: 6px;
+        width: 7px; height: 7px;
         border-radius: 50%;
         background: var(--c2-accent);
         flex-shrink: 0;
-        animation: c2-pulse-dot 1.8s ease-in-out infinite;
+        animation: c2-pulse-radar 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
     }
 
     /* ── Search row ────────────────────────────────────────────── */
@@ -1092,6 +1107,25 @@
         border: 1px solid var(--c2-border-2);
         border-radius: 10px;
         overflow: hidden;
+        position: relative;
+    }
+
+    .c2-gen-card::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 2px;
+        background: linear-gradient(90deg, var(--c2-accent) 0%, oklch(0.78 0.10 70 / 0.12) 70%, transparent 100%);
+        animation: c2-gen-sweep 2.4s ease-in-out infinite;
+        transform-origin: left center;
+        border-radius: 2px 2px 0 0;
+    }
+
+    @keyframes c2-gen-sweep {
+        0%   { opacity: 0.6; transform: scaleX(0.15); }
+        40%  { opacity: 1;   transform: scaleX(0.72); }
+        80%  { opacity: 0.6; transform: scaleX(1);    }
+        100% { opacity: 0.6; transform: scaleX(1);    }
     }
 
     .c2-gen-header {
@@ -1123,10 +1157,13 @@
     .c2-cursor {
         display: inline-block;
         width: 2px;
-        color: var(--c2-accent);
+        height: 0.88em;
+        margin-left: 2px;
+        vertical-align: text-bottom;
+        background: var(--c2-accent);
+        border-radius: 1px;
         animation: c2-cursor-blink 1s step-end infinite;
-        font-weight: 300;
-        opacity: 0.8;
+        opacity: 0.85;
     }
 
     /* ── Stop button ───────────────────────────────────────────── */
@@ -1343,14 +1380,6 @@
         z-index: 10;
     }
 
-    .c2-composer-grad {
-        position: absolute;
-        top: -32px; left: 0; right: 0;
-        height: 32px;
-        background: linear-gradient(to top, var(--c2-bg-0), transparent);
-        pointer-events: none;
-    }
-
     .c2-composer-inner {
         max-width: var(--c2-feed-max, 860px);
         margin: 0 auto;
@@ -1363,6 +1392,14 @@
         border-radius: 14px;
         box-shadow: var(--c2-shadow-card, 0 10px 28px -12px oklch(0 0 0 / 0.55));
         overflow: hidden;
+        transition: border-color 140ms, box-shadow 140ms;
+    }
+
+    .c2-composer-box:focus-within {
+        border-color: var(--c2-border-3);
+        box-shadow:
+            0 0 0 3px oklch(0.78 0.10 70 / 0.09),
+            var(--c2-shadow-card, 0 10px 28px -12px oklch(0 0 0 / 0.55));
     }
 
     .c2-composer-ta-wrap {
@@ -1455,7 +1492,12 @@
         cursor: pointer;
     }
     .c2-send-btn.c2-send-active:hover {
-        opacity: 0.9;
+        opacity: 0.88;
+        transform: scale(1.06);
+    }
+    .c2-send-btn.c2-send-active:active {
+        transform: scale(0.94);
+        opacity: 1;
     }
 
     .c2-composer-footer {
@@ -1525,8 +1567,8 @@
     .c2-think-block {
         align-self: stretch;
         max-width: 820px;
-        background: var(--c2-bg-1);
-        border: 1px solid var(--c2-border-1);
+        background: color-mix(in oklch, var(--c2-bg-1) 88%, oklch(0.78 0.10 70) 12%);
+        border: 1px solid color-mix(in oklch, var(--c2-border-1) 60%, oklch(0.78 0.10 70) 40%);
         border-radius: 8px;
         overflow: hidden;
     }

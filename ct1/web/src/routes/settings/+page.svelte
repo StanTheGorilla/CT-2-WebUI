@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import StatusIndicator from '$lib/components/StatusIndicator.svelte';
-    import { preferences, toggleWebSearch, setUiStyle, type UiStyle } from '$lib/stores/preferences';
+    import { preferences, toggleWebSearch, setUiStyle, setClassicBg, type UiStyle, type ClassicBg } from '$lib/stores/preferences';
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
     import Ct2Settings from '$lib/ct2/SettingsPage.svelte';
 
@@ -42,6 +42,10 @@
 
     function isUiStyle(style: UiStyle) {
         return $preferences.uiStyle === style;
+    }
+
+    function isClassicBg(bg: ClassicBg) {
+        return ($preferences.classicBg ?? 'default') === bg;
     }
 
     let contextSize = $state(0);
@@ -242,33 +246,75 @@
 
     /* ── Prompts state ── */
     const PROMPT_LABELS: Record<string, string> = {
-        generator_text:        'Chat & Direct Answers',
-        generator_code:        'Code Generator',
-        generator_design:      'Design Generator',
-        generator_computer:    'Computer Mode',
-        generator_edit:        'Code Editor',
-        generator_discuss:     'Code Discussion',
-        generator_patch:       'Patch Editor',
-        generator_section_edit:'Section Editor',
-        code_fewshot:          'Code Examples',
-        design_fewshot:        'Design Examples',
-        design_toolkit:        'Design Toolkit',
-        complexity_brief:      'Brief Response Style',
-        complexity_moderate:   'Moderate Response Style',
-        complexity_deep:       'Detailed Response Style',
-        inline_planning_suffix:'Planning Instructions',
-        inline_verify_suffix:  'Verification Instructions',
-        refine:                'Design Refiner',
-        refine_css:            'CSS Refiner',
-        refine_targeted:       'Targeted Refiner',
-        reflection_prompt:     'Self-Reflection',
-        solo_plan:             'Task Planner',
-        spec_generator:        'Spec Generator',
-        task_plan:             'Task Planning',
-        tension_prompt:        'Design Tension',
-        brain_system:          'Brain System',
-        mind_system:           'Mind System',
+        generator_text:              'Chat & Direct Answers',
+        generator_code:              'Code Generator',
+        generator_design:            'Design Generator',
+        generator_computer:          'Computer Mode',
+        generator_text_base:         'Chat — Core Instructions',
+        generator_code_base:         'Code — Core Instructions',
+        generator_design_base:       'Design — Core Instructions',
+        generator_computer_base:     'Computer — Core Instructions',
+        generator_edit:              'Code Editor',
+        generator_discuss:           'Code Discussion',
+        generator_patch:             'Patch Editor',
+        generator_section_edit:      'Section Editor',
+        code_fewshot:                'Code Examples',
+        design_fewshot:              'Design Examples',
+        design_toolkit:              'Design Toolkit',
+        complexity_brief:            'Brief Response Style',
+        complexity_moderate:         'Moderate Response Style',
+        complexity_deep:             'Detailed Response Style',
+        inline_planning_suffix:      'Planning Instructions',
+        inline_verify_suffix:        'Verification Instructions',
+        refine:                      'Design Refiner',
+        refine_css:                  'CSS Refiner',
+        refine_targeted:             'Targeted Refiner',
+        reflection_prompt:           'Self-Reflection',
+        solo_plan:                   'Task Planner',
+        spec_generator:              'Design — Phase 0: Visual Spec Generator',
+        task_plan:                   'Task Planning',
+        tension_prompt:              'Design Tension',
+        brain_system:                'Brain System',
+        mind_system:                 'Mind System',
     };
+
+    const BEHAVIOR_KEYS = ['generator_text', 'generator_code', 'generator_design', 'generator_computer'];
+    const PIPELINE_KEYS = ['generator_text_base', 'generator_code_base', 'generator_design_base', 'generator_computer_base', 'spec_generator'];
+    const PROMPT_DANGER = new Set(['spec_generator']);
+    const PROMPT_DESCRIPTIONS: Record<string, string> = {
+        generator_text:          'Tone, format, and response style for chat and direct answers.',
+        generator_code:          'Instructions for writing, explaining, and editing code.',
+        generator_design:        'Appearance and style guidance layered on top of the core pipeline for website and UI generation.',
+        generator_computer:      'How the AI behaves when using tools to control your computer.',
+        generator_text_base:     'Core pipeline instructions for chat mode. Always applied before your custom instructions.',
+        generator_code_base:     'Core pipeline instructions for code mode. Always applied before your custom instructions.',
+        generator_design_base:   'Core pipeline instructions for design mode. Always applied before your custom instructions.',
+        generator_computer_base: 'Core pipeline instructions for computer mode. Always applied before your custom instructions.',
+        spec_generator:          'Generates the visual plan — colors, fonts, and layout — before building a design. The server reads specific JSON field names from its output.',
+        generator_edit:          'How the AI rewrites a selected block of code.',
+        generator_discuss:       'Behavior when reviewing or discussing code.',
+        generator_patch:         'How the AI applies targeted text patches.',
+        generator_section_edit:  'How the AI edits a specific section of a file.',
+        code_fewshot:            'Example conversations shown to the AI in code mode.',
+        design_fewshot:          'Example conversations shown to the AI in design mode.',
+        design_toolkit:          'Additional design components and patterns available in design mode.',
+        complexity_brief:        'Instructions for short, to-the-point responses.',
+        complexity_moderate:     'Instructions for normal-length responses.',
+        complexity_deep:         'Instructions for thorough, in-depth responses.',
+        inline_planning_suffix:  'What the AI does when planning a multi-step task inline.',
+        inline_verify_suffix:    'What the AI does when verifying its own work inline.',
+        refine:                  'How the AI reviews and polishes a generated design.',
+        refine_css:              'How the AI polishes CSS styling.',
+        refine_targeted:         'How the AI makes targeted design improvements.',
+        reflection_prompt:       'Prompts the AI to review its own reasoning before responding.',
+        solo_plan:               'How the AI breaks down and plans complex tasks.',
+        task_plan:               'Planning instructions for computer-mode tasks.',
+        tension_prompt:          'Design tension and contrast guidance.',
+        brain_system:            'Core reasoning system instructions.',
+        mind_system:             'Memory and context management instructions.',
+    };
+
+    let advancedPromptsOpen = $state(false);
 
     let prompts = $state<Record<string, string>>({});
     let promptsExpanded = $state<Record<string, boolean>>({});
@@ -356,7 +402,7 @@
         return m ? m[1] + 'B' : '';
     }
 
-    let promptsOpen = $state(false);
+    let promptsOpen = $state(true);
 
     /* ── Workspace management ── */
     interface Workspace { id: string; name: string; created_at: string; file_count: number; }
@@ -913,70 +959,222 @@
     </section>
 
     <!-- ═══════════════════════════════════════════════
-         SECTION 5 — System Prompts (Advanced)
+         SECTION 5 — System Prompts
          ═══════════════════════════════════════════════ -->
     {#if Object.keys(prompts).length > 0}
     <section class="section">
         <div class="section-head">
             <div class="section-head-text">
                 <h2 class="section-title">System Prompts</h2>
-                <p class="section-desc">Advanced: edit the built-in instructions that guide each mode. Changes require a model restart.</p>
+                <p class="section-desc">Instructions that guide the AI in each mode. Everything is editable. Prompts marked with a warning affect how the server processes output — edit those carefully. Changes require a model restart.</p>
             </div>
-            <button class="collapse-btn" onclick={() => promptsOpen = !promptsOpen}>
-                {promptsOpen ? 'Hide' : 'Show'}
-                <span class="collapse-chevron" class:open={promptsOpen}></span>
-            </button>
+            <div class="prompts-head-actions">
+                <button class="scan-btn" onclick={restartModel} disabled={switching}>
+                    {switching ? 'Restarting...' : 'Restart server'}
+                </button>
+                <button class="collapse-btn" onclick={() => promptsOpen = !promptsOpen}>
+                    {promptsOpen ? 'Hide' : 'Show'}
+                    <span class="collapse-chevron" class:open={promptsOpen}></span>
+                </button>
+            </div>
         </div>
 
         {#if promptsOpen}
-        <div class="prompts-list">
-            {#each Object.entries(prompts).sort(([a], [b]) => a.localeCompare(b)) as [name, _content]}
-                <div class="prompt-row" class:expanded={promptsExpanded[name]}>
-                    <button class="prompt-header" onclick={() => togglePrompt(name)}>
-                        <span class="prompt-name">
-                            <span class="prompt-label">{PROMPT_LABELS[name] ?? name}</span>
-                            <span class="prompt-key">{name}</span>
-                        </span>
-                        <span class="prompt-chars">{(promptEdits[name] ?? _content).length} chars</span>
-                        <span class="prompt-chevron" class:open={promptsExpanded[name]}></span>
-                    </button>
-                    {#if promptsExpanded[name]}
-                        <div class="prompt-body">
-                            <textarea
-                                class="prompt-textarea"
-                                rows="12"
-                                value={promptEdits[name] ?? _content}
-                                oninput={(e) => editPrompt(name, (e.target as HTMLTextAreaElement).value)}
-                                spellcheck={false}
-                            ></textarea>
-                            {#if promptsSaved[name]}
-                                <div class="prompt-restart-notice">
-                                    Saved. Restart the model to apply changes.
-                                </div>
-                            {/if}
-                            {#if promptsSaveError[name]}
-                                <div class="inline-error">{promptsSaveError[name]}</div>
-                            {/if}
-                            <div class="prompt-actions">
-                                <button
-                                    class="btn-outline"
-                                    onclick={() => resetPrompt(name)}
-                                    disabled={promptsResetting[name] || promptsSaving[name]}
-                                    title="Restore original default"
-                                >{promptsResetting[name] ? 'Resetting...' : 'Reset to default'}</button>
-                                {#if promptsDirty[name] || promptsSaveError[name]}
-                                    <button
-                                        class="save-btn"
-                                        onclick={() => savePrompt(name)}
-                                        disabled={promptsSaving[name]}
-                                    >{promptsSaving[name] ? 'Saving...' : 'Save'}</button>
+
+        <!-- ── Behavior group ── -->
+        <div class="prompt-group">
+            <div class="prompt-group-header">
+                <span class="prompt-group-title">Behavior</span>
+                <span class="prompt-group-desc">How the AI talks and responds in each mode. These layer on top of the core pipeline below. Edit freely.</span>
+            </div>
+            <div class="prompts-list">
+                {#each BEHAVIOR_KEYS.filter(k => k in prompts) as name}
+                    <div class="prompt-row" class:expanded={promptsExpanded[name]}>
+                        <button class="prompt-header" onclick={() => togglePrompt(name)}>
+                            <span class="prompt-name">
+                                <span class="prompt-label">{PROMPT_LABELS[name] ?? name}</span>
+                                <span class="prompt-key">{name}</span>
+                            </span>
+                            <span class="prompt-chars">{(promptEdits[name] ?? prompts[name]).length} chars</span>
+                            <span class="prompt-chevron" class:open={promptsExpanded[name]}></span>
+                        </button>
+                        {#if promptsExpanded[name]}
+                            <div class="prompt-body">
+                                {#if PROMPT_DESCRIPTIONS[name]}
+                                    <p class="prompt-desc">{PROMPT_DESCRIPTIONS[name]}</p>
                                 {/if}
+                                <textarea
+                                    class="prompt-textarea"
+                                    rows="12"
+                                    value={promptEdits[name] ?? prompts[name]}
+                                    oninput={(e) => editPrompt(name, (e.target as HTMLTextAreaElement).value)}
+                                    spellcheck={false}
+                                    placeholder="Enter custom instructions..."
+                                ></textarea>
+                                {#if promptsSaved[name]}
+                                    <div class="prompt-restart-notice">
+                                    Saved — restart the server to apply changes.
+                                    <button class="prompt-restart-inline" onclick={restartModel} disabled={switching}>{switching ? 'Restarting...' : 'Restart now'}</button>
+                                </div>
+                                {/if}
+                                {#if promptsSaveError[name]}
+                                    <div class="inline-error">{promptsSaveError[name]}</div>
+                                {/if}
+                                <div class="prompt-actions">
+                                    <button
+                                        class="btn-outline"
+                                        onclick={() => resetPrompt(name)}
+                                        disabled={promptsResetting[name] || promptsSaving[name]}
+                                    >{promptsResetting[name] ? 'Resetting...' : 'Reset to default'}</button>
+                                    {#if promptsDirty[name] || promptsSaveError[name]}
+                                        <button
+                                            class="save-btn"
+                                            onclick={() => savePrompt(name)}
+                                            disabled={promptsSaving[name]}
+                                        >{promptsSaving[name] ? 'Saving...' : 'Save'}</button>
+                                    {/if}
+                                </div>
                             </div>
-                        </div>
-                    {/if}
-                </div>
-            {/each}
+                        {/if}
+                    </div>
+                {/each}
+            </div>
         </div>
+
+        <!-- ── Pipeline group ── -->
+        <div class="prompt-group">
+            <div class="prompt-group-header">
+                <span class="prompt-group-title">Pipeline</span>
+                <span class="prompt-group-desc">Core instructions always active in each mode, plus the design planner. Edit only if you understand how the pipeline works.</span>
+            </div>
+            <div class="prompts-list">
+                {#each PIPELINE_KEYS.filter(k => k in prompts) as name}
+                    {@const isDanger = PROMPT_DANGER.has(name)}
+                    <div class="prompt-row" class:expanded={promptsExpanded[name]}>
+                        <button class="prompt-header" onclick={() => togglePrompt(name)}>
+                            <span class="prompt-name">
+                                <span class="prompt-label">
+                                    {PROMPT_LABELS[name] ?? name}
+                                    {#if isDanger}<span class="prompt-danger-badge">⚠ breaking if changed</span>{/if}
+                                </span>
+                                <span class="prompt-key">{name}</span>
+                            </span>
+                            <span class="prompt-chars">{(promptEdits[name] ?? prompts[name]).length} chars</span>
+                            <span class="prompt-chevron" class:open={promptsExpanded[name]}></span>
+                        </button>
+                        {#if promptsExpanded[name]}
+                            <div class="prompt-body">
+                                {#if PROMPT_DESCRIPTIONS[name]}
+                                    <p class="prompt-desc">{PROMPT_DESCRIPTIONS[name]}</p>
+                                {/if}
+                                {#if isDanger}
+                                    <div class="prompt-danger-notice">
+                                        ⚠ Warning: This prompt's output is read by the server as JSON. You can change the wording, but do not rename, add, or remove any output field names — that will break design mode generation.
+                                    </div>
+                                {/if}
+                                <textarea
+                                    class="prompt-textarea"
+                                    rows="12"
+                                    value={promptEdits[name] ?? prompts[name]}
+                                    oninput={(e) => editPrompt(name, (e.target as HTMLTextAreaElement).value)}
+                                    spellcheck={false}
+                                ></textarea>
+                                {#if promptsSaved[name]}
+                                    <div class="prompt-restart-notice">
+                                    Saved — restart the server to apply changes.
+                                    <button class="prompt-restart-inline" onclick={restartModel} disabled={switching}>{switching ? 'Restarting...' : 'Restart now'}</button>
+                                </div>
+                                {/if}
+                                {#if promptsSaveError[name]}
+                                    <div class="inline-error">{promptsSaveError[name]}</div>
+                                {/if}
+                                <div class="prompt-actions">
+                                    <button
+                                        class="btn-outline"
+                                        onclick={() => resetPrompt(name)}
+                                        disabled={promptsResetting[name] || promptsSaving[name]}
+                                    >{promptsResetting[name] ? 'Resetting...' : 'Reset to default'}</button>
+                                    {#if promptsDirty[name] || promptsSaveError[name]}
+                                        <button
+                                            class="save-btn"
+                                            onclick={() => savePrompt(name)}
+                                            disabled={promptsSaving[name]}
+                                        >{promptsSaving[name] ? 'Saving...' : 'Save'}</button>
+                                    {/if}
+                                </div>
+                            </div>
+                        {/if}
+                    </div>
+                {/each}
+            </div>
+        </div>
+
+        <!-- ── Internal / Advanced ── -->
+        {@const internalKeys = Object.keys(prompts)
+            .filter(k => !BEHAVIOR_KEYS.includes(k) && !PIPELINE_KEYS.includes(k))
+            .sort()}
+        {#if internalKeys.length > 0}
+        <div class="advanced-prompts-section">
+            <button class="collapse-btn advanced-prompts-toggle" onclick={() => advancedPromptsOpen = !advancedPromptsOpen}>
+                Internal / Advanced ({internalKeys.length})
+                <span class="collapse-chevron" class:open={advancedPromptsOpen}></span>
+            </button>
+            {#if advancedPromptsOpen}
+            <div class="prompts-list" style="margin-top:8px;">
+                {#each internalKeys as name}
+                    <div class="prompt-row" class:expanded={promptsExpanded[name]}>
+                        <button class="prompt-header" onclick={() => togglePrompt(name)}>
+                            <span class="prompt-name">
+                                <span class="prompt-label">{PROMPT_LABELS[name] ?? name}</span>
+                                <span class="prompt-key">{name}</span>
+                            </span>
+                            <span class="prompt-chars">{(promptEdits[name] ?? prompts[name]).length} chars</span>
+                            <span class="prompt-chevron" class:open={promptsExpanded[name]}></span>
+                        </button>
+                        {#if promptsExpanded[name]}
+                            <div class="prompt-body">
+                                {#if PROMPT_DESCRIPTIONS[name]}
+                                    <p class="prompt-desc">{PROMPT_DESCRIPTIONS[name]}</p>
+                                {/if}
+                                <textarea
+                                    class="prompt-textarea"
+                                    rows="10"
+                                    value={promptEdits[name] ?? prompts[name]}
+                                    oninput={(e) => editPrompt(name, (e.target as HTMLTextAreaElement).value)}
+                                    spellcheck={false}
+                                ></textarea>
+                                {#if promptsSaved[name]}
+                                    <div class="prompt-restart-notice">
+                                    Saved — restart the server to apply changes.
+                                    <button class="prompt-restart-inline" onclick={restartModel} disabled={switching}>{switching ? 'Restarting...' : 'Restart now'}</button>
+                                </div>
+                                {/if}
+                                {#if promptsSaveError[name]}
+                                    <div class="inline-error">{promptsSaveError[name]}</div>
+                                {/if}
+                                <div class="prompt-actions">
+                                    <button
+                                        class="btn-outline"
+                                        onclick={() => resetPrompt(name)}
+                                        disabled={promptsResetting[name] || promptsSaving[name]}
+                                    >{promptsResetting[name] ? 'Resetting...' : 'Reset to default'}</button>
+                                    {#if promptsDirty[name] || promptsSaveError[name]}
+                                        <button
+                                            class="save-btn"
+                                            onclick={() => savePrompt(name)}
+                                            disabled={promptsSaving[name]}
+                                        >{promptsSaving[name] ? 'Saving...' : 'Save'}</button>
+                                    {/if}
+                                </div>
+                            </div>
+                        {/if}
+                    </div>
+                {/each}
+            </div>
+            {/if}
+        </div>
+        {/if}
+
         {/if}
     </section>
     {/if}
@@ -1063,6 +1261,33 @@
                     >CT-2 Design</button>
                 </div>
             </div>
+
+            {#if isUiStyle('classic')}
+            <div class="toggle-card" style="align-items: flex-start; flex-direction: column; gap: 12px;">
+                <span class="toggle-info" style="width: 100%;">
+                    <span class="toggle-name">Background</span>
+                    <span class="toggle-hint">
+                        {#if isClassicBg('image')}
+                            Static ASCII artwork image
+                        {:else}
+                            Spinning ASCII donut (animated)
+                        {/if}
+                    </span>
+                </span>
+                <div class="seg-group" role="group" aria-label="Classic background">
+                    <button
+                        class="seg-btn"
+                        class:active={isClassicBg('default')}
+                        onclick={() => setClassicBg('default')}
+                    >Donut</button>
+                    <button
+                        class="seg-btn"
+                        class:active={isClassicBg('image')}
+                        onclick={() => setClassicBg('image')}
+                    >Image</button>
+                </div>
+            </div>
+            {/if}
         </div>
     </section>
 
@@ -1985,6 +2210,12 @@
         box-sizing: border-box;
     }
     .prompt-textarea:focus { border-color: var(--text-muted); }
+    .prompts-head-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+    }
     .prompt-restart-notice {
         font-size: 12px;
         color: rgba(210, 153, 34, 0.9);
@@ -1992,11 +2223,94 @@
         border: 1px solid rgba(210, 153, 34, 0.18);
         border-radius: var(--radius-sm);
         padding: 8px 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
     }
+    .prompt-restart-inline {
+        flex-shrink: 0;
+        padding: 4px 12px;
+        font-size: 11px;
+        font-weight: 600;
+        font-family: inherit;
+        color: rgba(210, 153, 34, 0.95);
+        background: rgba(210, 153, 34, 0.12);
+        border: 1px solid rgba(210, 153, 34, 0.3);
+        border-radius: 9999px;
+        cursor: pointer;
+        transition: opacity 0.15s;
+    }
+    .prompt-restart-inline:hover:not(:disabled) { opacity: 0.8; }
+    .prompt-restart-inline:disabled { opacity: 0.5; cursor: wait; }
     .prompt-actions {
         display: flex;
         justify-content: flex-end;
         gap: 8px;
+    }
+
+    .prompt-group {
+        margin-bottom: 16px;
+    }
+    .prompt-group-header {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin-bottom: 8px;
+        padding: 0 2px;
+    }
+    .prompt-group-title {
+        font-size: 11px;
+        font-weight: 650;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+    }
+    .prompt-group-desc {
+        font-size: 12px;
+        color: var(--text-muted);
+        line-height: 1.4;
+    }
+    .prompt-desc {
+        font-size: 12.5px;
+        color: var(--text-secondary);
+        line-height: 1.5;
+        margin: 0 0 10px;
+    }
+    .prompt-danger-badge {
+        display: inline-flex;
+        align-items: center;
+        margin-left: 8px;
+        font-size: 10px;
+        font-weight: 600;
+        font-family: inherit;
+        padding: 2px 7px;
+        border-radius: 4px;
+        background: rgba(210, 100, 34, 0.1);
+        border: 1px solid rgba(210, 100, 34, 0.25);
+        color: rgba(200, 85, 15, 0.95);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        vertical-align: middle;
+    }
+    .prompt-danger-notice {
+        font-size: 12.5px;
+        line-height: 1.5;
+        color: rgba(180, 75, 10, 0.95);
+        background: rgba(210, 100, 34, 0.07);
+        border: 1px solid rgba(210, 100, 34, 0.22);
+        border-radius: var(--radius-sm);
+        padding: 10px 14px;
+        margin-bottom: 10px;
+    }
+    .advanced-prompts-section {
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid var(--border-subtle);
+    }
+    .advanced-prompts-toggle {
+        font-size: 12px;
+        color: var(--text-muted);
     }
 
     /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

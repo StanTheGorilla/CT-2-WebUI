@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { get } from 'svelte/store';
     import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, loadFromHistory, clearPendingCommands, clearPendingApproval, revertToTurn, pendingInputPrompt } from '$lib/stores/chat';
     import { preferences } from '$lib/stores/preferences';
     import Ct2Chat from '$lib/ct2/ChatPage.svelte';
@@ -93,28 +94,48 @@
     });
 
     $effect(() => {
-        // On mount: restore workspace + its conversation, or last non-workspace conversation
-        doRestoreSession();
+        // Only restore session on first load (empty chat).
+        // If a conversation is already loaded (e.g. navigating back from Settings),
+        // leave it alone so the chat state isn't wiped mid-generation.
+        if (!$chat.conversationId) {
+            doRestoreSession();
+        }
+    });
+
+    // Cancel any active generation when leaving the chat page.
+    // Uses get() (non-reactive) so cleanup only fires on unmount, not on store changes.
+    $effect(() => {
+        return () => {
+            const s = get(chat);
+            if (s.conversationId && s.phase !== 'idle' && s.phase !== 'done') {
+                stopGeneration();
+            }
+        };
     });
 
     async function doRestoreSession() {
+        // Check sessionStorage first — a recent chat takes priority over a stale workspace
+        const lastConvId = sessionStorage.getItem('ct2_last_conv');
+        if (lastConvId) {
+            try {
+                const conv = await fetch(`/api/conversations/${lastConvId}`).then(r => r.json());
+                if (conv?.id) {
+                    loadFromHistory(conv);
+                    return;
+                }
+            } catch {}
+            // Conversation not found — clear the stale reference
+            try { sessionStorage.removeItem('ct2_last_conv'); } catch {}
+        }
+
+        // No recent chat — try workspace restoration
         const wsId = restoreWorkspace();
         if (wsId) {
-            // Workspace restored — also load its conversation so the panel isn't empty
             try {
                 const conv = await fetch(`/api/workspaces/${wsId}/conversation`).then(r => r.json());
                 if (conv?.id) loadFromHistory(conv);
             } catch {}
-            return;
         }
-        // No workspace — restore last non-workspace conversation (survives F5)
-        try {
-            const convId = sessionStorage.getItem('ct2_last_conv');
-            if (convId) {
-                const conv = await fetch(`/api/conversations/${convId}`).then(r => r.json());
-                if (conv?.id) loadFromHistory(conv);
-            }
-        } catch {}
     }
 
     $effect(() => {

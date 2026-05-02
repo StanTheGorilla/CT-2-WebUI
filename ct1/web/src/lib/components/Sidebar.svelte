@@ -402,14 +402,14 @@
         font-size: 14px;
         font-weight: 600;
         cursor: pointer;
-        transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+        transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 260ms var(--spring-soft);
         letter-spacing: -0.015em;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06), inset 0 1px 0 var(--inner-highlight);
     }
     .new-chat:hover {
         background: var(--surface-solid);
         border-color: var(--border-strong);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.09), inset 0 1px 0 rgba(255,255,255,0.9);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.09), inset 0 1px 0 var(--inner-highlight);
         transform: translateY(-1px);
     }
     .new-chat:active {
@@ -526,13 +526,13 @@
         transform: translateY(-50%);
         width: 3px;
         height: 0;
-        background: var(--accent);
+        background: var(--brain);
         border-radius: 0 2px 2px 0;
         transition: height 150ms ease;
     }
     .row.active::before {
         height: 62%;
-        box-shadow: none;
+        box-shadow: 0 0 6px rgba(232, 133, 12, 0.45);
     }
 
     .row-icon {
@@ -630,7 +630,7 @@
         padding: 8px 14px 6px;
         letter-spacing: 0.12em;
         text-transform: uppercase;
-        opacity: 0.7;
+        opacity: 0.85;
     }
 
     /* ─── Conversation rows ─── */
