@@ -601,19 +601,20 @@ async def lifespan(application: FastAPI):
             except asyncio.CancelledError:
                 pass
     # Drain active generations (max 30s)
-    snapshot = set(_active_think_tasks)
-    if snapshot:
-        print(f"[api] Shutdown: waiting for {len(snapshot)} active generation(s)...")
-        try:
-            _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
-            if _pending:
-                print(f"[api] Shutdown: {len(_pending)} generation(s) did not finish in 30s — cancelling")
-                for task in _pending:
-                    task.cancel()
-                # Await cancellation to complete before tearing down resources
-                await asyncio.gather(*_pending, return_exceptions=True)
-        except Exception:
-            pass
+    if _is_generating > 0:
+        snapshot = set(_active_think_tasks)
+        if snapshot:
+            print(f"[api] Shutdown: waiting for {len(snapshot)} active generation(s)...")
+            try:
+                _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                if _pending:
+                    print(f"[api] Shutdown: {len(_pending)} generation(s) did not finish in 30s — cancelling")
+                    for task in _pending:
+                        task.cancel()
+                    # Await cancellation to complete before tearing down resources
+                    await asyncio.gather(*_pending, return_exceptions=True)
+            except Exception:
+                pass
     if _db:
         await _db.close()
     if _cache:
@@ -1498,15 +1499,16 @@ async def select_model(body: ModelSelect):
     _swapping = True
     try:
         # Drain active generation tasks (max 30s)
-        snapshot = set(_active_think_tasks)
-        if snapshot:
-            print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
-            try:
-                _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
-                if _pending:
-                    print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
-            except Exception:
-                pass
+        if _is_generating > 0:
+            snapshot = set(_active_think_tasks)
+            if snapshot:
+                print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
+                try:
+                    _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                    if _pending:
+                        print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
+                except Exception:
+                    pass
 
         # Update config
         _raw_cfg["active_model"] = body.model
@@ -1609,15 +1611,16 @@ async def select_backend(body: BackendSelect):
     _swapping = True
     try:
         # Drain active generation tasks (max 30s)
-        snapshot = set(_active_think_tasks)
-        if snapshot:
-            print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
-            try:
-                _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
-                if _pending:
-                    print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
-            except Exception:
-                pass
+        if _is_generating > 0:
+            snapshot = set(_active_think_tasks)
+            if snapshot:
+                print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
+                try:
+                    _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                    if _pending:
+                        print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
+                except Exception:
+                    pass
 
         _raw_cfg["backend"] = body.backend
         _CONFIG_PATH.write_text(
@@ -1659,15 +1662,16 @@ async def restart_model(body: RestartBody):
     _swapping = True
     try:
         # Drain active generation tasks (max 30s)
-        snapshot = set(_active_think_tasks)
-        if snapshot:
-            print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
-            try:
-                _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
-                if _pending:
-                    print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
-            except Exception:
-                pass
+        if _is_generating > 0:
+            snapshot = set(_active_think_tasks)
+            if snapshot:
+                print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
+                try:
+                    _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                    if _pending:
+                        print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
+                except Exception:
+                    pass
 
         if body.context_size is not None:
             _raw_cfg["context_size"] = body.context_size
@@ -2379,7 +2383,7 @@ async def ws_think(websocket: WebSocket):
                         pass
                     current_think_task = None
 
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError):
         pass
     except Exception as e:
         import traceback

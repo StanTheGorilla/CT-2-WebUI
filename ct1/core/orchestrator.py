@@ -150,6 +150,7 @@ _EXTERNAL_CFG_DEFAULTS = {
     "models": {"director": {
         "temperature": 0.6, "top_p": 0.9, "top_k": 40,
         "presence_penalty": 1.0, "frequency_penalty": 0.0,
+        "repeat_penalty": 1.05,
         "max_tokens": 100000, "thinking_budget": -1,
         "vision_supported": False, "enable_thinking": False,
     }},
@@ -194,6 +195,7 @@ class Orchestrator:
             top_k=dc["top_k"],
             presence_penalty=dc["presence_penalty"],
             frequency_penalty=dc.get("frequency_penalty", 0),
+            repeat_penalty=dc.get("repeat_penalty", 1.05),
             max_tokens=dc.get("max_tokens", 100000),
             thinking_budget=dc.get("thinking_budget", -1),
             vision_supported=dc.get("vision_supported", False),
@@ -211,6 +213,7 @@ class Orchestrator:
         model_file = preset_info.get("model_file", "")
         explicit_tier = preset_info.get("tier")
         self.tier = detect_tier(model_file, explicit_tier)
+        self.engine.tier = self.tier  # used for tier-aware prompt selection
         self.context_size = cfg["llama_server"]["context_size"]
         print(f"[orch] Model tier: {self.tier} (model: {model_file})")
 

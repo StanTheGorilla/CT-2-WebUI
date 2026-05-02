@@ -158,19 +158,34 @@ def _repair_json(text: str) -> str:
 BRAIN_SYSTEM_TEMPLATE = _pm().get("brain_system")
 _DESIGN_TOOLKIT = _pm().get("design_toolkit")
 
-_GENERATOR_CODE_SYSTEM = _pm().get("generator_code")
 
-_GENERATOR_DESIGN_SYSTEM = _pm().get("generator_design")
+def _layered(base_name: str, user_name: str) -> str:
+    """Combine a locked base prompt with a user-editable prompt."""
+    base = _pm().get(base_name)
+    user = _pm().get(user_name)
+    if base and user:
+        return base + "\n\n" + user
+    return base or user
+
+
+_GENERATOR_CODE_SYSTEM = _layered("generator_code_base", "generator_code")
+
+_GENERATOR_DESIGN_SYSTEM = _layered("generator_design_base", "generator_design")
+# Simplified design prompt for smaller models (medium/small tier).
+# The full design director prompt overwhelms 9B-and-below models, causing
+# them to respond conversationally instead of generating code.
+# The spec already carries all design decisions (colors, fonts, layout).
+_GENERATOR_DESIGN_LITE = _pm().get("generator_design_base")
+
+_GENERATOR_COMPUTER_SYSTEM = _layered("generator_computer_base", "generator_computer")
+
+_GENERATOR_TEXT_SYSTEM = _layered("generator_text_base", "generator_text")
 
 _GENERATOR_EDIT_SYSTEM = _pm().get("generator_edit")
 
 _GENERATOR_SECTION_EDIT_SYSTEM = _pm().get("generator_section_edit")
 
 _GENERATOR_PATCH_SYSTEM = _pm().get("generator_patch")
-
-_GENERATOR_COMPUTER_SYSTEM = _pm().get("generator_computer")
-
-_GENERATOR_TEXT_SYSTEM = _pm().get("generator_text")
 
 _GENERATOR_DISCUSS_SYSTEM = _pm().get("generator_discuss")
 
@@ -211,11 +226,16 @@ def get_system_prompt(route: str, tier: str = "small",
         if context_size >= 8192:
             if route == "ROUTE_DESIGN":
                 suffix += _DESIGN_FEWSHOT
+                base = _GENERATOR_DESIGN_LITE  # skip long director prompt
             elif route == "ROUTE_CODE":
                 suffix += _CODE_FEWSHOT
         suffix += _INLINE_PLANNING_SUFFIX
         return base + suffix
     elif tier == "medium":
+        if route == "ROUTE_DESIGN":
+            # Medium models (2B-14B) also use the lite prompt — the full
+            # design director prompt is too long and causes conversational drift
+            base = _GENERATOR_DESIGN_LITE
         return base + _INLINE_VERIFY_SUFFIX
     else:  # large
         return base
@@ -264,6 +284,7 @@ class Engine:
     def __init__(self, base_url: str, temperature: float = 0.6,
                  top_p: float = 0.9, top_k: int = 40,
                  presence_penalty: float = 1.0, frequency_penalty: float = 0.0,
+                 repeat_penalty: float = 1.05,
                  max_tokens: int = 100000,
                  thinking_budget: int = -1,
                  vision_supported: bool = False,
@@ -276,6 +297,7 @@ class Engine:
         self.top_k = top_k
         self.presence_penalty = presence_penalty
         self.frequency_penalty = frequency_penalty
+        self.repeat_penalty = repeat_penalty
         self.max_tokens = max_tokens
         self.thinking_budget = thinking_budget
         self.vision_supported = vision_supported
@@ -284,6 +306,7 @@ class Engine:
         self.is_external = is_external
         self.client = httpx.AsyncClient(timeout=600.0)
         self._client_lock = asyncio.Lock()
+        self.tier: str = "large"  # overridden by orchestrator after detection
         self.lessons: list[str] = []
         self.last_session: str = ""
 
@@ -350,6 +373,7 @@ class Engine:
             "presence_penalty": (presence_penalty if presence_penalty is not None
                                  else self.presence_penalty),
             "frequency_penalty": self.frequency_penalty,
+            "repeat_penalty": self.repeat_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": False,
         }
@@ -453,6 +477,16 @@ class Engine:
                 if last_chunk.count(pat) >= 4:
                     return True
 
+        # 5. Character-class entropy collapse — numeric oscillation / token soup
+        # Catches "0.8, 0.7, 0.8, 0.9..." patterns that vary per token and evade
+        # all exact-match checks above. If <15% of the last 300 chars is alphabetic,
+        # the model has lost linguistic structure and is sampling noise.
+        if len(text) > 300:
+            tail = text[-300:]
+            alpha_count = sum(1 for c in tail if c.isalpha())
+            if alpha_count < len(tail) * 0.15:
+                return True
+
         return False
 
     async def _call_stream(self, messages: list[dict], on_token=None,
@@ -491,6 +525,7 @@ class Engine:
             "presence_penalty": (presence_penalty if presence_penalty is not None
                                  else self.presence_penalty),
             "frequency_penalty": self.frequency_penalty,
+            "repeat_penalty": self.repeat_penalty,
             "max_tokens": max_tokens or self.max_tokens,
             "stream": True,
         }
@@ -553,10 +588,11 @@ class Engine:
                             thinking += reason
                             if on_token:
                                 on_token(reason, "thinking")
-                            # Check thinking for repetition every 200 tokens
+                            # Check thinking for repetition every 80 tokens
+                            # (more aggressive than content — small models degrade faster in reasoning)
                             if check_repetition:
                                 thinking_token_count += 1
-                                if thinking_token_count >= 200:
+                                if thinking_token_count >= 80:
                                     thinking_token_count = 0
                                     if self._detect_repetition(thinking):
                                         thinking = self._trim_repetition(thinking)
@@ -676,6 +712,18 @@ class Engine:
         if nl > 0:
             return text[:nl]
         return text[:cut]
+
+    @staticmethod
+    def _looks_incomplete(text: str) -> bool:
+        """Return True if output was structurally cut mid-generation."""
+        t = text.rstrip()
+        if not t:
+            return False
+        if "<html" in t.lower() and "</html>" not in t.lower():
+            return True
+        if t.count("```") % 2 == 1:
+            return True
+        return False
 
     # ── Prompt building ───────────────────────────────────────────────
 
@@ -868,7 +916,10 @@ class Engine:
             system = _GENERATOR_COMPUTER_SYSTEM
         elif is_design:
             prompt = self._build_user_content(goal, f"{specialist_ctx}{task_ctx}")
-            system = _GENERATOR_DESIGN_SYSTEM
+            # Use the full design director prompt only for large models (14B+).
+            # Smaller models get the lite prompt — the full director overwhelms them
+            # and causes conversational drift instead of code generation.
+            system = _GENERATOR_DESIGN_SYSTEM if self.tier == "large" else _GENERATOR_DESIGN_LITE
         elif is_code:
             prompt = self._build_user_content(goal, f"{plan_ctx}{specialist_ctx}{task_ctx}{length_ctx}")
             system = _GENERATOR_CODE_SYSTEM
@@ -891,8 +942,13 @@ class Engine:
         # Resolve presence_penalty: override > route default > instance default
         pp = ovr_pp if ovr_pp is not None else self.presence_penalty
 
+        # Repetition detection: enabled for everything except design mode.
+        # HTML has legitimate repeated patterns (class strings, closing tags,
+        # CSS rules) that false-trigger the detector and cut off generation.
+        check_repetition = route != "ROUTE_DESIGN"
+
         if on_token:
-            return await self._call_stream(
+            result = await self._call_stream(
                 messages,
                 on_token=on_token,
                 max_tokens=self.max_tokens,
@@ -902,11 +958,35 @@ class Engine:
                 conversation=conversation,
                 enable_thinking=thinking,
                 thinking_budget=ovr_budget,
-                # HTML/CSS/code has legitimate repetition — disable the heuristic check
-                check_repetition=not is_code,
+                check_repetition=check_repetition,
                 tools=tools,
                 tool_executor=tool_executor,
             )
+            if (result.get("finish_reason") == "length"
+                    and self._looks_incomplete(result["text"])):
+                cont_messages = [
+                    messages[0],
+                    messages[1],
+                    {"role": "assistant", "content": result["text"]},
+                    {"role": "user", "content": "Continue exactly from where you left off. Do not repeat anything already written."},
+                ]
+                cont = await self._call_stream(
+                    cont_messages,
+                    on_token=on_token,
+                    max_tokens=self.max_tokens,
+                    presence_penalty=pp,
+                    temperature=ovr_temp,
+                    top_p=ovr_top_p,
+                    enable_thinking=thinking,
+                    thinking_budget=ovr_budget,
+                    check_repetition=check_repetition,
+                )
+                result = {
+                    "text": result["text"] + cont["text"],
+                    "thinking": result.get("thinking", "") + cont.get("thinking", ""),
+                    "finish_reason": cont.get("finish_reason"),
+                }
+            return result
 
         return await self._call(
             messages,

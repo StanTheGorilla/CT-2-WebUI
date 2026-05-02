@@ -2,7 +2,7 @@ executable: auto
 backend: vulkan
 inference_backend: local
 models_dir: models
-active_model: gemma-4-E4B-it-Q4_K_S.gguf
+active_model: Qwen3.5-4B.Q4_K_S.gguf
 port: 8080
 n_gpu_layers: 99
 parallel_slots: 1
@@ -12,6 +12,7 @@ top_p: 0.9
 top_k: 40
 presence_penalty: 1.0
 frequency_penalty: 0.0
+repeat_penalty: 1.05
 thinking_budget: -1
 task_overrides:
   design:
@@ -27,6 +28,7 @@ task_overrides:
   direct:
     temperature: 0.5
     presence_penalty: 0.6
+    frequency_penalty: 0.15
 journal:
   path: ct1/data/journals
   lessons_on_startup: 10
