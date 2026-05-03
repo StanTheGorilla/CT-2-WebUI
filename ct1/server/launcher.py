@@ -114,7 +114,7 @@ def _get_llama_pid():
     return None
 
 
-def _graceful_shutdown_llama(port: int = 8080, timeout: float = 30.0) -> bool:
+def _graceful_shutdown_llama(port: int = 8080, timeout: float = 10.0) -> bool:
     """Shut down llama-server gracefully so it can release Vulkan resources.
 
     Strategy (in order):
@@ -167,9 +167,10 @@ def _graceful_shutdown_llama(port: int = 8080, timeout: float = 30.0) -> bool:
     start = time.monotonic()
     while time.monotonic() - start < timeout:
         if not _is_llama_server_running():
-            print("[launcher] llama-server exited gracefully (Vulkan resources released)")
+            elapsed = time.monotonic() - start
+            print(f"[launcher] llama-server exited gracefully in {elapsed:.1f}s (Vulkan resources released)")
             return True
-        time.sleep(1.0)
+        time.sleep(0.5)
 
     print(f"[launcher] Graceful shutdown timed out after {timeout}s — escalating to force-kill")
     return False
@@ -217,11 +218,11 @@ def kill_existing_llama_servers(port: int = 8080):
     else:
         print("[launcher] WARNING: llama-server still alive after 10s — proceeding anyway")
 
-    # GPU cooldown — longer wait after force-kill since cleanup was incomplete
+    # GPU cooldown — brief pause so the driver can reclaim VRAM
     if os.name == "nt":
-        time.sleep(10)  # AMD Vulkan driver needs time to reclaim VRAM after unclean exit
+        time.sleep(3)  # AMD Vulkan driver needs a moment to reclaim VRAM
     else:
-        time.sleep(3)
+        time.sleep(2)
 
 
 def load_raw_config(config_path: str = "ct1/server/model_config.yaml") -> dict:
@@ -440,6 +441,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
                     "frequency_penalty": raw_cfg.get("frequency_penalty", 0),
                     "max_tokens": raw_cfg.get("max_tokens", 100000),
                     "thinking_budget": raw_cfg.get("thinking_budget", -1),
+                    "repeat_penalty": raw_cfg.get("repeat_penalty", 1.10),
                     "vision_supported": vision_supported,
                 },
             },
@@ -524,6 +526,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
                 "frequency_penalty": director.get("frequency_penalty", 0),
                 "max_tokens": director.get("max_tokens", 100000),
                 "thinking_budget": director.get("thinking_budget", -1),
+                "repeat_penalty": director.get("repeat_penalty", 1.10),
                 "vision_supported": vision_supported,
             },
         },
@@ -586,7 +589,7 @@ def build_server_command(s: dict) -> list:
     if s.get("cont_batching"):
         cmd.append("--cont-batching")
     if s.get("flash_attn"):
-        cmd.append("--flash-attn")
+        cmd += ["--flash-attn", "on"]
     return cmd
 
 def _drain_stderr(proc: subprocess.Popen, label: str = "llama"):

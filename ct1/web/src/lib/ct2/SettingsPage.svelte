@@ -4,7 +4,9 @@
     import { preferences, toggleTheme, setUiStyle, setCt2Bg } from '$lib/stores/preferences';
     import { newConversation, setWorkspaceId, setMode, loadFromHistory } from '$lib/stores/chat';
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
+    import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
     import StatusIndicator from '$lib/components/StatusIndicator.svelte';
+    import ModelDownloader from '$lib/components/ModelDownloader.svelte';
 
     const CONTEXT_MIN_FLOOR = 2048;
 
@@ -29,12 +31,29 @@
     let switchingBackend = $state(false);
     let backendError = $state('');
 
+    let gpuLayers = $state(99);
+    let runningGpuLayers = $state(99);
+    let flashAttn = $state(false);
+    let runningFlashAttn = $state(false);
+    let contBatching = $state(false);
+    let runningContBatching = $state(false);
+
     const updateStatus = $derived($serverUpdate);
 
     let contextSize = $state(0);
     let maxContextSize = $state(0);
     let runningContextSize = $state(0);
-    let needsRestart = $derived(contextSize !== runningContextSize);
+    let needsRestart = $derived(
+        contextSize !== runningContextSize
+        || gpuLayers !== runningGpuLayers
+        || flashAttn !== runningFlashAttn
+        || contBatching !== runningContBatching
+    );
+
+    let planCacheStats = $state<{entries:number;avg_score:number;recent:Array<{sig:string;task_type:string;complexity:string;count:number;score:number}>}>({entries:0,avg_score:0,recent:[]});
+    let planCacheClearing = $state(false);
+    let planCacheMsg = $state('');
+    let planCacheFast = $state(false);
 
     function shortName(name: string) {
         return name.replace(/\.gguf$/i, '').replace(/[._-][Qq]\d+[_A-Za-z0-9]*$/, '');
@@ -56,6 +75,12 @@
             modelStatus = (await statusRes.json()).model ?? {};
             config = await configRes.json();
             activeBackend = (config.backend as 'vulkan' | 'cuda') ?? 'vulkan';
+            flashAttn = config.flash_attn ?? false;
+            contBatching = config.cont_batching ?? false;
+            gpuLayers = config.gpu_layers ?? 99;
+            runningFlashAttn = flashAttn;
+            runningContBatching = contBatching;
+            runningGpuLayers = gpuLayers;
             const md = await modelRes.json();
             activeModel = md.active_model || '';
             modelFound = md.model_found ?? false;
@@ -79,13 +104,30 @@
         finally { scanning = false; modelsLoading = false; }
     }
 
+    async function fetchPlanCache() {
+        try {
+            planCacheStats = await (await fetch('/api/plan-cache/stats')).json();
+        } catch {}
+    }
+
+    async function clearPlanCache() {
+        planCacheClearing = true; planCacheMsg = '';
+        try {
+            const d = await (await fetch('/api/plan-cache', { method: 'DELETE' })).json();
+            planCacheMsg = d.ok ? `Cleared ${d.removed} cached plan(s).` : (d.error || 'Failed');
+            await fetchPlanCache();
+        } catch (e: any) {
+            planCacheMsg = e.message || 'Failed';
+        } finally { planCacheClearing = false; }
+    }
+
     async function selectModel(name: string) {
         if (name === activeModel) { pickerOpen = false; return; }
         pickerOpen = false; switching = true; switchError = '';
         try {
             const res = await fetch('/api/model/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name }) });
             const d = await res.json();
-            if (d.error) { switchError = d.error; } else { await loadData(); }
+            if (d.error) { switchError = d.error; } else { await loadData(); notifyModelSwitch(); }
         } catch (e: any) { switchError = e.message || 'Failed'; }
         finally { switching = false; }
     }
@@ -93,9 +135,9 @@
     async function restartModel() {
         switching = true; switchError = '';
         try {
-            const res = await fetch('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context_size: contextSize }) });
+            const res = await fetch('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context_size: contextSize, n_gpu_layers: gpuLayers, flash_attn: flashAttn, cont_batching: contBatching }) });
             const d = await res.json();
-            if (d.error) { switchError = d.error; } else { runningContextSize = contextSize; serverUpdate.set({}); await loadData(); }
+            if (d.error) { switchError = d.error; } else { runningContextSize = contextSize; runningGpuLayers = gpuLayers; runningFlashAttn = flashAttn; runningContBatching = contBatching; serverUpdate.set({}); promptsSaved = {}; await loadData(); }
         } catch (e: any) { switchError = e.message || 'Failed'; }
         finally { switching = false; }
     }
@@ -117,6 +159,7 @@
     let topP = $state(0.9);
     let topK = $state(40);
     let presencePenalty = $state(0.2);
+    let repeatPenalty = $state(1.10);
 
     $effect(() => {
         if (!loading && config.temperature !== undefined) {
@@ -124,10 +167,11 @@
             topP = config.top_p ?? 0.9;
             topK = config.top_k ?? 40;
             presencePenalty = config.presence_penalty ?? 0.2;
+            repeatPenalty = config.repeat_penalty ?? 1.10;
         }
     });
 
-    async function saveParam(key: string, value: number) {
+    async function saveParam(key: string, value: number | boolean) {
         try {
             await fetch('/api/config', {
                 method: 'PATCH',
@@ -350,8 +394,17 @@
     // ── Confirm reset ─────────────────────────────────────────────
     let confirmReset = $state(false);
 
+    let _mounted = $state(false);
+
     onMount(async () => {
-        await Promise.all([loadData(), loadModes(), loadWorkspaces(), loadPrompts()]);
+        await Promise.all([loadData(), loadModes(), loadWorkspaces(), loadPrompts(), fetchPlanCache()]);
+        _mounted = true;
+    });
+
+    // Keep in-sync when model is switched from the topbar quick-pick
+    $effect(() => {
+        $modelSwitchCount; // reactive dependency — re-fetches on every switch
+        if (_mounted) { loadData(); fetchPlanCache(); }
     });
 
     const SECTIONS = [
@@ -362,6 +415,7 @@
         { id: 'atlas',      label: 'Atlas mode' },
         { id: 'prompts',    label: 'System prompts' },
         { id: 'interface',  label: 'Interface' },
+        { id: 'plancache',  label: 'Plan cache' },
         { id: 'workspaces', label: 'Workspaces' },
         { id: 'status',     label: 'Status' },
     ];
@@ -389,6 +443,12 @@
                 <div class="c2-sh">
                     <h1 class="c2-sh-title">Model</h1>
                     <p class="c2-sh-sub">Local models available on this machine. Switching unloads the current model.</p>
+                </div>
+
+                <div class="c2-model-toolbar">
+                    <button class="c2-btn-outline c2-btn-warn" onclick={restartModel} disabled={switching}>
+                        {switching ? 'Restarting…' : 'Reset server'}
+                    </button>
                 </div>
 
                 {#if loading}
@@ -444,6 +504,46 @@
                         </div>
                     </div>
 
+                    <!-- ── Hardware ── -->
+                    <div class="c2-subsection-label" style="margin-top:24px;">Hardware</div>
+
+                    <div class="c2-row">
+                        <div class="c2-row-label">
+                            <div class="c2-row-name">GPU offload <span class="c2-param">/ n_gpu_layers</span></div>
+                            <div class="c2-row-desc">How many model layers run on your GPU. All the way right = fully GPU-accelerated. All the way left = CPU only.</div>
+                        </div>
+                        <div class="c2-row-control">
+                            <div class="c2-slider-wrap">
+                                <input type="range" min="0" max="99" step="1" bind:value={gpuLayers} class="c2-slider" />
+                                <div class="c2-slider-val">{gpuLayers === 99 ? 'All' : gpuLayers === 0 ? 'CPU' : gpuLayers}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="c2-row">
+                        <div class="c2-row-label">
+                            <div class="c2-row-name">Flash attention <span class="c2-param">/ flash_attn</span></div>
+                            <div class="c2-row-desc">Faster GPU attention. Reduces VRAM usage and improves speed on most cards.</div>
+                        </div>
+                        <div class="c2-row-control">
+                            <button class="c2-switch" class:c2-switch-on={flashAttn} onclick={() => flashAttn = !flashAttn} role="switch" aria-checked={flashAttn} aria-label="Toggle flash attention">
+                                <span class="c2-switch-knob"></span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="c2-row">
+                        <div class="c2-row-label">
+                            <div class="c2-row-name">Continuous batching <span class="c2-param">/ cont_batching</span></div>
+                            <div class="c2-row-desc">Start processing the next message before fully finishing the current one. Improves responsiveness.</div>
+                        </div>
+                        <div class="c2-row-control">
+                            <button class="c2-switch" class:c2-switch-on={contBatching} onclick={() => contBatching = !contBatching} role="switch" aria-checked={contBatching} aria-label="Toggle continuous batching">
+                                <span class="c2-switch-knob"></span>
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Backend row -->
                     <div class="c2-row">
                         <div class="c2-row-label">
@@ -480,9 +580,12 @@
                             </button>
                         {/each}
                     {/if}
-                    <button class="c2-btn-ghost" onclick={scanModels} disabled={scanning || modelsLoading}>
-                        {scanning ? 'Scanning…' : 'Rescan models folder'}
-                    </button>
+                    <div style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button class="c2-btn-ghost" onclick={scanModels} disabled={scanning || modelsLoading}>
+                            {scanning ? 'Scanning…' : 'Rescan models folder'}
+                        </button>
+                        <ModelDownloader show={!loading && !config.external_connected} onDownloaded={scanModels} />
+                    </div>
 
                     <div class="c2-row" style="margin-top:16px;">
                         <div class="c2-row-label">
@@ -566,6 +669,19 @@
                         <div class="c2-slider-wrap">
                             <input type="range" min="0" max="2" step="0.01" bind:value={presencePenalty} onchange={() => saveParam('presence_penalty', presencePenalty)} class="c2-slider" />
                             <div class="c2-slider-val">{presencePenalty.toFixed(2)}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="c2-row">
+                    <div class="c2-row-label">
+                        <div class="c2-row-name">Repeat penalty <span class="c2-param">/ repeat_penalty</span></div>
+                        <div class="c2-row-desc">Penalizes tokens that appear repeatedly in the output. Higher values reduce looping and repetition.</div>
+                    </div>
+                    <div class="c2-row-control">
+                        <div class="c2-slider-wrap">
+                            <input type="range" min="1.0" max="1.5" step="0.01" bind:value={repeatPenalty} onchange={() => saveParam('repeat_penalty', repeatPenalty)} class="c2-slider" />
+                            <div class="c2-slider-val">{repeatPenalty.toFixed(2)}</div>
                         </div>
                     </div>
                 </div>
@@ -932,7 +1048,7 @@
                 <div class="c2-row">
                     <div class="c2-row-label">
                         <div class="c2-row-name">Background <span class="c2-param">/ ct2Bg</span></div>
-                        <div class="c2-row-desc">The ambient art image behind the interface. None gives a cleaner, fully dark surface.</div>
+                        <div class="c2-row-desc">The ambient art image behind the interface. Flat gives a cleaner, fully dark surface.</div>
                     </div>
                     <div class="c2-row-control">
                         <div class="c2-seg">
@@ -940,12 +1056,12 @@
                                 class="c2-seg-btn"
                                 class:c2-seg-active={($preferences.ct2Bg ?? 'image') !== 'none'}
                                 onclick={() => setCt2Bg('image')}
-                            >Default</button>
+                            >Nature</button>
                             <button
                                 class="c2-seg-btn"
                                 class:c2-seg-active={($preferences.ct2Bg ?? 'image') === 'none'}
                                 onclick={() => setCt2Bg('none')}
-                            >None</button>
+                            >Flat</button>
                         </div>
                     </div>
                 </div>
@@ -962,7 +1078,7 @@
                                     class="c2-seg-btn"
                                     class:c2-seg-active={$preferences.uiStyle === v}
                                     onclick={() => setUiStyle(v)}
-                                >{v === 'ct2' ? 'CT-2 Design' : 'Classic'}</button>
+                                >{v === 'ct2' ? 'Modern' : 'Default'}</button>
                             {/each}
                         </div>
                     </div>
@@ -1002,6 +1118,60 @@
                             <button class="c2-btn-outline c2-btn-err" onclick={() => confirmReset = true}>Reset…</button>
                         {/if}
                     </div>
+                </div>
+
+            <!-- ── WORKSPACES ── -->
+            <!-- ── PLAN CACHE ── -->
+            {:else if activeSection === 'plancache'}
+                <div class="c2-sh">
+                    <h1 class="c2-sh-title">Plan cache</h1>
+                    <p class="c2-sh-sub">Learned task signatures let the AI skip deliberation and respond faster over time.</p>
+                </div>
+
+                <div class="c2-row">
+                    <div class="c2-row-label">
+                        <div class="c2-row-name">Cached entries</div>
+                        <div class="c2-row-desc">Each entry maps a task pattern to a fast execution path. Grows automatically as you use the AI.</div>
+                    </div>
+                    <div class="c2-row-control">
+                        <span class="c2-badge-big">{planCacheStats.entries ?? '—'}</span>
+                    </div>
+                </div>
+
+                <div class="c2-row">
+                    <div class="c2-row-label">
+                        <div class="c2-row-name">Fast-path acceleration</div>
+                        <div class="c2-row-desc">When enabled, reusing a cached pattern skips the AI routing and planning steps. Off by default — enable after the cache has entries for your common tasks.</div>
+                    </div>
+                    <div class="c2-row-control">
+                        <button class="c2-toggle" class:c2-toggle-on={planCacheFast} onclick={() => { planCacheFast = !planCacheFast; saveParam('plan_cache_fast', planCacheFast); }} type="button">
+                            <span class="c2-toggle-knob"></span>
+                        </button>
+                    </div>
+                </div>
+
+                {#if planCacheStats.recent?.length}
+                    <div class="c2-subsection-label" style="margin-top:8px;">Recent entries</div>
+                    <div class="c2-pc-list">
+                        {#each planCacheStats.recent as p}
+                            <div class="c2-pc-item">
+                                <div class="c2-pc-item-left">
+                                    <span class="c2-pc-sig" title={p.sig}>{p.sig.length > 40 ? p.sig.slice(0, 38) + '…' : p.sig}</span>
+                                    <span class="c2-pc-meta">{p.task_type} · {p.complexity} · ×{p.count}</span>
+                                </div>
+                                <div class="c2-pc-score" style="--score:{p.score}">{p.score.toFixed(1)}</div>
+                            </div>
+                        {/each}
+                    </div>
+                {:else if planCacheStats.entries === 0}
+                    <p class="c2-row-desc" style="padding-top:8px;">No cached plans yet. Each new task type the AI learns will appear here.</p>
+                {/if}
+
+                <div style="margin-top:20px;display:flex;align-items:center;gap:12px;">
+                    <button class="c2-btn-outline c2-btn-err" onclick={clearPlanCache} disabled={planCacheClearing}>
+                        {planCacheClearing ? 'Clearing…' : 'Clear cache'}
+                    </button>
+                    {#if planCacheMsg}<span class="c2-row-desc">{planCacheMsg}</span>{/if}
                 </div>
 
             <!-- ── WORKSPACES ── -->
@@ -1244,8 +1414,9 @@
     }
     .c2-switch:disabled { opacity: 0.5; cursor: not-allowed; }
     .c2-switch-on {
-        background: var(--c2-accent);
-        border-color: var(--c2-accent);
+        background: oklch(0.58 0.17 145);
+        border-color: oklch(0.58 0.17 145);
+        box-shadow: 0 0 0 3px oklch(0.58 0.17 145 / 0.18);
     }
     .c2-switch-knob {
         position: absolute;
@@ -1255,11 +1426,13 @@
         height: 14px;
         border-radius: 50%;
         background: var(--c2-fg-1);
-        transition: left 180ms var(--c2-spring);
+        transition: left 260ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 220ms ease;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px rgba(0,0,0,0.08);
     }
     .c2-switch-on .c2-switch-knob {
         left: 16px;
-        background: var(--c2-accent-fg);
+        background: white;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.04);
     }
 
     /* Slider */
@@ -1492,6 +1665,7 @@
         padding: 32px 0;
         text-align: center;
     }
+    .c2-model-toolbar { margin-bottom: 16px; }
     .c2-ws-toolbar { margin-bottom: 16px; }
 
     .c2-ws-create-row {
@@ -1735,4 +1909,127 @@
         gap: 8px;
     }
     .c2-btn-ghost { margin-top: 0; }
+
+    /* ── Expand chevron ───────────────────────────────────────── */
+    .c2-expand-header {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: none;
+        border: none;
+        color: var(--c2-fg-1);
+        font-family: 'Geist Mono', monospace;
+        font-size: 10.5px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        cursor: pointer;
+        padding: 4px 0;
+        transition: color 120ms;
+    }
+    .c2-expand-header:hover { color: var(--c2-fg-0); }
+    .c2-expand-chevron {
+        flex-shrink: 0;
+        color: var(--c2-fg-2);
+        transition: transform 180ms var(--c2-spring);
+    }
+    .c2-expand-chevron.c2-expand-open { transform: rotate(90deg); }
+
+    /* ── Toggle switch ────────────────────────────────────────── */
+    .c2-toggle {
+        width: 40px;
+        height: 22px;
+        border-radius: 999px;
+        border: 1px solid var(--c2-border-2);
+        background: var(--c2-bg-3);
+        cursor: pointer;
+        position: relative;
+        transition: background 180ms, border-color 180ms;
+        flex-shrink: 0;
+    }
+    .c2-toggle.c2-toggle-on {
+        background: var(--c2-accent);
+        border-color: var(--c2-accent);
+    }
+    .c2-toggle-knob {
+        position: absolute;
+        top: 1px;
+        left: 1px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--c2-fg-0);
+        transition: transform 180ms var(--c2-spring);
+    }
+    .c2-toggle-on .c2-toggle-knob {
+        transform: translateX(18px);
+        background: var(--c2-accent-fg);
+    }
+
+    /* ── Plan cache list ─────────────────────────────────────────── */
+    .c2-badge-big {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 36px;
+        height: 28px;
+        padding: 0 10px;
+        border-radius: 14px;
+        background: var(--c2-accent-dim);
+        color: var(--c2-accent);
+        font-family: 'Geist Mono', monospace;
+        font-size: 14px;
+        font-weight: 600;
+    }
+    .c2-pc-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin-top: 6px;
+        max-height: 200px;
+        overflow-y: auto;
+    }
+    .c2-pc-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 5px 10px;
+        border-radius: 6px;
+        background: var(--c2-bg-2);
+        border: 1px solid var(--c2-border-2);
+        font-size: 11.5px;
+    }
+    .c2-pc-item-left {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
+    }
+    .c2-pc-sig {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        color: var(--c2-fg-0);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .c2-pc-meta {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10px;
+        color: var(--c2-fg-3);
+    }
+    .c2-pc-score {
+        flex-shrink: 0;
+        width: 30px;
+        height: 20px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: 'Geist Mono', monospace;
+        font-size: 10.5px;
+        font-weight: 600;
+        background: color-mix(in srgb, var(--c2-accent) calc(var(--score, 0.5) * 100%), var(--c2-bg-3));
+        color: var(--c2-accent-fg);
+    }
 </style>

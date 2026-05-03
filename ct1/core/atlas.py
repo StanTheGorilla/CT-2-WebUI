@@ -893,42 +893,12 @@ except Exception as e:
             return 0.0
 
     def _check_journal_patterns(self, goal: str) -> float:
-        """Query journal lessons for pattern match. Returns 0.0-1.0."""
-        try:
-            lessons = self.orch.journal_reader.get_recent_lessons(20)
-            if not lessons:
-                return 0.0
-
-            goal_lower = goal.lower()
-            goal_words = set(re.findall(r'[a-z]{4,}', goal_lower))
-            if not goal_words:
-                return 0.0
-
-            best_overlap = 0.0
-            for lesson in lessons:
-                lesson_words = set(re.findall(r'[a-z]{4,}', lesson.lower()))
-                if not lesson_words:
-                    continue
-                overlap = len(goal_words & lesson_words) / max(len(goal_words), 1)
-                best_overlap = max(best_overlap, overlap)
-
-            return min(best_overlap, 1.0)
-        except Exception:
-            return 0.0
+        """Journal has been replaced by PlanCache. Always returns 0.0."""
+        return 0.0
 
     def _store_lesson(self, goal: str, failure_type: str, analysis: str) -> None:
-        """Write an atlas_lesson entry to the journal."""
-        try:
-            self.orch.journal.write({
-                "type": "atlas_lesson",
-                "goal": goal[:200],
-                "failure_type": failure_type,
-                "analysis": analysis[:500],
-                "lesson": f"Atlas repair: {failure_type} — {analysis[:200]}",
-                "timestamp": time.time(),
-            })
-        except Exception:
-            pass
+        """Journal has been replaced by PlanCache. No-op."""
+        pass
 
     # ── Utilities ────────────────────────────────────────────────────
 

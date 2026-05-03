@@ -208,12 +208,20 @@
     .app.has-image-bg {
         background: #080808;
     }
+    :global([data-theme="light"]) .app.has-image-bg {
+        background: #F0ECE5;
+    }
 
     /* Frosted topbar over the image so icons stay legible */
     .app.has-image-bg .topbar {
         background: rgba(0, 0, 0, 0.20);
         backdrop-filter: blur(16px) saturate(1.2);
         -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    }
+    :global([data-theme="light"]) .app.has-image-bg .topbar {
+        background: rgba(255, 255, 255, 0.55);
+        backdrop-filter: blur(16px) saturate(1.4);
+        -webkit-backdrop-filter: blur(16px) saturate(1.4);
     }
 
     /* ---- Image background ---- */
@@ -224,6 +232,11 @@
         pointer-events: none;
         background:
             linear-gradient(rgba(7, 7, 7, 0.72), rgba(7, 7, 7, 0.72)),
+            url('/ascii-art-bg.jpg') center / cover no-repeat;
+    }
+    :global([data-theme="light"]) .classic-img-bg {
+        background:
+            linear-gradient(rgba(240, 236, 229, 0.55), rgba(235, 230, 222, 0.65)),
             url('/ascii-art-bg.jpg') center / cover no-repeat;
     }
 

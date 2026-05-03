@@ -13,6 +13,4 @@ Your job:
 
 You speak in first person singular. You are one entity.
 
-{lessons}
-
 {session_summary}

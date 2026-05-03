@@ -3,7 +3,9 @@
     import StatusIndicator from '$lib/components/StatusIndicator.svelte';
     import { preferences, toggleWebSearch, setUiStyle, setClassicBg, type UiStyle, type ClassicBg } from '$lib/stores/preferences';
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
+    import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
     import Ct2Settings from '$lib/ct2/SettingsPage.svelte';
+    import ModelDownloader from '$lib/components/ModelDownloader.svelte';
 
     const CONTEXT_MIN_FLOOR = 2048;
 
@@ -51,7 +53,24 @@
     let contextSize = $state(0);
     let maxContextSize = $state(0);
     let runningContextSize = $state(0);
-    let needsRestart = $derived(contextSize !== runningContextSize);
+
+    let gpuLayers = $state(99);
+    let runningGpuLayers = $state(99);
+    let flashAttn = $state(false);
+    let runningFlashAttn = $state(false);
+    let contBatching = $state(false);
+    let runningContBatching = $state(false);
+
+    let planCacheStats = $state<{entries:number;avg_score:number;recent:Array<{sig:string;task_type:string;complexity:string;count:number;score:number}>}>({entries:0,avg_score:0,recent:[]});
+    let planCacheClearing = $state(false);
+    let planCacheMsg = $state('');
+
+    let needsRestart = $derived(
+        contextSize !== runningContextSize
+        || gpuLayers !== runningGpuLayers
+        || flashAttn !== runningFlashAttn
+        || contBatching !== runningContBatching
+    );
 
     /* ── Data loading ── */
 
@@ -68,6 +87,13 @@
             modelStatus = statusData.model ?? statusData.director ?? {};
             config = await configRes.json();
             activeBackend = (config.backend as 'vulkan' | 'cuda') ?? 'vulkan';
+
+            gpuLayers = config.gpu_layers ?? 99;
+            flashAttn = config.flash_attn ?? false;
+            contBatching = config.cont_batching ?? false;
+            runningGpuLayers = gpuLayers;
+            runningFlashAttn = flashAttn;
+            runningContBatching = contBatching;
 
             const modelData = await modelRes.json();
             activeModel = modelData.active_model || '';
@@ -97,6 +123,23 @@
         } finally {
             scanning = false;
         }
+    }
+
+    async function fetchPlanCache() {
+        try {
+            planCacheStats = await (await fetch('/api/plan-cache/stats')).json();
+        } catch { /* plan cache may not be available */ }
+    }
+
+    async function clearPlanCache() {
+        planCacheClearing = true; planCacheMsg = '';
+        try {
+            const d = await (await fetch('/api/plan-cache', { method: 'DELETE' })).json();
+            planCacheMsg = d.ok ? `Cleared ${d.removed} cached plan(s).` : (d.error || 'Failed');
+            await fetchPlanCache();
+        } catch (e: any) {
+            planCacheMsg = e.message || 'Failed';
+        } finally { planCacheClearing = false; }
     }
 
     async function switchBackend(backend: 'vulkan' | 'cuda') {
@@ -139,6 +182,7 @@
                 switchError = data.error;
             } else {
                 await loadData();
+                notifyModelSwitch();
             }
         } catch (e: any) {
             switchError = e.message || 'Failed to select model';
@@ -154,14 +198,18 @@
             const res = await fetch('/api/restart', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ context_size: contextSize }),
+                body: JSON.stringify({ context_size: contextSize, n_gpu_layers: gpuLayers, flash_attn: flashAttn, cont_batching: contBatching }),
             });
             const data = await res.json();
             if (data.error) {
                 switchError = data.error;
             } else {
                 runningContextSize = contextSize;
-                serverUpdate.set({});   // hide the "Restart Server Now" button
+                runningGpuLayers = gpuLayers;
+                runningFlashAttn = flashAttn;
+                runningContBatching = contBatching;
+                serverUpdate.set({});
+                promptsSaved = {};
                 await loadData();
             }
         } catch (e: any) {
@@ -476,8 +524,16 @@
         if (pickerOpen) pickerOpen = false;
     }
 
+    let _settingsMounted = $state(false);
+
     onMount(async () => {
-        await Promise.all([loadData(), loadModes(), loadPrompts(), loadWorkspaces()]);
+        await Promise.all([loadData(), loadModes(), loadPrompts(), loadWorkspaces(), fetchPlanCache()]);
+        _settingsMounted = true;
+    });
+
+    $effect(() => {
+        $modelSwitchCount;
+        if (_settingsMounted) { loadData(); fetchPlanCache(); }
     });
 </script>
 
@@ -489,12 +545,6 @@
 <div class="settings-page">
 <div class="settings-content">
 
-    <!-- ─── Page Header ─── -->
-    <div class="page-header">
-        <h1 class="page-title">Settings</h1>
-        <p class="page-subtitle">Configure your local AI assistant</p>
-    </div>
-
     <!-- ═══════════════════════════════════════════════
          SECTION 1 — AI Model
          ═══════════════════════════════════════════════ -->
@@ -504,10 +554,17 @@
                 <h2 class="section-title">AI Model</h2>
                 <p class="section-desc">Choose which AI model runs on your computer. Larger models are smarter but need more memory.</p>
             </div>
-            <button class="scan-btn" onclick={(e) => { e.stopPropagation(); scanModels(); }} disabled={scanning}>
-                {scanning ? 'Scanning...' : 'Scan for models'}
-            </button>
+            <div class="section-head-btns">
+                <button class="scan-btn" onclick={(e) => { e.stopPropagation(); scanModels(); }} disabled={scanning}>
+                    {scanning ? 'Scanning...' : 'Scan for models'}
+                </button>
+                <button class="scan-btn scan-btn-warn" onclick={restartModel} disabled={switching}>
+                    {switching ? 'Restarting…' : 'Reset server'}
+                </button>
+            </div>
         </div>
+
+        <ModelDownloader show={!loading && !config.external_connected} onDownloaded={scanModels} />
 
         {#if loading}
             <div class="skeleton-card"></div>
@@ -709,12 +766,83 @@
             {/if}
         </div>
 
+        <div class="card-group" style="margin-top: 8px;">
+        <div class="card-item">
+            <div class="card-item-info">
+                <span class="card-item-name">GPU offload</span>
+                <span class="card-item-hint">How many model layers run on your GPU. Drag all the way right for fully GPU-accelerated, left for CPU only.</span>
+            </div>
+            <div class="slider-row">
+                <input type="range" min="0" max="99" bind:value={gpuLayers} />
+                <span class="slider-value">{gpuLayers === 99 ? 'All on GPU' : gpuLayers === 0 ? 'CPU only' : `${gpuLayers} layers`}</span>
+            </div>
+        </div>
+
+        <div class="card-item" style="flex-direction: row; align-items: center; justify-content: space-between;">
+            <div class="card-item-info">
+                <span class="card-item-name">Flash attention</span>
+                <span class="card-item-hint">Faster GPU attention. Reduces VRAM usage and improves speed on most cards.</span>
+            </div>
+            <button class="toggle-switch" class:on={flashAttn} onclick={() => flashAttn = !flashAttn} type="button">
+                <span class="toggle-knob"></span>
+            </button>
+        </div>
+
+        <div class="card-item" style="flex-direction: row; align-items: center; justify-content: space-between;">
+            <div class="card-item-info">
+                <span class="card-item-name">Continuous batching</span>
+                <span class="card-item-hint">Start processing the next message before fully finishing the current one. Improves responsiveness.</span>
+            </div>
+            <button class="toggle-switch" class:on={contBatching} onclick={() => contBatching = !contBatching} type="button">
+                <span class="toggle-knob"></span>
+            </button>
+        </div>
+        </div>
+
         {#if needsRestart}
             <div class="restart-notice">
                 <span>Restart the model to apply changes.</span>
                 <button onclick={restartModel} class="restart-btn" disabled={switching}>Restart Now</button>
             </div>
         {/if}
+    </section>
+    {/if}
+
+    <!-- ═══════════════════════════════════════════════
+         SECTION 2.5 — Plan Cache
+    ══════════════════════════════════════════════════ -->
+    {#if !(config.external_connected ?? false)}
+    <section class="section">
+        <div class="section-head">
+            <div class="section-head-text">
+                <h2 class="section-title">Plan Cache</h2>
+                <p class="section-desc">Learned task signatures skip AI deliberation — the model accelerates over time.</p>
+            </div>
+            <span class="plan-count-badge">{planCacheStats.entries ?? '—'}</span>
+        </div>
+
+        {#if planCacheStats.recent?.length > 0}
+            <div class="plan-list">
+                {#each planCacheStats.recent as p}
+                    <div class="plan-item">
+                        <div class="plan-item-main">
+                            <span class="plan-sig" title={p.sig}>{p.sig.length > 44 ? p.sig.slice(0, 42) + '…' : p.sig}</span>
+                            <span class="plan-meta">{p.task_type} · {p.complexity} · ×{p.count}</span>
+                        </div>
+                        <span class="plan-score" style="--score:{p.score}">{p.score.toFixed(1)}</span>
+                    </div>
+                {/each}
+            </div>
+        {:else if planCacheStats.entries === 0}
+            <p class="plan-empty">No cached plans yet. Each new task type the AI learns will appear here.</p>
+        {/if}
+
+        <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
+            <button class="plan-clear-btn" onclick={clearPlanCache} disabled={planCacheClearing}>
+                {planCacheClearing ? 'Clearing…' : 'Clear cache'}
+            </button>
+            {#if planCacheMsg}<span class="plan-msg">{planCacheMsg}</span>{/if}
+        </div>
     </section>
     {/if}
 
@@ -1483,11 +1611,12 @@
         background: var(--border);
         cursor: pointer;
         flex-shrink: 0;
-        transition: background 0.2s;
+        transition: background 220ms ease, box-shadow 220ms ease;
         padding: 0;
     }
     .toggle-switch.on {
-        background: var(--success, #2da44e);
+        background: oklch(0.58 0.17 145);
+        box-shadow: 0 0 0 3px oklch(0.58 0.17 145 / 0.18);
     }
     .toggle-knob {
         position: absolute;
@@ -1497,11 +1626,12 @@
         height: 18px;
         border-radius: 50%;
         background: white;
-        transition: transform 0.2s;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+        transition: transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 220ms ease;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.28), 0 0 0 1px rgba(0,0,0,0.06);
     }
     .toggle-switch.on .toggle-knob {
         transform: translateX(20px);
+        box-shadow: 0 1px 4px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.04);
     }
 
     /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2049,6 +2179,9 @@
     }
     .scan-btn:hover:not(:disabled) { background: var(--bubble-strong); color: var(--text); }
     .scan-btn:disabled { opacity: 0.4; cursor: default; }
+    .scan-btn-warn { color: var(--warn, #d29922); border-color: rgba(210, 153, 34, 0.35); }
+    .scan-btn-warn:hover:not(:disabled) { background: rgba(210, 153, 34, 0.08); color: var(--warn, #d29922); }
+    .section-head-btns { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
     .save-btn {
         padding: 6px 18px;
@@ -2393,5 +2526,109 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
+    }
+
+    /* ── Compact slider row ───────────────────────────────────── */
+    .slider-row.compact {
+        min-width: 160px;
+    }
+
+    /* ── Plan cache section ─────────────────────────────────────── */
+    .plan-count-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 32px;
+        height: 26px;
+        padding: 0 10px;
+        border-radius: 13px;
+        background: var(--accent-dim);
+        color: var(--accent);
+        font-family: var(--font-mono);
+        font-size: 13px;
+        font-weight: 600;
+    }
+    .plan-list {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        margin-top: 8px;
+        max-height: 220px;
+        overflow-y: auto;
+    }
+    .plan-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 6px 12px;
+        border-radius: 8px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        font-size: 12px;
+    }
+    .plan-item-main {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
+    }
+    .plan-sig {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .plan-meta {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    .plan-score {
+        flex-shrink: 0;
+        width: 28px;
+        height: 18px;
+        border-radius: 9px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 600;
+        background: color-mix(in srgb, var(--accent) calc(var(--score, 0.5) * 100%), var(--bg));
+        color: white;
+    }
+    .plan-empty {
+        color: var(--text-muted);
+        font-size: 13px;
+        margin-top: 6px;
+    }
+    .plan-clear-btn {
+        background: transparent;
+        border: 1px solid var(--border);
+        color: var(--text-secondary);
+        font-size: 12px;
+        padding: 5px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 150ms;
+    }
+    .plan-clear-btn:hover {
+        border-color: var(--text-muted);
+        color: var(--text);
+    }
+    .plan-clear-btn:disabled {
+        opacity: 0.5;
+        cursor: wait;
+    }
+    .plan-msg {
+        display: block;
+        color: var(--text-muted);
+        font-size: 12px;
+        margin-top: 6px;
     }
 </style>

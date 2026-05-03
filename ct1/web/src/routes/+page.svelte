@@ -1,6 +1,8 @@
 <script lang="ts">
+    import { tick } from 'svelte';
     import { get } from 'svelte/store';
-    import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, loadFromHistory, clearPendingCommands, clearPendingApproval, revertToTurn, pendingInputPrompt } from '$lib/stores/chat';
+    import { beforeNavigate } from '$app/navigation';
+    import { chat, setFeedback, regenerate, setAltIndex, undo, setWorkspaceId, stopGeneration, restoreWorkspace, loadFromHistory, clearPendingCommands, clearPendingApproval, revertToTurn, editTurn, pendingInputPrompt } from '$lib/stores/chat';
     import { preferences } from '$lib/stores/preferences';
     import Ct2Chat from '$lib/ct2/ChatPage.svelte';
     import type { SearchActivity, SearchResult } from '$lib/stores/chat';
@@ -23,10 +25,17 @@
     let isCode = $derived(
         $chat.route === 'ROUTE_DESIGN' || $chat.route === 'ROUTE_CODE'
     );
-    // Preview is only meaningful for HTML output. Design mode always produces HTML.
-    // Code mode only qualifies when the plan explicitly says html_page.
+
+    // Detect HTML regardless of route — show preview for any HTML response
+    function _looksLikeHtml(text: string): boolean {
+        const t = text.trim().toLowerCase();
+        return t.startsWith('<!doctype') || t.startsWith('<html') || t.startsWith('<!doctype html');
+    }
     let isHtmlOutput = $derived(
-        $chat.route === 'ROUTE_DESIGN' || $chat.plan?.output_type === 'html_page'
+        $chat.route === 'ROUTE_DESIGN'
+        || $chat.plan?.output_type === 'html_page'
+        || _looksLikeHtml($chat.response)
+        || _looksLikeHtml($chat.streamingText)
     );
     let isComputerMode = $derived(
         !!$chat.workspaceId || $chat.modeOverride === 'computer' || isComputerRoute
@@ -102,10 +111,13 @@
         }
     });
 
-    // Cancel any active generation when leaving the chat page.
-    // Uses get() (non-reactive) so cleanup only fires on unmount, not on store changes.
+    // Allow generation to continue in the background when navigating away.
+    // The WebSocket connection lives in the chat store and persists across page changes.
+    let _navAway = false;
+    beforeNavigate(() => { _navAway = true; });
     $effect(() => {
         return () => {
+            if (_navAway) return;  // internal SPA navigation — keep generating
             const s = get(chat);
             if (s.conversationId && s.phase !== 'idle' && s.phase !== 'done') {
                 stopGeneration();
@@ -255,6 +267,48 @@
 
     // Per-history-card inline code expansion
     let expandedHistoryCards = $state(new Set<number>());
+
+    let editingTurn = $state<number | null>(null);
+    let editText = $state('');
+    let editTaEl = $state<HTMLTextAreaElement | null>(null);
+
+    function startEdit(idx: number, content: string) {
+        editingTurn = idx;
+        editText = content;
+        tick().then(() => {
+            if (editTaEl) {
+                editTaEl.focus();
+                editTaEl.setSelectionRange(editTaEl.value.length, editTaEl.value.length);
+                autosizeEditTa();
+            }
+        });
+    }
+
+    function cancelEdit() {
+        editingTurn = null;
+        editText = '';
+    }
+
+    function saveEdit() {
+        if (editingTurn === null) return;
+        const trimmed = editText.trim();
+        if (!trimmed) return;
+        const idx = editingTurn;
+        editingTurn = null;
+        editText = '';
+        editTurn(idx, trimmed);
+    }
+
+    function autosizeEditTa() {
+        if (!editTaEl) return;
+        editTaEl.style.height = 'auto';
+        editTaEl.style.height = Math.min(editTaEl.scrollHeight, 320) + 'px';
+    }
+
+    function handleEditKey(e: KeyboardEvent) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+    }
     function toggleHistoryCard(idx: number) {
         const next = new Set(expandedHistoryCards);
         if (next.has(idx)) next.delete(idx); else next.add(idx);
@@ -504,17 +558,41 @@
                                 {/each}
                             </div>
                         {/if}
-                        <div class="user-bubble" style="animation-delay: {idx * 30}ms">
-                            <p>{turn.content}</p>
-                        </div>
-                        <div class="user-actions" style="animation-delay: {idx * 30 + 60}ms">
-                            <button class="user-action-btn" onclick={() => revertToTurn(idx)} title="Revert conversation to this point">
-                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                                    <path d="M3 8a5 5 0 1 0 5-5H5M3 8L5.5 5.5M3 8L5.5 10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                                </svg>
-                                Revert here
-                            </button>
-                        </div>
+                        {#if editingTurn === idx}
+                            <div class="user-edit" style="animation-delay: {idx * 30}ms">
+                                <textarea
+                                    bind:this={editTaEl}
+                                    bind:value={editText}
+                                    class="user-edit-ta"
+                                    rows={1}
+                                    oninput={autosizeEditTa}
+                                    onkeydown={handleEditKey}
+                                ></textarea>
+                                <div class="user-edit-foot">
+                                    <button class="edit-btn edit-cancel" onclick={cancelEdit}>Cancel</button>
+                                    <button class="edit-btn edit-save" onclick={saveEdit} disabled={!editText.trim()}>Send</button>
+                                </div>
+                            </div>
+                        {:else}
+                            <div class="user-bubble" style="animation-delay: {idx * 30}ms">
+                                <p>{turn.content}</p>
+                            </div>
+                            <div class="user-actions" style="animation-delay: {idx * 30 + 60}ms">
+                                <button class="user-action-btn" onclick={() => startEdit(idx, turn.content)} title="Edit message">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                        <path d="M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    Edit
+                                </button>
+                                <button class="user-action-btn" onclick={() => revertToTurn(idx)} title="Revert conversation to this point">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                        <path d="M3 12a9 9 0 1 0 3-6.7L3 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M3 3v5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    Revert
+                                </button>
+                            </div>
+                        {/if}
                     {:else if turn.isCode && turn.route !== 'ROUTE_COMPUTER'}
                         {@const hLang = turn.detectedLang ?? 'text'}
                         {@const hExt = hLang !== 'text' ? getLangMeta(hLang)[0].slice(1) : planTypeToExt(turn.plan?.output_type)}
@@ -1517,6 +1595,11 @@
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.10), 0 1px 2px rgba(0, 0, 0, 0.06);
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
     }
+    :global([data-theme="light"]) .user-bubble {
+        background: var(--text);
+        color: var(--bg);
+        box-shadow: var(--shadow-sm);
+    }
     :global([data-theme="dark"]) .user-bubble {
         background: rgba(255, 255, 255, 0.18);
         color: #F0F0F0;
@@ -1526,7 +1609,8 @@
 
     .user-actions {
         align-self: flex-end;
-        display: flex; gap: 6px;
+        display: flex; gap: 4px;
+        margin-top: 4px;
         opacity: 0;
         transition: opacity 0.15s;
         animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
@@ -1535,13 +1619,13 @@
     .user-actions:hover { opacity: 1; }
 
     .user-action-btn {
-        display: inline-flex; align-items: center; gap: 5px;
-        padding: 4px 10px;
-        font-size: 11.5px; font-weight: 500;
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 5px 11px;
+        font-size: 12px; font-weight: 500;
         color: var(--text-muted);
         background: transparent;
         border: 1px solid transparent;
-        border-radius: 20px;
+        border-radius: 999px;
         cursor: pointer;
         transition: color 0.12s, background 0.12s, border-color 0.12s;
     }
@@ -1549,6 +1633,81 @@
         color: var(--text-secondary);
         background: var(--surface);
         border-color: var(--border);
+    }
+    .user-action-btn svg { flex-shrink: 0; }
+
+    /* Inline edit on user message */
+    .user-edit {
+        align-self: flex-end;
+        width: 100%;
+        max-width: min(68%, 720px);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.10), 0 1px 3px rgba(0, 0, 0, 0.06);
+        overflow: hidden;
+        animation: slideUpSpring var(--spring-duration) var(--spring-soft) both;
+    }
+    .user-edit-ta {
+        width: 100%;
+        resize: none;
+        font-family: inherit;
+        font-size: 15px;
+        line-height: 1.55;
+        color: var(--text-primary);
+        background: transparent;
+        border: none;
+        outline: none;
+        padding: 14px 18px 8px;
+        min-height: 24px;
+        max-height: 320px;
+        overflow: auto;
+    }
+    .user-edit-foot {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 6px 10px 10px;
+    }
+    .edit-btn {
+        font-family: inherit;
+        font-size: 12.5px;
+        font-weight: 500;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        cursor: pointer;
+        transition: background 0.12s, color 0.12s, border-color 0.12s, opacity 0.12s;
+    }
+    .edit-cancel {
+        color: var(--text-muted);
+        background: transparent;
+    }
+    .edit-cancel:hover {
+        color: var(--text-secondary);
+        background: var(--bg);
+    }
+    .edit-save {
+        color: #FAFAF9;
+        background: #1A1A1A;
+        border-color: #1A1A1A;
+    }
+    :global([data-theme="light"]) .edit-save {
+        color: var(--bg);
+        background: var(--text);
+        border-color: var(--text);
+    }
+    :global([data-theme="dark"]) .edit-save {
+        background: rgba(255, 255, 255, 0.20);
+        border-color: rgba(255, 255, 255, 0.20);
+        color: #F0F0F0;
+    }
+    .edit-save:hover:not(:disabled) {
+        opacity: 0.85;
+    }
+    .edit-save:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
     }
 
     /* ================================================================

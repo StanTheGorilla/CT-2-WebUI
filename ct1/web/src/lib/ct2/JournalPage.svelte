@@ -1,8 +1,18 @@
 <script lang="ts">
     import { onMount } from 'svelte';
 
-    let entries = $state<Record<string, any>[]>([]);
-    let stats = $state<Record<string, any>>({});
+    interface PlanEntry {
+        sig: string;
+        task_type: string;
+        complexity: string;
+        score: number;
+        count: number;
+        created_at: string | null;
+    }
+
+    let entries = $state<PlanEntry[]>([]);
+    let totalEntries = $state(0);
+    let avgScore = $state(0);
     let loading = $state(true);
 
     onMount(async () => {
@@ -10,80 +20,81 @@
             const res = await fetch('/api/journal?limit=100');
             const data = await res.json();
             entries = data.entries ?? [];
-            stats = data.stats ?? {};
+            totalEntries = data.stats?.total ?? 0;
+            avgScore = data.stats?.avg_score ?? 0;
         } finally {
             loading = false;
         }
     });
 
     function scoreTone(s: number) {
-        return s >= 70 ? 'var(--c2-ok)' : s >= 40 ? 'var(--c2-warn)' : 'var(--c2-err)';
+        return s >= 0.8 ? 'var(--c2-ok)' : s >= 0.5 ? 'var(--c2-warn)' : 'var(--c2-err)';
     }
 
-    const modeColors: Record<string, string> = {
-        Design: 'oklch(0.55 0.08 300 / 0.28)',
-        Code: 'oklch(0.50 0.08 240 / 0.28)',
-        Chat: 'oklch(0.55 0.06 150 / 0.28)',
-        Computer: 'oklch(0.55 0.08 55 / 0.28)',
-    };
-    const modeFgColors: Record<string, string> = {
-        Design: 'var(--c2-fg-1)',
-        Code: 'oklch(0.72 0.005 90)',
-        Chat: 'var(--c2-ok)',
-        Computer: 'var(--c2-accent)',
-    };
+    function taskLabel(t: string) {
+        return t.charAt(0).toUpperCase() + t.slice(1);
+    }
 
-    function fmtTime(isoStr: string) {
-        if (!isoStr) return '';
-        const d = new Date(isoStr);
-        const now = new Date();
-        const today = now.toDateString();
-        const yesterday = new Date(now.getTime() - 86400000).toDateString();
-        const ds = d.toDateString();
-        const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-        if (ds === today) return `Today · ${time}`;
-        if (ds === yesterday) return 'Yesterday';
-        return ds;
+    function sigDisplay(sig: string) {
+        return sig.includes('#') ? sig.split('#')[0] : sig;
+    }
+
+    function complexityColor(c: string) {
+        if (c === 'deep') return 'oklch(0.55 0.08 300 / 0.28)';
+        if (c === 'moderate') return 'oklch(0.50 0.08 240 / 0.28)';
+        return 'oklch(0.55 0.06 150 / 0.28)';
     }
 </script>
 
 <div class="c2-journal">
     <div class="c2-journal-inner">
         <div class="c2-journal-hero">
-            <div class="c2-journal-eyebrow">Journal</div>
+            <div class="c2-journal-eyebrow">Plan Cache</div>
             <h1 class="c2-journal-heading">
-                Lessons <em class="c2-journal-em">recorded.</em>
+                Patterns <em class="c2-journal-em">learned.</em>
             </h1>
             <p class="c2-journal-sub">
-                After each response, CT-2 reflects on what worked and what didn't.
-                These are the lessons it keeps, written in its own voice,
-                and re-read before the next generation.
+                CT-2 builds an execution plan for each new type of task.
+                When it sees a matching pattern, it skips deliberation and goes
+                straight to generation — making repeated task types 3–5× faster.
             </p>
+            {#if totalEntries > 0}
+                <div class="c2-stats-row">
+                    <div class="c2-stat">
+                        <span class="c2-stat-num">{totalEntries}</span>
+                        <span class="c2-stat-label">patterns cached</span>
+                    </div>
+                    <div class="c2-stat">
+                        <span class="c2-stat-num">{(avgScore * 100).toFixed(0)}%</span>
+                        <span class="c2-stat-label">avg confidence</span>
+                    </div>
+                </div>
+            {/if}
         </div>
 
         {#if loading}
             <div class="c2-journal-loading">Loading…</div>
         {:else if entries.length === 0}
-            <div class="c2-journal-loading">No journal entries yet.</div>
+            <div class="c2-journal-loading">No cached plans yet. Use CT-2 a few times and patterns will appear here.</div>
         {:else}
             <div class="c2-journal-list">
-                {#each entries.toReversed() as entry, i}
+                {#each entries as entry, i}
                     <article class="c2-journal-entry" class:c2-entry-first={i === 0}>
                         <div class="c2-entry-meta">
-                            <span class="c2-score-pill" style="--dot: {scoreTone(entry.self_score ?? 0)}">
+                            <span class="c2-score-pill" style="--dot: {scoreTone(entry.score ?? 0.5)}">
                                 <span class="c2-score-dot"></span>
-                                {entry.self_score ?? 0}%
+                                {((entry.score ?? 0.5) * 100).toFixed(0)}%
                             </span>
-                            {#if entry.route}
-                                {@const mode = entry.route.replace('ROUTE_', '').charAt(0) + entry.route.replace('ROUTE_', '').slice(1).toLowerCase()}
-                                <span
-                                    class="c2-mode-badge"
-                                    style="background:{modeColors[mode] ?? 'var(--c2-bg-2)'}; color:{modeFgColors[mode] ?? 'var(--c2-fg-1)'}; border:1px solid oklch(0.5 0.1 240 / 0.3);"
-                                >{mode}</span>
+                            <span
+                                class="c2-mode-badge"
+                                style="background:{complexityColor(entry.complexity)}; border:1px solid oklch(0.5 0.1 240 / 0.3);"
+                            >{entry.complexity}</span>
+                            <span class="c2-mode-badge" style="background:var(--c2-bg-2); border:1px solid var(--c2-border-2);">{taskLabel(entry.task_type)}</span>
+                            {#if entry.count > 1}
+                                <span class="c2-entry-time">×{entry.count}</span>
                             {/if}
-                            <span class="c2-entry-time">{fmtTime(entry.created_at ?? '')}</span>
                         </div>
-                        <p class="c2-entry-text">{entry.lesson ?? ''}</p>
+                        <p class="c2-entry-text">{sigDisplay(entry.sig)}</p>
                     </article>
                 {/each}
             </div>
@@ -108,7 +119,7 @@
     }
 
     .c2-journal-hero {
-        margin-bottom: 32px;
+        margin-bottom: 40px;
     }
     .c2-journal-eyebrow {
         font-family: 'Geist Mono', monospace;
@@ -137,6 +148,31 @@
         margin: 14px 0 0;
         line-height: 1.6;
         max-width: 520px;
+    }
+
+    .c2-stats-row {
+        display: flex;
+        gap: 24px;
+        margin-top: 24px;
+    }
+    .c2-stat {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .c2-stat-num {
+        font-family: 'Geist Mono', monospace;
+        font-size: 28px;
+        font-weight: 500;
+        color: var(--c2-fg-0);
+        letter-spacing: -0.5px;
+    }
+    .c2-stat-label {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10.5px;
+        color: var(--c2-fg-3);
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
     }
 
     .c2-journal-loading {
@@ -196,6 +232,7 @@
         font-weight: 500;
         letter-spacing: 0.3px;
         text-transform: uppercase;
+        color: var(--c2-fg-1);
     }
     .c2-entry-time {
         font-family: 'Geist Mono', monospace;
@@ -203,10 +240,12 @@
         color: var(--c2-fg-3);
     }
     .c2-entry-text {
-        font-size: 15.5px;
+        font-family: 'Geist Mono', monospace;
+        font-size: 13.5px;
         line-height: 1.7;
         color: var(--c2-fg-0);
         margin: 0;
         text-wrap: pretty;
+        word-break: break-all;
     }
 </style>

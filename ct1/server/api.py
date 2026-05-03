@@ -119,13 +119,14 @@ _workspace: WorkspaceManager | None = None
 _swapping: bool = False          # True while model swap is in progress
 _shutting_down: bool = False     # True during application shutdown
 _pending_approvals: dict = {}    # approval_id -> asyncio.Future[bool]
-_active_think_tasks: set = set() # Active /ws/think asyncio tasks
+_active_think_tasks: set = set() # Active generation asyncio tasks (only running ones)
 _health_task: asyncio.Task | None = None  # Background health monitor task
 _is_generating: int = 0          # Active generation count (blocks server update)
 _external_backend: dict | None = None  # Populated at startup if Ollama/LM Studio detected
 _sse_clients: set[asyncio.Queue] = set()  # One queue per connected SSE client
 _watcher_task: asyncio.Task | None = None  # Background external-backend state poller
 _WS_QUEUE_MAX = 500  # Max buffered events per WebSocket session (~1-2 full responses)
+_hf_download_cancelled: bool = False  # Set to True to abort an in-progress HF download
 
 _TOOL_SCHEMAS = [
     {
@@ -600,13 +601,13 @@ async def lifespan(application: FastAPI):
                 await task
             except asyncio.CancelledError:
                 pass
-    # Drain active generations (max 30s)
+    # Drain active generations (max 15s)
     if _is_generating > 0:
         snapshot = set(_active_think_tasks)
         if snapshot:
             print(f"[api] Shutdown: waiting for {len(snapshot)} active generation(s)...")
             try:
-                _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                _done, _pending = await asyncio.wait(snapshot, timeout=15.0)
                 if _pending:
                     print(f"[api] Shutdown: {len(_pending)} generation(s) did not finish in 30s — cancelling")
                     for task in _pending:
@@ -888,11 +889,28 @@ async def get_llama_update_status(backend: str):
 
 @app.get("/api/journal")
 async def get_journal(limit: int = 50):
-    journal_path = _cfg.get("journal", {}).get("path", "ct1/data/journals")
-    reader = JournalReader(journal_path)
-    entries = reader.journal.read_recent(limit)
-    stats = reader.get_stats()
-    return {"entries": entries, "stats": stats}
+    """Return plan cache data — journal has been replaced by plan cache."""
+    if _orch is None:
+        return {"entries": [], "stats": {"total": 0}}
+    try:
+        pc_stats = _orch.plan_cache.stats()
+        entries = [
+            {
+                "sig": p["sig"],
+                "task_type": p["task_type"],
+                "complexity": p["complexity"],
+                "score": p["score"],
+                "count": p["count"],
+                "created_at": None,
+            }
+            for p in pc_stats.get("recent", [])
+        ]
+        return {
+            "entries": entries,
+            "stats": {"total": pc_stats.get("entries", 0), "avg_score": pc_stats.get("avg_score", 0)},
+        }
+    except Exception:
+        return {"entries": [], "stats": {"total": 0}}
 
 
 @app.get("/api/sessions")
@@ -942,14 +960,80 @@ async def get_config():
         "top_k": model_params.get("top_k", 40),
         "presence_penalty": model_params.get("presence_penalty", 0),
         "frequency_penalty": model_params.get("frequency_penalty", 0),
+        "repeat_penalty": model_params.get("repeat_penalty", 1.10),
         "max_tokens": model_params.get("max_tokens", 100000),
         "thinking_budget": model_params.get("thinking_budget", -1),
         "vision_supported": model_params.get("vision_supported", False),
         "backend": _raw_cfg.get("backend", "vulkan"),
+        "flash_attn": server.get("flash_attn", False),
+        "cont_batching": server.get("cont_batching", False),
+        "plan_cache_fast": _raw_cfg.get("plan_cache", {}).get("enable_fast_path", False),
         "inference_backend": _raw_cfg.get("inference_backend", "local"),
         "inference_backend_preference": _raw_cfg.get("inference_backend", "local"),
         "external_connected": bool(_external_backend),
     }
+
+
+class PatchConfig(BaseModel):
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    repeat_penalty: float | None = None
+    n_gpu_layers: int | None = None
+    flash_attn: bool | None = None
+    cont_batching: bool | None = None
+    plan_cache_fast: bool | None = None
+
+
+@app.patch("/api/config")
+async def patch_config(body: PatchConfig):
+    """Update config values in YAML without restarting the server.
+    GPU-related params (n_gpu_layers, flash_attn, cont_batching)
+    are saved to disk but require a /api/restart to take effect."""
+    global _raw_cfg
+    changed = False
+
+    if body.temperature is not None:
+        _raw_cfg["temperature"] = body.temperature
+        changed = True
+    if body.top_p is not None:
+        _raw_cfg["top_p"] = body.top_p
+        changed = True
+    if body.top_k is not None:
+        _raw_cfg["top_k"] = body.top_k
+        changed = True
+    if body.presence_penalty is not None:
+        _raw_cfg["presence_penalty"] = body.presence_penalty
+        changed = True
+    if body.frequency_penalty is not None:
+        _raw_cfg["frequency_penalty"] = body.frequency_penalty
+        changed = True
+    if body.repeat_penalty is not None:
+        _raw_cfg["repeat_penalty"] = body.repeat_penalty
+        changed = True
+    if body.n_gpu_layers is not None:
+        _raw_cfg["n_gpu_layers"] = body.n_gpu_layers
+        changed = True
+    if body.flash_attn is not None:
+        _raw_cfg["flash_attn"] = body.flash_attn
+        changed = True
+    if body.cont_batching is not None:
+        _raw_cfg["cont_batching"] = body.cont_batching
+        changed = True
+    if body.plan_cache_fast is not None:
+        _raw_cfg.setdefault("plan_cache", {})["enable_fast_path"] = body.plan_cache_fast
+        changed = True
+
+    if changed:
+        _CONFIG_PATH.write_text(
+            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        needs_restart = body.n_gpu_layers is not None or body.flash_attn is not None or body.cont_batching is not None
+        return {"ok": True, "needs_restart": needs_restart}
+    return {"ok": True, "needs_restart": False}
 
 
 class CompactRequest(BaseModel):
@@ -1229,6 +1313,188 @@ async def list_models():
     return {"models": files, "models_dir": str(models_dir)}
 
 
+# ─── VRAM detection ───────────────────────────────────────────────────────────
+
+@app.get("/api/system/vram")
+async def get_vram():
+    """Detect total GPU VRAM in GB. Returns null if undetectable."""
+    import subprocess
+    vram_gb = None
+    try:  # NVIDIA
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=4,
+        )
+        if r.returncode == 0:
+            vram_gb = round(int(r.stdout.strip().splitlines()[0]) / 1024, 1)
+    except Exception:
+        pass
+    if vram_gb is None:  # AMD / generic (Windows WMI)
+        try:
+            r = subprocess.run(
+                ["wmic", "path", "Win32_VideoController", "get", "AdapterRAM", "/format:value"],
+                capture_output=True, text=True, timeout=4,
+            )
+            best = 0
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("AdapterRAM="):
+                    raw = line.split("=", 1)[1].strip()
+                    if raw.isdigit():
+                        best = max(best, int(raw))
+            if best > 0:
+                vram_gb = round(best / 1024 ** 3, 1)
+        except Exception:
+            pass
+    return {"vram_gb": vram_gb}
+
+
+# ─── HF model browser & downloader ───────────────────────────────────────────
+
+
+@app.get("/api/models/hf/search")
+async def search_hf_models(q: str, limit: int = 30):
+    """Search Hugging Face for GGUF models by name."""
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Query too short (min 2 chars).")
+    try:
+        # Build URL with proper encoding — httpx accepts a params dict
+        params: dict = {
+            "search": q.strip(),
+            "filter": "gguf",
+            "sort": "downloads",
+            "direction": "-1",
+            "limit": str(limit),
+            "full": "false",
+            "config": "False",
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get("https://huggingface.co/api/models", params=params, headers={"User-Agent": "ct2-webui/1.0"})
+        r.raise_for_status()
+        data = r.json()
+        results = []
+        seen: set[str] = set()
+        for model in data:
+            model_id = model.get("modelId", "")
+            if not model_id or "/" not in model_id:
+                continue
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            results.append({
+                "id": model_id,
+                "name": model.get("modelId", "").split("/", 1)[-1],
+                "pipeline": model.get("pipeline_tag", ""),
+                "downloads": model.get("downloads", 0),
+                "likes": model.get("likes", 0),
+                "last_modified": model.get("lastModified", ""),
+            })
+        return {"results": results, "query": q}
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Hugging Face API error: {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/models/hf/files")
+async def list_hf_files(repo: str):
+    """Return .gguf files from a public Hugging Face repo."""
+    if not repo or "/" not in repo:
+        raise HTTPException(status_code=400, detail="Use owner/name format.")
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            r = await client.get(
+                f"https://huggingface.co/api/models/{repo}/tree/main",
+                headers={"User-Agent": "ct2-webui/1.0"},
+            )
+        if r.status_code == 404:
+            raise HTTPException(status_code=404, detail="Repo not found on Hugging Face.")
+        r.raise_for_status()
+        files = [
+            {"name": f["path"], "size_gb": round(f.get("size", 0) / 1073741824, 2)}
+            for f in r.json()
+            if isinstance(f, dict)
+            and f.get("path", "").lower().endswith(".gguf")
+            and not Path(f["path"]).name.lower().startswith("mmproj")
+        ]
+        return {"files": files}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/models/download")
+async def download_model_sse(repo: str, filename: str):
+    """Stream download progress for a GGUF file from Hugging Face as SSE."""
+    if not repo or "/" not in repo:
+        raise HTTPException(status_code=400, detail="Use owner/name format.")
+    safe_name = Path(filename).name
+    if not safe_name.lower().endswith(".gguf"):
+        raise HTTPException(status_code=400, detail="Only .gguf files are supported.")
+    models_dir_rel = _raw_cfg.get("models_dir", "models")
+    models_dir = _CONFIG_PATH.resolve().parent.parent.parent / models_dir_rel
+    models_dir.mkdir(parents=True, exist_ok=True)
+    dest = models_dir / safe_name
+    url = f"https://huggingface.co/{repo}/resolve/main/{filename}"
+
+    async def _stream():
+        global _hf_download_cancelled
+        _hf_download_cancelled = False
+        import time
+        cancelled = False
+        try:
+            async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
+                async with client.stream("GET", url, headers={"User-Agent": "ct2-webui/1.0"}) as resp:
+                    if resp.status_code != 200:
+                        yield f"data: {json.dumps({'status': 'error', 'message': f'HTTP {resp.status_code}'})}\n\n"
+                        return
+                    total = int(resp.headers.get("content-length", 0))
+                    downloaded = 0
+                    t0 = time.monotonic()
+                    with open(dest, "wb") as fh:
+                        async for chunk in resp.aiter_bytes(65536):
+                            if _hf_download_cancelled:
+                                cancelled = True
+                                break
+                            fh.write(chunk)
+                            downloaded += len(chunk)
+                            elapsed = max(time.monotonic() - t0, 0.001)
+                            yield (
+                                f"data: {json.dumps({'status': 'progress', 'percent': round(downloaded / total * 100 if total else 0, 1), 'speed_mb': round(downloaded / elapsed / 1048576, 1), 'downloaded_gb': round(downloaded / 1073741824, 2), 'total_gb': round(total / 1073741824, 2)})}\n\n"
+                            )
+            if cancelled:
+                try:
+                    if dest.exists():
+                        dest.unlink()
+                except Exception:
+                    pass
+                yield f"data: {json.dumps({'status': 'cancelled'})}\n\n"
+                return
+            yield f"data: {json.dumps({'status': 'done', 'filename': dest.name})}\n\n"
+        except Exception as exc:
+            try:
+                if dest.exists() and dest.stat().st_size < 1048576:
+                    dest.unlink(missing_ok=True)
+            except Exception:
+                pass
+            yield f"data: {json.dumps({'status': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.delete("/api/models/download")
+async def cancel_model_download():
+    """Cancel an in-progress HF model download."""
+    global _hf_download_cancelled
+    _hf_download_cancelled = True
+    return {"ok": True}
+
+
 class ModelSelect(BaseModel):
     model: str
     context_size: int | None = None
@@ -1498,15 +1764,17 @@ async def select_model(body: ModelSelect):
 
     _swapping = True
     try:
-        # Drain active generation tasks (max 30s)
+        # Drain active generation tasks (max 10s)
         if _is_generating > 0:
             snapshot = set(_active_think_tasks)
             if snapshot:
                 print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
                 try:
-                    _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                    _done, _pending = await asyncio.wait(snapshot, timeout=10.0)
                     if _pending:
-                        print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
+                        print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 10s — proceeding with model switch")
+                        for task in _pending:
+                            task.cancel()
                 except Exception:
                     pass
 
@@ -1610,19 +1878,21 @@ async def select_backend(body: BackendSelect):
 
     _swapping = True
     try:
-        # Drain active generation tasks (max 30s)
+        # Drain active generation tasks (max 10s)
         if _is_generating > 0:
             snapshot = set(_active_think_tasks)
             if snapshot:
                 print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
                 try:
-                    _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                    _done, _pending = await asyncio.wait(snapshot, timeout=10.0)
                     if _pending:
-                        print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
+                        print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 10s — proceeding with swap")
+                        for task in _pending:
+                            task.cancel()
                 except Exception:
                     pass
 
-        _raw_cfg["backend"] = body.backend
+        print(f"[api] Saving backend={body.backend} and restarting llama-server...")
         _CONFIG_PATH.write_text(
             yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
             encoding="utf-8",
@@ -1652,6 +1922,9 @@ async def select_backend(body: BackendSelect):
 
 class RestartBody(BaseModel):
     context_size: int | None = None
+    n_gpu_layers: int | None = None
+    flash_attn: bool | None = None
+    cont_batching: bool | None = None
 
 
 @app.post("/api/restart")
@@ -1661,24 +1934,33 @@ async def restart_model(body: RestartBody):
 
     _swapping = True
     try:
-        # Drain active generation tasks (max 30s)
+        # Drain active generation tasks (max 10s)
         if _is_generating > 0:
             snapshot = set(_active_think_tasks)
             if snapshot:
                 print(f"[api] Waiting for {len(snapshot)} active generation(s) to complete...")
                 try:
-                    _done, _pending = await asyncio.wait(snapshot, timeout=30.0)
+                    _done, _pending = await asyncio.wait(snapshot, timeout=10.0)
                     if _pending:
-                        print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 30s — proceeding with swap")
+                        print(f"[api] WARNING: {len(_pending)} generation(s) did not finish in 10s — proceeding with restart")
+                        for task in _pending:
+                            task.cancel()
                 except Exception:
                     pass
 
         if body.context_size is not None:
             _raw_cfg["context_size"] = body.context_size
-            _CONFIG_PATH.write_text(
-                yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
-                encoding="utf-8",
-            )
+        if body.n_gpu_layers is not None:
+            _raw_cfg["n_gpu_layers"] = body.n_gpu_layers
+        if body.flash_attn is not None:
+            _raw_cfg["flash_attn"] = body.flash_attn
+        if body.cont_batching is not None:
+            _raw_cfg["cont_batching"] = body.cont_batching
+
+        _CONFIG_PATH.write_text(
+            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
 
         try:
             _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH),
@@ -1859,8 +2141,6 @@ async def ws_think(websocket: WebSocket):
     await websocket.accept()
     current_think_task: asyncio.Task | None = None
     slot_conversation_id: str | None = None
-    current_task = asyncio.current_task()
-    _active_think_tasks.add(current_task)
     try:
         while True:
             msg = await websocket.receive_json()
@@ -2355,11 +2635,14 @@ async def ws_think(websocket: WebSocket):
 
                 async def _tracked_run_think():
                     global _is_generating
+                    task = asyncio.current_task()
+                    _active_think_tasks.add(task)
                     _is_generating += 1
                     try:
                         await run_think()
                     finally:
                         _is_generating -= 1
+                        _active_think_tasks.discard(task)
 
                 current_think_task = asyncio.create_task(_tracked_run_think())
                 stream_task = asyncio.create_task(stream_events())
@@ -2384,7 +2667,11 @@ async def ws_think(websocket: WebSocket):
                     current_think_task = None
 
     except (WebSocketDisconnect, RuntimeError):
-        pass
+        # Client disconnected (browser close / tab close). Cancel any ongoing generation.
+        if current_think_task and not current_think_task.done():
+            current_think_task.cancel()
+            current_think_task = None
+            print("[api] client disconnected — cancelled active generation")
     except Exception as e:
         import traceback
         err_msg = str(e) or repr(e) or traceback.format_exc()[-200:]
@@ -2393,8 +2680,6 @@ async def ws_think(websocket: WebSocket):
             await websocket.send_json({"event": "error", "message": err_msg})
         except Exception:
             pass
-    finally:
-        _active_think_tasks.discard(current_task)
 
 
 # ── Workspace endpoints (Computer Mode) ──────────────────────────────
@@ -2575,6 +2860,31 @@ def _mount_frontend_if_built() -> None:
                 return FileResponse(Path(self.directory) / "index.html")
 
     app.mount("/", SPAStaticFiles(directory=str(_WEB_BUILD), html=True), name="static")
+
+
+# ── Plan Cache ───────────────────────────────────────────────────
+
+@app.get("/api/plan-cache/stats")
+async def plan_cache_stats():
+    """Return plan cache statistics for the settings UI."""
+    if _orch is None:
+        return {"entries": 0, "avg_score": 0, "recent": []}
+    try:
+        return _orch.plan_cache.stats()
+    except Exception:
+        return {"entries": 0, "avg_score": 0, "recent": []}
+
+
+@app.delete("/api/plan-cache")
+async def clear_plan_cache():
+    """Clear all cached plans."""
+    if _orch is None:
+        return {"error": "No orchestrator"}
+    try:
+        removed = _orch.plan_cache.clear()
+        return {"ok": True, "removed": removed}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # Mount immediately if the build already exists (external uvicorn / dev reload)

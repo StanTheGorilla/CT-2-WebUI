@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
+    import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
 
     interface ModelFile {
         name: string;
@@ -25,12 +26,22 @@
     }
 
     onMount(async () => {
+        await fetchActiveModel();
+    });
+
+    async function fetchActiveModel() {
         try {
             const res  = await fetch('/api/model');
             const data = await res.json();
             activeModel   = data.active_model   || '';
             modelThinking = data.enable_thinking ?? false;
         } catch { /* silent — no model yet */ }
+    }
+
+    // Sync when settings changes the model
+    $effect(() => {
+        $modelSwitchCount;
+        fetchActiveModel();
     });
 
     async function openPicker() {
@@ -60,6 +71,7 @@
             activeModel   = name;
             modelThinking = data.enable_thinking ?? false;
             modelsLoaded  = false; // refresh list next open
+            notifyModelSwitch();
         } catch (e: any) {
             error = e?.message || 'Switch failed';
         } finally {

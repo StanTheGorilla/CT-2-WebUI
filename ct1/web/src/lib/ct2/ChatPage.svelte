@@ -1,6 +1,6 @@
 <script lang="ts">
     import { tick, onMount } from 'svelte';
-    import { chat, sendThink, stopGeneration, setMode, revertToTurn, setFeedback, regenerate, setContextSize, clearPendingCommands, clearPendingApproval, type Attachment } from '$lib/stores/chat';
+    import { chat, sendThink, stopGeneration, setMode, revertToTurn, editTurn, setFeedback, regenerate, setContextSize, clearPendingCommands, clearPendingApproval, type Attachment } from '$lib/stores/chat';
     import { preferences } from '$lib/stores/preferences';
     import { render } from '$lib/markdown';
     import PreviewPanel from './PreviewPanel.svelte';
@@ -37,6 +37,47 @@
     let latestCompactionOpen = $state(false);
     let latestCompactionKey = $state('');
     let liveThinkingOpen = $state(false);
+    let editingTurn = $state<number | null>(null);
+    let editText = $state('');
+    let editTaEl = $state<HTMLTextAreaElement | null>(null);
+
+    function startEdit(idx: number, content: string) {
+        editingTurn = idx;
+        editText = content;
+        tick().then(() => {
+            if (editTaEl) {
+                editTaEl.focus();
+                editTaEl.setSelectionRange(editTaEl.value.length, editTaEl.value.length);
+                autosizeEditTa();
+            }
+        });
+    }
+
+    function cancelEdit() {
+        editingTurn = null;
+        editText = '';
+    }
+
+    function saveEdit() {
+        if (editingTurn === null) return;
+        const trimmed = editText.trim();
+        if (!trimmed) return;
+        const idx = editingTurn;
+        editingTurn = null;
+        editText = '';
+        editTurn(idx, trimmed);
+    }
+
+    function autosizeEditTa() {
+        if (!editTaEl) return;
+        editTaEl.style.height = 'auto';
+        editTaEl.style.height = Math.min(editTaEl.scrollHeight, 320) + 'px';
+    }
+
+    function handleEditKey(e: KeyboardEvent) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+    }
 
     onMount(async () => {
         try {
@@ -74,7 +115,15 @@
     let showPreview = $state(false);
     let previewOverride = $state<string | null>(null);
     let previewWidth = $state(44);
-    let isHtmlOutput = $derived($chat.route === 'ROUTE_DESIGN');
+    function _looksLikeHtml(text: string): boolean {
+        const t = text.trim().toLowerCase();
+        return t.startsWith('<!doctype') || t.startsWith('<html');
+    }
+    let isHtmlOutput = $derived(
+        $chat.route === 'ROUTE_DESIGN'
+        || _looksLikeHtml($chat.response)
+        || _looksLikeHtml($chat.streamingText)
+    );
     let previewCode = $derived(
         (isActive && isHtmlOutput && $chat.streamingText)
             ? stripCodeFences($chat.streamingText)
@@ -252,16 +301,39 @@
                             onmouseenter={() => hoveredTurn = i}
                             onmouseleave={() => hoveredTurn = null}
                         >
-                            <div class="c2-user-bubble">{turn.content}</div>
-                            <div class="c2-user-foot" class:c2-visible={hoveredTurn === i}>
-                                <button class="c2-revert-btn" onclick={() => revertToTurn(i)}>
-                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
-                                        <path d="M3 7h14a4 4 0 0 1 0 8H7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                        <path d="M7 3L3 7l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                                    </svg>
-                                    Revert here
-                                </button>
-                            </div>
+                            {#if editingTurn === i}
+                                <div class="c2-user-edit">
+                                    <textarea
+                                        bind:this={editTaEl}
+                                        bind:value={editText}
+                                        class="c2-user-edit-ta"
+                                        rows={1}
+                                        oninput={autosizeEditTa}
+                                        onkeydown={handleEditKey}
+                                    ></textarea>
+                                    <div class="c2-user-edit-foot">
+                                        <button class="c2-edit-btn c2-edit-cancel" onclick={cancelEdit}>Cancel</button>
+                                        <button class="c2-edit-btn c2-edit-save" onclick={saveEdit} disabled={!editText.trim()}>Send</button>
+                                    </div>
+                                </div>
+                            {:else}
+                                <div class="c2-user-bubble">{turn.content}</div>
+                                <div class="c2-user-foot" class:c2-visible={hoveredTurn === i}>
+                                    <button class="c2-msg-btn" onclick={() => startEdit(i, turn.content)} title="Edit message">
+                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                                            <path d="M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                        </svg>
+                                        Edit
+                                    </button>
+                                    <button class="c2-msg-btn" onclick={() => revertToTurn(i)} title="Revert conversation to this point">
+                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                                            <path d="M3 12a9 9 0 1 0 3-6.7L3 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                            <path d="M3 3v5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                        </svg>
+                                        Revert
+                                    </button>
+                                </div>
+                            {/if}
                         </div>
                     {:else if turn.isCompacted}
                         <!-- Rendered below as an inline chat event near the latest turn -->
@@ -476,7 +548,7 @@
                                             </svg>
                                             Download
                                         </button>
-                                        {#if turn.route === 'ROUTE_DESIGN'}
+                                        {#if turn.route === 'ROUTE_DESIGN' || _looksLikeHtml(turn.content)}
                                             <button class="c2-out-btn" onclick={() => previewHistoryCode(turn.content)}>
                                                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
                                                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="1.8"/>
@@ -698,9 +770,10 @@
                             }}
                             disabled={isActive}
                         >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
-                                <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.8"/>
-                                <path d="M12 2a14.5 14.5 0 010 20M2 12h20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+                                <ellipse cx="12" cy="12" rx="4" ry="9" stroke="currentColor" stroke-width="1.6"/>
+                                <path d="M3 12h18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
                             </svg>
                             Search
                         </button>
@@ -1334,29 +1407,40 @@
     .c2-ai-actions {
         display: flex;
         align-items: center;
-        gap: 2px;
-        height: 28px;
+        gap: 4px;
+        height: 30px;
+        margin-top: 2px;
         opacity: 0;
         transition: opacity 120ms;
     }
     .c2-ai-actions.c2-visible { opacity: 1; }
 
     .c2-icon-btn {
-        width: 26px; height: 26px;
-        border-radius: 6px;
+        width: 28px; height: 28px;
+        border-radius: 7px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         color: var(--c2-fg-2);
         background: none;
-        border: none;
+        border: 1px solid transparent;
         cursor: pointer;
-        transition: background 100ms, color 100ms;
+        transition: background 120ms, color 120ms, border-color 120ms;
     }
-    .c2-icon-btn:hover { background: var(--c2-bg-2); color: var(--c2-fg-0); }
-    .c2-icon-btn.c2-icon-active { color: var(--c2-accent); }
+    .c2-icon-btn:hover {
+        background: var(--c2-bg-2);
+        color: var(--c2-fg-0);
+        border-color: var(--c2-border-1);
+    }
+    .c2-icon-btn.c2-icon-active {
+        color: var(--c2-accent);
+        background: oklch(0.78 0.10 70 / 0.10);
+    }
+    .c2-icon-btn svg {
+        flex-shrink: 0;
+    }
 
-    /* ── Revert button ─────────────────────────────────────────── */
+    /* ── Revert / Stop button ──────────────────────────────────── */
     .c2-revert-btn {
         font-family: 'Geist Mono', monospace;
         display: inline-flex;
@@ -1372,6 +1456,99 @@
         transition: background 120ms, color 120ms;
     }
     .c2-revert-btn:hover { background: var(--c2-bg-2); color: var(--c2-fg-0); }
+
+    /* ── User message action buttons (Edit / Revert) ───────────── */
+    .c2-user-foot {
+        gap: 4px;
+    }
+    .c2-msg-btn {
+        font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--c2-fg-2);
+        padding: 3px 9px;
+        border-radius: 6px;
+        background: transparent;
+        border: 1px solid transparent;
+        cursor: pointer;
+        transition: background 120ms, color 120ms, border-color 120ms;
+    }
+    .c2-msg-btn:hover {
+        background: var(--c2-bg-2);
+        color: var(--c2-fg-0);
+        border-color: var(--c2-border-1);
+    }
+    .c2-msg-btn svg {
+        flex-shrink: 0;
+    }
+
+    /* ── Inline edit ───────────────────────────────────────────── */
+    .c2-user-edit {
+        align-self: flex-end;
+        width: 100%;
+        max-width: 72%;
+        background: var(--c2-bg-2);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 14px;
+        box-shadow: 0 4px 14px -6px oklch(0 0 0 / 0.18);
+        overflow: hidden;
+    }
+    .c2-user-edit-ta {
+        width: 100%;
+        resize: none;
+        font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+        font-size: 14px;
+        line-height: 1.55;
+        color: var(--c2-fg-0);
+        background: transparent;
+        border: none;
+        outline: none;
+        padding: 12px 14px 6px;
+        min-height: 22px;
+        max-height: 320px;
+        overflow: auto;
+        scrollbar-width: thin;
+        scrollbar-color: var(--c2-border-2) transparent;
+    }
+    .c2-user-edit-foot {
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+        padding: 6px 8px 8px;
+    }
+    .c2-edit-btn {
+        font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+        font-size: 12px;
+        font-weight: 500;
+        padding: 5px 12px;
+        border-radius: 7px;
+        border: 1px solid var(--c2-border-1);
+        cursor: pointer;
+        transition: background 120ms, color 120ms, border-color 120ms, opacity 120ms;
+    }
+    .c2-edit-cancel {
+        color: var(--c2-fg-2);
+        background: transparent;
+    }
+    .c2-edit-cancel:hover {
+        color: var(--c2-fg-0);
+        background: var(--c2-bg-1);
+    }
+    .c2-edit-save {
+        color: var(--c2-accent-fg, oklch(0.20 0.03 70));
+        background: var(--c2-accent);
+        border-color: var(--c2-accent);
+    }
+    .c2-edit-save:hover:not(:disabled) {
+        opacity: 0.88;
+    }
+    .c2-edit-save:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
 
     /* ── Composer ──────────────────────────────────────────────── */
     .c2-composer-wrap {

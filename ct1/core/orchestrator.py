@@ -21,8 +21,7 @@ from ct1.core.formatter import (
     polish_html_css, check_completeness,
     enforce_file_markers, fix_html_structure,
 )
-from ct1.memory.journal import Journal
-from ct1.memory.journal_reader import JournalReader
+from ct1.memory.plan_cache import PlanCache
 from ct1.memory.session_store import SessionStore
 from ct1.core.atlas import AtlasController
 
@@ -150,13 +149,13 @@ _EXTERNAL_CFG_DEFAULTS = {
     "models": {"director": {
         "temperature": 0.6, "top_p": 0.9, "top_k": 40,
         "presence_penalty": 1.0, "frequency_penalty": 0.0,
-        "repeat_penalty": 1.05,
+        "repeat_penalty": 1.10,
         "max_tokens": 100000, "thinking_budget": -1,
         "vision_supported": False, "enable_thinking": False,
     }},
     "_task_overrides": {},
     "_preset_info": {},
-    "journal": {"path": "ct1/data/journals", "lessons_on_startup": 10},
+    "plan_cache": {"path": "ct1/data/plan_cache.db"},
     "sessions": {"path": "ct1/data/sessions"},
 }
 
@@ -217,15 +216,14 @@ class Orchestrator:
         self.context_size = cfg["llama_server"]["context_size"]
         print(f"[orch] Model tier: {self.tier} (model: {model_file})")
 
-        self.journal = Journal(cfg["journal"]["path"])
-        self.journal_reader = JournalReader(cfg["journal"]["path"])
+        self.plan_cache = PlanCache(
+            cfg.get("plan_cache", {}).get("path", "ct1/data/plan_cache.db")
+        )
+        self.plan_cache_fast = cfg.get("plan_cache", {}).get("enable_fast_path", False)
         self.verbose = False
 
-        # Load lessons into Engine personality
-        lessons = self.journal_reader.get_recent_lessons(
-            cfg["journal"]["lessons_on_startup"]
-        )
-        self.engine.lessons = lessons
+        # No more lesson injection — plan cache handles acceleration
+        self.engine.lessons = []
         self.component_cache = component_cache
 
         # Load last session for continuity
@@ -1096,6 +1094,29 @@ class Orchestrator:
         emit("routing")
         forced_route = self._MODE_ROUTE_MAP.get(mode_override or "")
 
+        # ── Fast-path plan cache check ────────────────────
+        # Currently disabled for quality assurance — the plan cache still
+        # records entries for the Learn tab, but does not alter the pipeline.
+        # Set plan_cache.enable_fast_path: true in model_config.yaml to enable.
+        plan_hint = None
+        _fast_path = False
+        if (self.plan_cache_fast and not forced_route and not is_edit):
+            plan_hint = self.plan_cache.lookup(user_message)
+            if plan_hint and plan_hint.get("confidence", 0) >= 0.6:
+                print(f"[plan-cache] HIT — {plan_hint.get('task_type', 'direct')} "
+                      f"(confidence: {plan_hint.get('confidence', 0):.02f})")
+                _cached_type = plan_hint.get("task_type", "direct")
+                if _cached_type == "code":
+                    forced_route = "ROUTE_CODE"
+                elif _cached_type == "design":
+                    forced_route = "ROUTE_DESIGN"
+                else:
+                    forced_route = "ROUTE_DIRECT"
+                _fast_path = True
+                print(f"[plan-cache] fast-path → {forced_route}")
+            else:
+                plan_hint = None
+
         # LLM-based question detection: when there's existing code and the
         # message isn't a clear edit, ask the model if it's an info request.
         # This works in any language — no keyword dependency.
@@ -1149,29 +1170,37 @@ class Orchestrator:
                     tools=tools,
                     tool_executor=tool_executor,
                 )
-                # Run reflection
+                # Write to plan cache so future design tasks skip deliberation
                 if result.get("reflection") is None:
-                    result["reflection"] = await self._write_reflection(goal_text, result["response"])
+                    self.plan_cache.add(
+                        goal_text,
+                        output_type="html",
+                        task_type="design",
+                        complexity="moderate",
+                        score=0.7,
+                    )
+                    result["reflection"] = None
                 return result
 
         # ── Phase 2: PLAN (tier-aware) ──
         plan = None
-        is_complex = len(user_message) > 80 or any(
-            kw in user_message.lower()
-            for kw in ("step by step", "multiple", "project", "full", "complete",
-                       "detailed", "comprehensive", "with tests")
-        )
+        if not _fast_path:  # Skip AI planning on cached fast-path
+            is_complex = len(user_message) > 80 or any(
+                kw in user_message.lower()
+                for kw in ("step by step", "multiple", "project", "full", "complete",
+                           "detailed", "comprehensive", "with tests")
+            )
 
-        if self.tier == "large" and is_code and not is_edit:
-            # Large tier: always plan for code tasks
-            plan = await self._solo_plan(user_message, route)
-            if plan:
-                emit("planned", plan=plan)
-        elif self.tier == "medium" and is_code and not is_edit and is_complex:
-            # Medium tier: plan only for complex requests
-            plan = await self._solo_plan(user_message, route)
-            if plan:
-                emit("planned", plan=plan)
+            if self.tier == "large" and is_code and not is_edit:
+                # Large tier: always plan for code tasks
+                plan = await self._solo_plan(user_message, route)
+                if plan:
+                    emit("planned", plan=plan)
+            elif self.tier == "medium" and is_code and not is_edit and is_complex:
+                # Medium tier: plan only for complex requests
+                plan = await self._solo_plan(user_message, route)
+                if plan:
+                    emit("planned", plan=plan)
         # Small tier: no planning call (inline in system prompt)
 
         # ── Phase 3: specialist_data (always None — specialist removed) ──
@@ -1506,27 +1535,24 @@ class Orchestrator:
         # ── Reflection (code routes only — skip for direct text) ─────
         if is_code and route != "ROUTE_COMPUTER":
             complexity = plan.get("complexity", "moderate") if plan else "moderate"
-            reflection = await self._write_reflection(goal_text, final_response, complexity)
-
-            # Auto-cache high-scoring outputs
-            if (self.component_cache
-                    and reflection.get("self_score", 0) >= 0.85
-                    and not is_edit):
-                try:
-                    from ct1.memory.component_cache import ComponentCache
-                    tags = ComponentCache.extract_tags(goal_text, specialist_data)
-                    category = ComponentCache.categorize(goal_text, plan)
-                    await self.component_cache.save_component(
-                        category, tags, final_response,
-                        reflection["self_score"], goal_text[:200],
-                    )
-                except Exception as e:
-                    print(f"[orch] cache save error: {e}")
-        else:
-            reflection = {
-                "goal": goal_text[:200], "complexity": "brief",
-                "lesson": "", "self_score": 0.0,
-            }
+        # ── Plan cache write (all routes) ─────────────────────────
+        # After every successful generation, write to the plan cache so
+        # future similar tasks skip deliberation.
+        if not is_edit:
+            if is_code and route != "ROUTE_COMPUTER":
+                _complexity = plan.get("complexity", "moderate") if plan else "moderate"
+            else:
+                _complexity = "brief"
+            _task_type = "design" if route == "ROUTE_DESIGN" else ("code" if is_code else "direct")
+            _out_type = plan.get("output_type", "") if plan else ""
+            self.plan_cache.add(
+                goal_text,
+                output_type=_out_type,
+                task_type=_task_type,
+                complexity=_complexity,
+                score=0.7,
+            )
+        reflection = None
 
         # ── Build metadata: detected_lang + files ─────────────────────
         if route == "ROUTE_DESIGN":
@@ -1586,13 +1612,6 @@ class Orchestrator:
             "files": _files,
             "explanation": explanation_text,
         }
-
-    async def _write_reflection(self, goal_text: str, response: str, complexity: str = "moderate") -> dict:
-        """Run reflection, write to journal, and refresh lessons. Returns the reflection dict."""
-        reflection = await self.engine.reflect(goal_text, complexity, response)
-        self.journal.write(reflection)
-        self.engine.lessons = self.journal_reader.get_recent_lessons(10)
-        return reflection
 
     async def compact_conversation(self, conversation: list[dict]) -> list[dict]:
         """Compact a long conversation into an actionable summary + latest artifact.
@@ -1954,3 +1973,4 @@ class Orchestrator:
 
     async def close(self):
         await self.engine.close()
+        self.plan_cache.close()

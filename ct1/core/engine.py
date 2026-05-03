@@ -284,7 +284,7 @@ class Engine:
     def __init__(self, base_url: str, temperature: float = 0.6,
                  top_p: float = 0.9, top_k: int = 40,
                  presence_penalty: float = 1.0, frequency_penalty: float = 0.0,
-                 repeat_penalty: float = 1.05,
+                 repeat_penalty: float = 1.10,
                  max_tokens: int = 100000,
                  thinking_budget: int = -1,
                  vision_supported: bool = False,
@@ -942,10 +942,11 @@ class Engine:
         # Resolve presence_penalty: override > route default > instance default
         pp = ovr_pp if ovr_pp is not None else self.presence_penalty
 
-        # Repetition detection: enabled for everything except design mode.
-        # HTML has legitimate repeated patterns (class strings, closing tags,
-        # CSS rules) that false-trigger the detector and cut off generation.
-        check_repetition = route != "ROUTE_DESIGN"
+        # Repetition detection: enabled for all routes.
+        # The detector already handles structural repetition gracefully —
+        # it requires 4+ identical lines or 3+ identical 40-char chunks.
+        # Well-formed code never triggers these thresholds.
+        check_repetition = True
 
         if on_token:
             result = await self._call_stream(

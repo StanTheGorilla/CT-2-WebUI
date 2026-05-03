@@ -1,7 +1,7 @@
 import { writable, get } from 'svelte/store';
 import { WS } from '$lib/ws';
 import { preferences } from '$lib/stores/preferences';
-import { activeConversationId, loadConversations, updateConversationTitle } from '$lib/stores/conversations';
+import { updateConversationTitle } from '$lib/stores/conversations';
 
 export interface Attachment {
     type: 'image' | 'file';
@@ -863,75 +863,56 @@ export function newConversation() {
     try { sessionStorage.removeItem('ct2_last_conv'); } catch {}
 }
 
-export async function revertToTurn(userTurnIdx: number) {
-    let sourceConversationId: string | null = null;
-    let forkConversation: Array<Record<string, any>> = [];
+function dropConversationFrom(s: ChatState, userTurnIdx: number) {
+    s.conversation = s.conversation.slice(0, userTurnIdx);
+    s.phase = 'idle';
+    s.response = '';
+    s.route = '';
+    s.plan = null;
+    s.specialistData = null;
+    s.review = null;
+    s.reflection = null;
+    s.thinking = '';
+    s.draft = '';
+    s.draftThinking = '';
+    s.events = [];
+    s.undoStack = [];
+    s.forceClearKvOnNextThink = true;
+    clearTransientTurnState(s);
+}
+
+export function revertToTurn(userTurnIdx: number) {
+    let userText = '';
 
     chat.update((s) => {
-        sourceConversationId = s.conversationId;
-        const trimmedConversation = s.conversation.slice(0, userTurnIdx + 1);
-        forkConversation = trimmedConversation.map((turn) => ({
-            role: turn.role,
-            content: turn.content,
-            thinking: turn.thinking,
-            draftThinking: turn.draftThinking,
-            route: turn.route,
-            specialistData: turn.specialistData,
-            reflection: turn.reflection,
-            feedback: turn.feedback,
-            detectedLang: turn.detectedLang,
-        }));
-        s.conversation = trimmedConversation.map((turn) => ({
-            ...turn,
-            messageId: undefined,
-            messagePosition: undefined,
-        }));
-        s.phase = 'idle';
-        s.response = '';
-        s.route = '';
-        s.plan = null;
-        s.specialistData = null;
-        s.review = null;
-        s.reflection = null;
-        s.thinking = '';
-        s.draft = '';
-        s.draftThinking = '';
-        s.events = [];
-        s.undoStack = [];
-        s.forceClearKvOnNextThink = true;
-        clearTransientTurnState(s);
+        const userTurn = s.conversation[userTurnIdx];
+        if (userTurn?.role === 'user') {
+            userText = userTurn.content;
+        }
+        dropConversationFrom(s, userTurnIdx);
         return s;
     });
 
-    if (!sourceConversationId) {
-        activeConversationId.set(null);
-        return;
+    if (userText) {
+        pendingInputPrompt.set(userText);
     }
+}
 
-    try {
-        const res = await fetch(`/api/conversations/${sourceConversationId}/fork`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ conversation: forkConversation }),
-        });
-        if (!res.ok) {
-            throw new Error(`fork failed: ${res.status}`);
+export function editTurn(userTurnIdx: number, newText: string) {
+    const trimmed = newText.trim();
+    if (!trimmed) return;
+
+    let attachments: Attachment[] = [];
+    chat.update((s) => {
+        const userTurn = s.conversation[userTurnIdx];
+        if (userTurn?.role === 'user') {
+            attachments = userTurn.attachments ?? [];
         }
-        const data = await res.json();
-        chat.update((s) => {
-            s.conversationId = data.id;
-            s.forceClearKvOnNextThink = false;
-            return s;
-        });
-        activeConversationId.set(data.id);
-        await loadConversations();
-    } catch {
-        chat.update((s) => {
-            s.conversationId = null;
-            return s;
-        });
-        activeConversationId.set(null);
-    }
+        dropConversationFrom(s, userTurnIdx);
+        return s;
+    });
+
+    sendThink(trimmed, attachments);
 }
 
 export function setMode(mode: ModeOverride) {

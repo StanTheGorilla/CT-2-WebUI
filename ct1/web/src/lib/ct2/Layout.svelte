@@ -13,6 +13,7 @@
         renameConversation,
     } from '$lib/stores/conversations';
     import { loadFromHistory } from '$lib/stores/chat';
+    import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
 
     let { children } = $props();
 
@@ -88,13 +89,23 @@
     }
 
     onMount(async () => {
+        await Promise.all([loadConversations(), loadWorkspaces()]);
+        await fetchActiveModel();
+    });
+
+    async function fetchActiveModel() {
         try {
             const res = await fetch('/api/model');
             const data = await res.json();
             activeModel = data.active_model || '';
             modelThinking = data.enable_thinking ?? false;
         } catch {}
-        await Promise.all([loadConversations(), loadWorkspaces()]);
+    }
+
+    // Sync when settings changes the model
+    $effect(() => {
+        $modelSwitchCount;
+        fetchActiveModel();
     });
 
     async function openModelPicker() {
@@ -123,6 +134,7 @@
             activeModel = name;
             modelThinking = data.enable_thinking ?? false;
             modelsLoaded = false;
+            notifyModelSwitch();
         } catch {}
         finally { modelSwitching = false; }
     }
@@ -235,7 +247,7 @@
                     <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                 </svg>
             </button>
-            <a href="/" class="c2-logo" onclick={() => { newConversation(); goto('/'); }}>
+            <a href="/" class="c2-logo">
                 <span class="c2-logo-text">ct·2</span>
             </a>
         </div>
@@ -257,7 +269,7 @@
                     </div>
                 </div>
             {:else}
-                <div class="c2-model-pill" style="position:relative;">
+                <div class="c2-model-pill">
                     <button
                         class="c2-model-btn"
                         class:c2-model-btn-open={modelPickerOpen}
@@ -292,7 +304,6 @@
 
                     {#if modelPickerOpen}
                         <div class="c2-model-dropdown">
-                            <div class="c2-dropdown-header">Available models</div>
                             {#if models.length === 0}
                                 <div class="c2-dropdown-empty">No models found</div>
                             {:else}
@@ -302,12 +313,23 @@
                                         class:c2-dropdown-item-active={m.name === activeModel}
                                         onclick={() => selectModel(m.name)}
                                     >
-                                        <span class="c2-status-dot" class:c2-status-ok={m.name === activeModel}></span>
-                                        <span class="c2-di-name">{shortName(m.name)}</span>
-                                        {#if m.vision}
-                                            <span class="c2-di-badge">VISION</span>
+                                        <div class="c2-di-info">
+                                            <span class="c2-di-name">{shortName(m.name)}</span>
+                                            <div class="c2-di-meta">
+                                                <span class="c2-di-badge">{m.size_gb} GB</span>
+                                                {#if m.thinking}
+                                                    <span class="c2-di-badge c2-di-badge-think">Thinking</span>
+                                                {/if}
+                                                {#if m.vision}
+                                                    <span class="c2-di-badge">Vision</span>
+                                                {/if}
+                                            </div>
+                                        </div>
+                                        {#if m.name === activeModel}
+                                            <svg class="c2-di-check" width="14" height="14" viewBox="0 0 24 24" fill="none">
+                                                <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                            </svg>
                                         {/if}
-                                        <span class="c2-di-size">{m.size_gb} GB</span>
                                     </button>
                                 {/each}
                             {/if}
@@ -340,7 +362,7 @@
                     <path d="M4 19.5A2.5 2.5 0 016.5 17H20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
                     <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
-                Journal
+                Learn
             </a>
             <a
                 href="/settings"
@@ -527,7 +549,7 @@
         inset: 0;
         display: flex;
         flex-direction: column;
-        background: transparent;
+        background: var(--c2-bg-0);
         color: var(--c2-fg-0);
         font-family: 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
         font-size: 14px;
@@ -539,8 +561,14 @@
         position: absolute;
         inset: 0;
         pointer-events: none;
+        z-index: 0;
         background:
             linear-gradient(oklch(0.10 0.005 70 / 0.76), oklch(0.10 0.005 70 / 0.76)),
+            url('/ascii-art-bg.jpg') center / cover no-repeat;
+    }
+    :global([data-theme="light"]) .c2-img-bg {
+        background:
+            linear-gradient(oklch(0.985 0.002 90 / 0.65), oklch(0.97 0.002 90 / 0.75)),
             url('/ascii-art-bg.jpg') center / cover no-repeat;
     }
 
@@ -549,7 +577,7 @@
         position: fixed;
         inset: 0;
         pointer-events: none;
-        z-index: 0;
+        z-index: 1;
     }
     .c2-ambient::before {
         content: "";
@@ -570,11 +598,11 @@
     /* Light mode ambient */
     :global([data-theme="light"]) .c2-ambient::before {
         background:
-            radial-gradient(45% 30% at 18% 12%, oklch(0.85 0.10 68 / 0.45), transparent 60%),
-            radial-gradient(50% 35% at 88% 22%, oklch(0.85 0.10 200 / 0.4), transparent 60%);
+            radial-gradient(45% 30% at 18% 12%, oklch(0.78 0.12 68 / 0.35), transparent 60%),
+            radial-gradient(50% 35% at 88% 22%, oklch(0.75 0.12 220 / 0.30), transparent 60%);
     }
     :global([data-theme="light"]) .c2-ambient::after {
-        background-image: radial-gradient(oklch(0 0 0 / 0.035) 1px, transparent 1px);
+        background-image: radial-gradient(oklch(0 0 0 / 0.06) 1px, transparent 1px);
         background-size: 22px 22px;
     }
 
@@ -583,8 +611,7 @@
         position: relative;
         z-index: 50;
         height: 56px;
-        display: grid;
-        grid-template-columns: 1fr auto 1fr;
+        display: flex;
         align-items: center;
         padding: 0 14px;
         background: oklch(0.155 0.003 260 / 0.88);
@@ -600,15 +627,17 @@
         display: flex;
         align-items: center;
         gap: 10px;
+        flex: 1;
     }
     .c2-tb-center {
         display: flex;
-        justify-content: center;
+        align-items: center;
     }
     .c2-tb-right {
         display: flex;
         align-items: center;
         gap: 2px;
+        flex: 1;
         justify-content: flex-end;
     }
 
@@ -672,10 +701,13 @@
     .c2-nav-btn-active { background: var(--c2-bg-2); color: var(--c2-fg-0); }
 
     /* ── Model switcher ────────────────────────────────────────── */
+    .c2-model-pill {
+        position: relative;
+    }
     .c2-model-btn {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
+        gap: 6px;
         height: 32px;
         padding: 0 12px;
         border-radius: 999px;
@@ -702,7 +734,7 @@
     .c2-status-thinking { background: var(--c2-accent); animation: c2-pulse-dot 1.2s ease-in-out infinite; }
 
     .c2-model-name { font-size: 13px; font-weight: 500; line-height: 1; color: var(--c2-fg-0); }
-    .c2-model-size { font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--c2-fg-2); }
+    .c2-model-size { font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--c2-fg-2); line-height: 1; }
     .c2-muted { color: var(--c2-fg-3); }
     .c2-think-badge {
         font-family: 'Geist Mono', monospace;
@@ -717,6 +749,7 @@
         margin-left: 2px;
     }
     .c2-chevron {
+        display: block;
         color: var(--c2-fg-3);
         margin-left: 2px;
         transition: transform 180ms;
@@ -735,28 +768,25 @@
     /* Model dropdown */
     .c2-model-dropdown {
         position: absolute;
-        top: calc(100% + 8px);
+        top: 100%;
         left: 50%;
-        transform: translateX(-50%);
-        width: 300px;
+        translate: -50% 6px;
+        min-width: 260px;
+        max-width: 320px;
+        max-height: 340px;
+        overflow-y: auto;
         background: var(--c2-bg-1);
         border: 1px solid var(--c2-border-2);
-        border-radius: 12px;
+        border-radius: 13px;
         padding: 6px;
         box-shadow: var(--c2-shadow-panel);
         z-index: 70;
         animation: c2-spring-up 200ms var(--c2-spring) both;
-    }
-    .c2-dropdown-header {
-        font-family: 'Geist Mono', monospace;
-        padding: 8px 10px;
-        font-size: 10.5px;
-        color: var(--c2-fg-3);
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
+        scrollbar-width: thin;
+        scrollbar-color: var(--c2-border-2) transparent;
     }
     .c2-dropdown-empty {
-        padding: 12px 10px;
+        padding: 14px 10px;
         font-size: 12.5px;
         color: var(--c2-fg-3);
         text-align: center;
@@ -765,8 +795,8 @@
         width: 100%;
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 9px 10px;
+        justify-content: space-between;
+        padding: 10px 11px;
         border-radius: 8px;
         background: transparent;
         border: none;
@@ -774,24 +804,52 @@
         text-align: left;
         cursor: pointer;
         transition: background 120ms;
+        gap: 10px;
     }
     .c2-dropdown-item:hover { background: var(--c2-bg-2); }
     .c2-dropdown-item-active { background: var(--c2-bg-2); }
-    .c2-di-name { flex: 1; font-size: 13px; }
+
+    .c2-di-info {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+        flex: 1;
+    }
+    .c2-di-name {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--c2-fg-0);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .c2-di-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+    }
     .c2-di-badge {
         font-family: 'Geist Mono', monospace;
         font-size: 9.5px;
-        padding: 2px 5px;
+        font-weight: 500;
+        padding: 2px 6px;
         border-radius: 4px;
         background: var(--c2-bg-3);
         color: var(--c2-fg-2);
         border: 1px solid var(--c2-border-1);
-        letter-spacing: 0.3px;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        white-space: nowrap;
     }
-    .c2-di-size {
-        font-family: 'Geist Mono', monospace;
-        font-size: 11px;
-        color: var(--c2-fg-3);
+    .c2-di-badge-think {
+        background: oklch(0.65 0.18 60 / 0.12);
+        color: var(--c2-accent);
+        border-color: oklch(0.65 0.18 60 / 0.2);
+    }
+    .c2-di-check {
+        flex-shrink: 0;
+        color: var(--c2-accent);
     }
 
     /* ── Phase indicator ───────────────────────────────────────── */
