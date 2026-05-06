@@ -11,6 +11,13 @@ import re as _re
 from ct1.prompts.manager import _get_prompt_manager as _pm
 
 
+def _date_aware_system(base: str) -> str:
+    """Prepend today's date so models with knowledge cutoffs stay current."""
+    from datetime import datetime as _dt, timezone as _tz
+    _today = _dt.now(_tz.utc).strftime("%A, %B %d, %Y")
+    return f"Today is {_today}. The current year is {_dt.now(_tz.utc).year}. {base}"
+
+
 def _compact_tool_history(head_len: int, current_messages: list) -> list:
     """Compact accumulated tool-call history into a summary when context overflows.
 
@@ -285,7 +292,7 @@ class Engine:
                  top_p: float = 0.9, top_k: int = 40,
                  presence_penalty: float = 1.0, frequency_penalty: float = 0.0,
                  repeat_penalty: float = 1.10,
-                 max_tokens: int = 100000,
+                 max_tokens: int = -1,
                  thinking_budget: int = -1,
                  vision_supported: bool = False,
                  context_size: int = 16384,
@@ -364,6 +371,9 @@ class Engine:
         if enable_thinking and budget > 0:
             chat_kwargs["thinking_budget"] = budget
 
+        _max_tok = max_tokens if max_tokens is not None else self.max_tokens
+        if self.is_external and _max_tok < 0:
+            _max_tok = 131072  # external APIs don't accept -1
         payload = {
             "model": self.model_name or "local",
             "messages": messages,
@@ -374,7 +384,7 @@ class Engine:
                                  else self.presence_penalty),
             "frequency_penalty": self.frequency_penalty,
             "repeat_penalty": self.repeat_penalty,
-            "max_tokens": max_tokens or self.max_tokens,
+            "max_tokens": _max_tok,
             "stream": False,
         }
         if not self.is_external:
@@ -516,6 +526,9 @@ class Engine:
         if enable_thinking and budget > 0:
             chat_kwargs["thinking_budget"] = budget
 
+        _max_tok = max_tokens if max_tokens is not None else self.max_tokens
+        if self.is_external and _max_tok < 0:
+            _max_tok = 131072  # external APIs don't accept -1
         payload = {
             "model": self.model_name or "local",
             "messages": messages,
@@ -526,7 +539,7 @@ class Engine:
                                  else self.presence_penalty),
             "frequency_penalty": self.frequency_penalty,
             "repeat_penalty": self.repeat_penalty,
-            "max_tokens": max_tokens or self.max_tokens,
+            "max_tokens": _max_tok,
             "stream": True,
         }
         if not self.is_external:
@@ -855,7 +868,7 @@ class Engine:
             )
             system = _GENERATOR_DISCUSS_SYSTEM
             messages = [
-                {"role": "system", "content": system},
+                {"role": "system", "content": _date_aware_system(system)},
                 {"role": "user", "content": prompt},
             ]
             if on_token:
@@ -931,7 +944,7 @@ class Engine:
             system = self._personality_prompt()
 
         messages = [
-            {"role": "system", "content": system},
+            {"role": "system", "content": _date_aware_system(system)},
             {"role": "user", "content": prompt},
         ]
 
@@ -963,13 +976,14 @@ class Engine:
                 tools=tools,
                 tool_executor=tool_executor,
             )
-            if (result.get("finish_reason") == "length"
-                    and self._looks_incomplete(result["text"])):
+            if (is_code
+                    and self._looks_incomplete(result["text"])
+                    and result.get("finish_reason") in ("length", "stop", None)):
                 cont_messages = [
                     messages[0],
                     messages[1],
                     {"role": "assistant", "content": result["text"]},
-                    {"role": "user", "content": "Continue exactly from where you left off. Do not repeat anything already written."},
+                    {"role": "user", "content": "Continue."},
                 ]
                 cont = await self._call_stream(
                     cont_messages,

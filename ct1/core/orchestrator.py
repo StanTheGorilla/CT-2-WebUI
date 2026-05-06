@@ -150,7 +150,7 @@ _EXTERNAL_CFG_DEFAULTS = {
         "temperature": 0.6, "top_p": 0.9, "top_k": 40,
         "presence_penalty": 1.0, "frequency_penalty": 0.0,
         "repeat_penalty": 1.10,
-        "max_tokens": 100000, "thinking_budget": -1,
+        "max_tokens": -1, "thinking_budget": -1,
         "vision_supported": False, "enable_thinking": False,
     }},
     "_task_overrides": {},
@@ -804,11 +804,16 @@ class Orchestrator:
         # ── Phase 0: Spec generation (thinking streamed to UI) ──────
         emit("spec_generating")
         print("[design] Phase 0: generating spec")
+        # Suppress content tokens during spec generation — the JSON spec
+        # should not appear in the HTML preview. Only forward thinking tokens.
+        def _spec_on_token(token, kind):
+            if kind == "thinking":
+                on_token(token, kind)
         try:
             spec = await self.engine.generate_spec(
                 goal, conversation=conversation,
                 task_overrides=task_ovr,
-                on_token=on_token,
+                on_token=_spec_on_token,
             )
         except (ValueError, _json.JSONDecodeError) as e:
             print(f"[design] Phase 0 failed: {e} — retrying")
@@ -920,6 +925,7 @@ class Orchestrator:
         )
 
         gen_goal = (
+            "OUTPUT ONLY HTML. Start at <!DOCTYPE html>. No text before it. No markdown fences. "
             f"Build a world-class, production-ready '{visual_style}' website following the spec above. "
             f"Include every section in layout_order. {font_note}"
             f"TYPOGRAPHY: Use the heading font for all headings (large, bold, tight letter-spacing). "
@@ -965,6 +971,50 @@ class Orchestrator:
         from ct1.core.formatter import strip_think_tags, extract_code
         draft = strip_think_tags(draft)
         draft = extract_code(draft)
+
+        # ── Phase 2.5: Validate output is actual HTML ──
+        # Small models may write prose instead of HTML. Detect and retry.
+        for retry_num in range(2):
+            _stripped = draft.lower().strip()
+            _has_html_tags = any(tag in _stripped for tag in (
+                '<!doctype', '<html', '<head', '<body', '<style',
+                '<div', '<section', '<header', '<main', '<footer',
+                '<nav', '<h1', '<h2', '<p ', '<p>', '<a ', '<img',
+            ))
+            _looks_conversational = (
+                _stripped.startswith(('i ', 'let ', 'here', 'sure', 'okay',
+                    'certainly', 'of course', 'below', "i'll", "i'd",
+                    "i've", 'i have', 'this is', 'the following',
+                    'to create', 'to build', 'to make', 'first',
+                    'great', 'absolutely', 'no problem',
+                ))
+                or len(draft.strip()) < 200
+            )
+            if _has_html_tags or not _looks_conversational:
+                break
+            if retry_num == 0:
+                emit("retrying", message="Model wrote prose instead of HTML — retrying with corrective prompt…")
+                corrective = (
+                    "CRITICAL: Your previous response was rejected because it contained "
+                    "conversational text instead of HTML.\n\n"
+                    f"Build a '{visual_style}' website. Output ONLY the complete HTML "
+                    "file. Start with <!DOCTYPE html>. Do NOT write ANY text before it. "
+                    "No explanations. No markdown fences."
+                )
+                retry_result = await self.engine.generate(
+                    corrective, "ROUTE_DESIGN",
+                    conversation=None,
+                    on_token=on_token,
+                    task_overrides=task_ovr,
+                    tools=tools,
+                    tool_executor=tool_executor,
+                )
+                draft = strip_think_tags(retry_result["text"])
+                draft = extract_code(draft)
+                draft_thinking = (draft_thinking or "") + "\n" + retry_result.get("thinking", "")
+            else:
+                print("[design] Phase 2.5: retry failed, keeping output as-is")
+                emit("warning", message="The model produced conversational text instead of HTML. The output may not render correctly.")
 
         emit("draft", text=draft, thinking=draft_thinking)
 
@@ -1745,25 +1795,12 @@ class Orchestrator:
 
     @staticmethod
     def _continuation_prompt(route: str) -> str:
-        """Instruction used when a response hit the context limit mid-generation."""
-        route_hint = {
-            "ROUTE_DESIGN": "Continue the same HTML/CSS/JS document.",
-            "ROUTE_CODE": "Continue the same code output.",
-            "ROUTE_COMPUTER": "Continue the same multi-file output.",
-            "ROUTE_DIRECT": "Continue the same answer.",
-        }.get(route, "Continue the same response.")
-        return (
-            "The previous assistant response was cut off because the context window was exhausted.\n"
-            f"{route_hint}\n"
-            "Continue exactly from where the previous assistant message stopped.\n"
-            "Rules:\n"
-            "- Do not restart from the top.\n"
-            "- Do not repeat content that is already present.\n"
-            "- Do not explain what happened.\n"
-            "- Output only the missing continuation.\n"
-            "- Preserve the same format, indentation, file markers, and style.\n"
-            "- If the previous output ended mid-tag, mid-line, or mid-token, resume naturally."
-        )
+        """Instruction used when a response hit the context limit mid-generation.
+
+        Kept intentionally short — small models echo long instructions verbatim
+        into the code output, corrupting the generated file.
+        """
+        return "Continue."
 
     async def _continue_after_length(
         self,
@@ -1784,10 +1821,11 @@ class Orchestrator:
         """Compact older history and continue when generation hit a length/context stop."""
         attempts = 0
         current_reason = finish_reason
-        if current_reason != "length" or not draft.strip():
+        is_incomplete = self.engine._looks_incomplete(draft)
+        if not (current_reason == "length" or is_incomplete) or not draft.strip():
             return draft, draft_thinking, current_reason, attempts
 
-        while current_reason == "length" and attempts < 3:
+        while (current_reason == "length" or self.engine._looks_incomplete(draft)) and attempts < 3:
             attempts += 1
             emit(
                 "compacting",

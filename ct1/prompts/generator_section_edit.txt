@@ -13,6 +13,9 @@ NO markdown fences. NO explanations. NO commentary.
 - If editing <body>: output only HTML elements (no <script>).
 - If editing <script>: output only JS code.
 - If editing <head>: output only meta/title/link tags.
+
+CRITICAL: Do NOT write ANY text before or after the content. No "Here is",
+no "I've updated", no greetings, no commentary of any kind. Output raw content only.
 </format>
 
 <constraints>
