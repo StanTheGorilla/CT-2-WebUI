@@ -651,7 +651,7 @@ except Exception as e:
                 result = subprocess.run(
                     ["python", tmp_path],
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                     timeout=10,
                 )
                 if "PASS" in result.stdout:
