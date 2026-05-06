@@ -216,12 +216,12 @@
         background: oklch(0.35 0.08 55 / 0.28);
         color: var(--c2-accent);
         border: 1px solid oklch(0.5 0.1 55 / 0.4);
+        border-radius: 4px;
+        flex-shrink: 0;
     }
     :global([data-theme="light"]) .c2-pv-badge {
         background: oklch(0.94 0.06 55 / 0.5);
         border-color: oklch(0.68 0.10 55 / 0.45);
-        border-radius: 4px;
-        flex-shrink: 0;
     }
 
     .c2-pv-filename {
