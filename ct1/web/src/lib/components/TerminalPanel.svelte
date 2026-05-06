@@ -248,7 +248,7 @@
         font-family: var(--font-mono);
         font-size: 10px;
         color: var(--text-muted, #555);
-        background: rgba(255,255,255,0.06);
+        background: var(--accent-subtle);
         padding: 1px 6px;
         border-radius: 999px;
     }
@@ -270,7 +270,7 @@
         transition: all 200ms ease;
     }
     .term-action:hover {
-        background: rgba(255,255,255,0.08);
+        background: var(--accent-subtle);
         color: var(--text-secondary, #999);
     }
     .term-output {
@@ -321,7 +321,8 @@
 
     .term-output::-webkit-scrollbar { width: 4px; }
     .term-output::-webkit-scrollbar-track { background: transparent; }
-    .term-output::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+    .term-output::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.08); border-radius: 2px; }
+    :global([data-theme="dark"]) .term-output::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); }
 
     .term-approval {
         display: flex;
@@ -342,8 +343,8 @@
     }
     .term-approval-label { flex: 1; }
     .term-approval-cmd {
-        background: rgba(0, 0, 0, 0.3);
-        border: 1px solid rgba(255,255,255,0.07);
+        background: var(--code-bg);
+        border: 1px solid var(--border-subtle);
         border-radius: 5px;
         padding: 5px 10px;
         min-width: 0;
@@ -352,7 +353,7 @@
     .term-approval-text {
         font-family: 'Geist Mono', monospace;
         font-size: 12px;
-        color: rgba(255, 220, 140, 0.95);
+        color: var(--text);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -373,9 +374,9 @@
         transition: opacity 120ms;
     }
     .term-approve-reject {
-        background: rgba(255,255,255,0.06);
-        border: 1px solid rgba(255,255,255,0.12);
-        color: rgba(255,255,255,0.5);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text-secondary);
     }
     .term-approve-reject:hover { opacity: 0.75; }
     .term-approve-ok {

@@ -13,7 +13,9 @@
         renameConversation,
     } from '$lib/stores/conversations';
     import { loadFromHistory } from '$lib/stores/chat';
-    import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
+    import { modelSwitchCount, notifyModelSwitch, modelSwapping } from '$lib/stores/model';
+    import { backgroundTasks, setModelSwapping, clearModelSwapping } from '$lib/stores/backgroundTasks';
+    import { fly } from 'svelte/transition';
 
     let { children } = $props();
 
@@ -22,6 +24,7 @@
     let activeModel = $state('');
     let modelThinking = $state(false);
     let modelSwitching = $state(false);
+    let swapTarget = $state('');       // model being switched TO
     let modelPickerOpen = $state(false);
     let models = $state<ModelFile[]>([]);
     let modelsLoaded = $state(false);
@@ -123,6 +126,8 @@
         if (name === activeModel) { modelPickerOpen = false; return; }
         modelPickerOpen = false;
         modelSwitching = true;
+        swapTarget = shortName(name);
+        setModelSwapping(shortName(name));
         try {
             const res = await fetch('/api/model/select', {
                 method: 'POST',
@@ -136,7 +141,11 @@
             modelsLoaded = false;
             notifyModelSwitch();
         } catch {}
-        finally { modelSwitching = false; }
+        finally {
+            modelSwitching = false;
+            swapTarget = '';
+            clearModelSwapping();
+        }
     }
 
     function closeModelPicker(e: MouseEvent) {
@@ -204,6 +213,17 @@
     let deletingId = $state<string | null>(null);
     let renamingId = $state<string | null>(null);
     let renameValue = $state('');
+
+    // ── Notification bubbles ──────────────────────────────────────
+    let dismissedIds = $state(new Set<string>());
+    let visibleTasks = $derived($backgroundTasks.filter(t => !dismissedIds.has(t.id)));
+    function dismiss(id: string) { dismissedIds = new Set([...dismissedIds, id]); }
+    // Clear dismissed ids when a task leaves the store (so re-appearing tasks show again)
+    $effect(() => {
+        const active = new Set($backgroundTasks.map(t => t.id));
+        const pruned = [...dismissedIds].filter(id => active.has(id));
+        if (pruned.length !== dismissedIds.size) dismissedIds = new Set(pruned);
+    });
 
     async function doDelete(id: string) {
         deletingId = id;
@@ -276,9 +296,9 @@
                         onclick={openModelPicker}
                         disabled={modelSwitching}
                     >
-                        {#if modelSwitching}
+                        {#if modelSwitching || $modelSwapping}
                             <span class="c2-spinner"></span>
-                            <span class="c2-model-name">Loading…</span>
+                            <span class="c2-model-name">Switching to {swapTarget || $modelSwapping || '…'}</span>
                         {:else}
                             <span
                                 class="c2-status-dot"
@@ -377,6 +397,47 @@
             </a>
         </div>
     </header>
+
+    <!-- ── Notification bubbles (top-right) ─────────────────────── -->
+    {#if visibleTasks.length > 0}
+        <div class="c2-notif-tray" role="status" aria-live="polite">
+            {#each visibleTasks as task (task.id)}
+                <div
+                    class="c2-notif"
+                    class:c2-notif-done={task.progress === 100}
+                    transition:fly={{ x: 48, duration: 200 }}
+                >
+                    <div class="c2-notif-head">
+                        <div class="c2-notif-icon-label">
+                            {#if task.variant === 'pulse' || task.progress < 0}
+                                <span class="c2-spinner c2-spinner-sm"></span>
+                            {:else if task.progress === 100}
+                                <svg class="c2-notif-ok" width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                    <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            {:else}
+                                <span class="c2-notif-pct">{task.progress}%</span>
+                            {/if}
+                            <span class="c2-notif-label">{task.label}</span>
+                        </div>
+                        <button class="c2-notif-close" onclick={() => dismiss(task.id)} aria-label="Dismiss">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                                <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                    {#if task.detail}
+                        <p class="c2-notif-detail">{task.detail}</p>
+                    {/if}
+                    {#if task.progress >= 0 && task.progress < 100}
+                        <div class="c2-notif-bar">
+                            <div class="c2-notif-fill" style="width: {task.progress}%"></div>
+                        </div>
+                    {/if}
+                </div>
+            {/each}
+        </div>
+    {/if}
 
     <!-- Sidebar overlay -->
     {#if $sidebarOpen}
@@ -1261,5 +1322,115 @@
         overflow: hidden;
         position: relative;
         z-index: 1;
+    }
+
+    /* ── Notification bubbles (top-right) ─────────────────────── */
+    .c2-notif-tray {
+        position: fixed;
+        top: 68px;
+        right: 16px;
+        z-index: 200;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        pointer-events: none;
+        max-width: 320px;
+    }
+    .c2-notif {
+        pointer-events: auto;
+        background: oklch(0.155 0.003 260 / 0.92);
+        backdrop-filter: blur(20px) saturate(1.3);
+        -webkit-backdrop-filter: blur(20px) saturate(1.3);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 13px;
+        padding: 11px 13px;
+        box-shadow: var(--c2-shadow-panel);
+        min-width: 240px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        transition: opacity 200ms;
+    }
+    :global([data-theme="light"]) .c2-notif {
+        background: oklch(0.995 0.002 90 / 0.94);
+    }
+    .c2-notif-done { opacity: 0.65; }
+    .c2-notif-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    .c2-notif-icon-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        flex: 1;
+    }
+    .c2-notif-label {
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--c2-fg-0);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .c2-notif-pct {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--c2-accent);
+        min-width: 30px;
+        font-variant-numeric: tabular-nums;
+        flex-shrink: 0;
+    }
+    .c2-notif-ok {
+        color: var(--c2-ok);
+        flex-shrink: 0;
+    }
+    .c2-notif-close {
+        width: 20px;
+        height: 20px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 5px;
+        border: none;
+        background: none;
+        color: var(--c2-fg-3);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background 120ms, color 120ms;
+    }
+    .c2-notif-close:hover { background: var(--c2-bg-3); color: var(--c2-fg-0); }
+    .c2-notif-detail {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        color: var(--c2-fg-3);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin: 0;
+        padding-left: 21px;
+    }
+    .c2-notif-bar {
+        height: 3px;
+        border-radius: 999px;
+        background: var(--c2-bg-3);
+        overflow: hidden;
+        margin-top: 2px;
+    }
+    .c2-notif-fill {
+        height: 100%;
+        border-radius: 999px;
+        background: var(--c2-accent);
+        transition: width 300ms ease;
+    }
+    .c2-spinner-sm {
+        width: 12px;
+        height: 12px;
+        border-width: 2px;
+        flex-shrink: 0;
     }
 </style>

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
+    import { modelSwitchCount, notifyModelSwitch, modelSwapping } from '$lib/stores/model';
 
     interface ModelFile {
         name: string;
@@ -95,9 +95,9 @@
         disabled={switching}
         title="Switch model"
     >
-        {#if switching}
+        {#if switching || $modelSwapping}
             <span class="ms-spinner"></span>
-            <span class="ms-label">Loading model…</span>
+            <span class="ms-label">Loading {$modelSwapping ?? 'model'}…</span>
         {:else if activeModel}
             <span class="ms-label">{shortName(activeModel)}</span>
             {#if modelThinking}

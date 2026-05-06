@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
+    import { setModelDownload, clearModelDownload } from '$lib/stores/backgroundTasks';
 
     interface HFFile { name: string; size_gb: number; }
     interface HFResult { id: string; name: string; pipeline: string; downloads: number; likes: number; last_modified: string; }
@@ -143,21 +144,25 @@
                     if (ev.status === 'progress') {
                         percent = ev.percent; speedMb = ev.speed_mb;
                         doneGb = ev.downloaded_gb; totalGb = ev.total_gb;
+                        setModelDownload(ev.filename || selectedFile, ev.percent, ev.speed_mb, ev.downloaded_gb, ev.total_gb);
                     } else if (ev.status === 'done') {
                         dlDone = ev.filename; downloading = false; onDownloaded?.();
+                        clearModelDownload();
                     } else if (ev.status === 'error') {
+                        clearModelDownload();
                         throw new Error(ev.message);
                     } else if (ev.status === 'cancelled') {
                         downloading = false;
+                        clearModelDownload();
                     }
                 }
             }
-        } catch (e: any) { dlError = e.message || 'Download failed'; downloading = false; }
+        } catch (e: any) { dlError = e.message || 'Download failed'; downloading = false; clearModelDownload(); }
     }
 
     async function cancelDownload() {
         try { await fetch('/api/models/download', { method: 'DELETE' }); } catch {}
-        downloading = false;
+        downloading = false; clearModelDownload();
     }
 
     function openModal() {
@@ -168,7 +173,6 @@
     }
 
     function closeModal() {
-        if (downloading) return;
         modalOpen = false;
         document.body.style.overflow = '';
     }

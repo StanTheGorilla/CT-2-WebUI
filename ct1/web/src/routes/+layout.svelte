@@ -8,6 +8,8 @@
     import ShortcutOverlay from '$lib/components/ShortcutOverlay.svelte';
     import ModelSwitcher from '$lib/components/ModelSwitcher.svelte';
     import Ct2Layout from '$lib/ct2/Layout.svelte';
+    import { backgroundTasks } from '$lib/stores/backgroundTasks';
+    import { fly } from 'svelte/transition';
     import { sidebarOpen } from '$lib/stores/conversations';
     import { preferences, toggleTheme } from '$lib/stores/preferences';
     import { getPhaseLabel } from '$lib/chatUi';
@@ -44,6 +46,16 @@
             shortcutOverlayOpen = false;
         }
     }
+
+    // ── Classic UI notification tray ──────────────────────────────
+    let dismissedIds = $state(new Set<string>());
+    let visibleTasks = $derived($backgroundTasks.filter(t => !dismissedIds.has(t.id)));
+    function dismissTask(id: string) { dismissedIds = new Set([...dismissedIds, id]); }
+    $effect(() => {
+        const active = new Set($backgroundTasks.map(t => t.id));
+        const pruned = [...dismissedIds].filter(id => active.has(id));
+        if (pruned.length !== dismissedIds.size) dismissedIds = new Set(pruned);
+    });
 
     let phaseText = $derived(getPhaseLabel($chat.phase));
     let isActive = $derived($chat.phase !== 'idle' && $chat.phase !== 'done');
@@ -184,6 +196,47 @@
                 </a>
             </nav>
         </header>
+
+        <!-- ── Notification bubbles (top-right) ──────────────────── -->
+        {#if visibleTasks.length > 0}
+            <div class="classic-notif-tray" role="status" aria-live="polite">
+                {#each visibleTasks as task (task.id)}
+                    <div
+                        class="classic-notif"
+                        class:classic-notif-done={task.progress === 100}
+                        transition:fly={{ x: 48, duration: 200 }}
+                    >
+                        <div class="classic-notif-head">
+                            <div class="classic-notif-icon-label">
+                                {#if task.variant === 'pulse' || task.progress < 0}
+                                    <span class="classic-spinner classic-spinner-sm"></span>
+                                {:else if task.progress === 100}
+                                    <svg class="classic-notif-ok" width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                        <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                {:else}
+                                    <span class="classic-notif-pct">{task.progress}%</span>
+                                {/if}
+                                <span class="classic-notif-label">{task.label}</span>
+                            </div>
+                            <button class="classic-notif-close" onclick={() => dismissTask(task.id)} aria-label="Dismiss">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                                    <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+                                </svg>
+                            </button>
+                        </div>
+                        {#if task.detail}
+                            <p class="classic-notif-detail">{task.detail}</p>
+                        {/if}
+                        {#if task.progress >= 0 && task.progress < 100}
+                            <div class="classic-notif-bar">
+                                <div class="classic-notif-fill" style="width: {task.progress}%"></div>
+                            </div>
+                        {/if}
+                    </div>
+                {/each}
+            </div>
+        {/if}
 
         <Sidebar />
 
@@ -428,5 +481,118 @@
         overflow: hidden;
         position: relative;
         z-index: 1;
+    }
+
+    /* ── Notification bubbles (top-right) ────────────────── */
+    .classic-notif-tray {
+        position: fixed;
+        top: 68px;
+        right: 16px;
+        z-index: 200;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        pointer-events: none;
+        max-width: 320px;
+    }
+    .classic-notif {
+        pointer-events: auto;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 11px 13px;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+        min-width: 240px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        transition: opacity 200ms;
+    }
+    .classic-notif-done { opacity: 0.55; }
+    .classic-notif-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    .classic-notif-icon-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        flex: 1;
+    }
+    .classic-notif-label {
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .classic-notif-pct {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--accent);
+        min-width: 30px;
+        font-variant-numeric: tabular-nums;
+        flex-shrink: 0;
+    }
+    .classic-notif-ok {
+        color: var(--ok, #4caf50);
+        flex-shrink: 0;
+    }
+    .classic-notif-close {
+        width: 20px;
+        height: 20px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 5px;
+        border: none;
+        background: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background 120ms, color 120ms;
+    }
+    .classic-notif-close:hover { background: var(--border); color: var(--text); }
+    .classic-notif-detail {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin: 0;
+        padding-left: 21px;
+    }
+    .classic-notif-bar {
+        height: 3px;
+        border-radius: 999px;
+        background: var(--border);
+        overflow: hidden;
+        margin-top: 2px;
+    }
+    .classic-notif-fill {
+        height: 100%;
+        border-radius: 999px;
+        background: var(--accent);
+        transition: width 300ms ease;
+    }
+    .classic-spinner {
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        flex-shrink: 0;
+    }
+    .classic-spinner-sm {
+        width: 12px;
+        height: 12px;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
     }
 </style>
