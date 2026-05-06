@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, pendingInputPrompt, setContextSize, type Attachment, type ModeOverride } from '$lib/stores/chat';
+    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, pendingInputPrompt, setContextSize, toggleRag, type Attachment, type ModeOverride } from '$lib/stores/chat';
     import { preferences, toggleWebSearch } from '$lib/stores/preferences';
     import { isUpdating } from '$lib/stores/serverUpdate';
     import { CHAT_MODE_LABELS } from '$lib/chatUi';
@@ -19,6 +19,7 @@
     let wasDisabled = $state(true);
     let visionSupported = $state(false);
     let contextSize = $state(0);
+    let ragCost = $state(0);
     const TEXT_FILE_ACCEPT = '.txt,.html,.htm,.css,.js,.ts,.py,.json,.md,.csv,.xml,.yaml,.yml,.svg,.sh,.bat,.sql,.rb,.go,.rs,.java,.c,.cpp,.h,.hpp,.toml,.ini,.cfg';
 
     const disabled = $derived(($chat.phase !== 'idle' && $chat.phase !== 'done') || $isUpdating);
@@ -106,9 +107,10 @@
 
     async function loadModelCapabilities() {
         try {
-            const [modelRes, cfgRes] = await Promise.all([
+            const [modelRes, cfgRes, ragRes] = await Promise.all([
                 fetch('/api/model'),
                 fetch('/api/config'),
+                fetch('/api/rag/status'),
             ]);
             let modelData: any = null;
             let cfgData: any = null;
@@ -119,6 +121,10 @@
             if (cfgRes.ok) {
                 cfgData = await cfgRes.json();
             }
+            if (ragRes.ok) {
+                const ragData = await ragRes.json();
+                ragCost = ragData.enabled ? (ragData.context_cost ?? 0) : 0;
+            }
             contextSize = modelData?.context_size ?? cfgData?.context_size ?? 0;
             setContextSize(contextSize);
         } catch {
@@ -128,12 +134,21 @@
         }
     }
 
-    // Estimated token usage across the whole conversation (3.5 chars ≈ 1 token)
-    const usedTokens = $derived(
-        Math.round(
-            $chat.conversation.reduce((acc, t) => acc + t.content.length, 0) / 3.5
-        ) + $chat.tokenCount
-    );
+    function estimateConvTokens(conv: any[]): number {
+        return Math.round(conv.reduce((acc, t) => {
+            const c = t.content;
+            if (typeof c === 'string') return acc + c.length / 3.5;
+            if (Array.isArray(c)) return acc + c.reduce((a: number, p: any) => {
+                if (p?.type === 'text') return a + (p.text?.length ?? 0) / 3.5;
+                if (p?.type === 'image_url') return a + 85;
+                return a + 16;
+            }, 0);
+            return acc + JSON.stringify(c ?? '').length / 3.5;
+        }, 0));
+    }
+
+    // Estimated token usage: conversation history + current streaming + RAG overhead
+    const usedTokens = $derived(estimateConvTokens($chat.conversation) + $chat.tokenCount + ($chat.ragEnabled ? ragCost : 0));
     const ctxPct = $derived(contextSize > 0 ? Math.min(100, Math.round(usedTokens / contextSize * 100)) : 0);
     const ctxLabel = $derived(
         usedTokens >= 1000
@@ -351,7 +366,7 @@
         </div>
     {/if}
 
-    <div class="composer" class:drag-over={dragOver} class:is-busy={disabled}>
+    <div class="composer" class:drag-over={dragOver}>
         <input
             bind:this={fileInput}
             type="file"
@@ -367,12 +382,11 @@
             onkeydown={onKeydown}
             oninput={autoGrow}
             onpaste={onPaste}
-            placeholder="Ask CT-2 anything..."
+            placeholder={disabled ? 'CT-2 is responding… type to queue your next message' : 'Ask CT-2 anything...'}
             rows="1"
-            {disabled}
         ></textarea>
 
-        <div class="composer-footer">
+        <div class="composer-footer" class:is-busy={disabled}>
             <div class="footer-left">
                 {#if !isWorkspaceSession}
                     {#each modes as m}
@@ -460,6 +474,23 @@
                         <path d="M8 2.5C6.3 4 5.3 5.9 5.3 8S6.3 12 8 13.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                     Search
+                </button>
+
+                <button
+                    class="rag-pill"
+                    class:active={$chat.ragEnabled}
+                    onclick={toggleRag}
+                    type="button"
+                    {disabled}
+                    aria-pressed={$chat.ragEnabled}
+                    aria-label={$chat.ragEnabled ? 'RAG on. Click to turn off.' : 'RAG off. Click to turn on.'}
+                    title={$chat.ragEnabled ? 'RAG: document context on' : 'RAG: document context off'}
+                >
+                    <svg class="pill-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+                        <path d="M2 3h4l1 2h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                        <path d="M6 9v3M10 9v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                    RAG
                 </button>
             </div>
 
@@ -606,9 +637,9 @@
     .composer:focus-within {
         box-shadow: var(--bubble-glow-strong);
     }
-    .composer.is-busy {
-        border-color: var(--border);
-        box-shadow: var(--bubble-glow);
+    .composer-footer.is-busy {
+        opacity: 0.5;
+        pointer-events: none;
     }
     .composer.drag-over {
         border-color: var(--accent);
@@ -748,6 +779,43 @@
         opacity: 1;
     }
     .search-pill:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+    }
+
+    .rag-pill {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 11px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text-muted);
+        font-family: var(--font-body);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background var(--transition), color var(--transition), border-color var(--transition);
+        white-space: nowrap;
+        user-select: none;
+        margin-left: 5px;
+        isolation: isolate;
+    }
+    .rag-pill:hover:not(:disabled):not(.active) {
+        color: var(--text-secondary);
+        background: var(--accent-subtle);
+        border-color: var(--border-subtle);
+    }
+    .rag-pill.active {
+        background: var(--accent-subtle);
+        color: var(--text);
+        border-color: var(--border);
+    }
+    .rag-pill.active .pill-icon {
+        opacity: 1;
+    }
+    .rag-pill:disabled {
         opacity: 0.3;
         cursor: not-allowed;
     }

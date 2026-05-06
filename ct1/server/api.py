@@ -24,6 +24,11 @@ from pydantic import BaseModel, Field
 
 from ct1.core.orchestrator import Orchestrator, _get_mode_registry
 from ct1.prompts.manager import _get_prompt_manager as _get_pm
+from ct1.rag.config import RAGConfig, SUPPORTED_EXTENSIONS as _RAG_SUPPORTED_EXT
+from ct1.rag.store import RAGStore
+from ct1.rag.embedder import RAGEmbedder
+from ct1.rag.indexer import RAGIndexer
+from ct1.rag.retriever import RAGRetriever
 from ct1.server.health import check_server_health
 from ct1.server.launcher import (
     load_raw_config, resolve_config,
@@ -127,6 +132,16 @@ _sse_clients: set[asyncio.Queue] = set()  # One queue per connected SSE client
 _watcher_task: asyncio.Task | None = None  # Background external-backend state poller
 _WS_QUEUE_MAX = 500  # Max buffered events per WebSocket session (~1-2 full responses)
 _hf_download_cancelled: bool = False  # Set to True to abort an in-progress HF download
+
+# ── RAG (Retrieval-Augmented Generation) ───────────────────────────────
+_rag_config: RAGConfig = RAGConfig()
+_rag_store: RAGStore | None = None
+_rag_embedder: RAGEmbedder | None = None
+_rag_indexer: RAGIndexer | None = None
+_rag_retriever: RAGRetriever | None = None
+_rag_initialized: bool = False
+_rag_indexing: bool = False       # True while an indexing pass is running
+_rag_progress: dict = {"running": False, "current": 0, "total": 0, "file": "", "stage": ""}
 
 _TOOL_SCHEMAS = [
     {
@@ -501,7 +516,7 @@ def _npm_run(args: list, cwd: str) -> "subprocess.CompletedProcess":
         ["npm"] + args,
         cwd=cwd,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         shell=(_sys.platform == "win32"),
     )
 
@@ -580,6 +595,45 @@ async def lifespan(application: FastAPI):
     _db = ConversationDB()
     await _db.init()
     _workspace = WorkspaceManager()
+
+    # ── RAG initialisation ──────────────────────────────────────────
+    global _rag_config, _rag_store, _rag_embedder, _rag_indexer, _rag_retriever, _rag_initialized
+    _rag_config = RAGConfig.from_dict(_raw_cfg)
+    if _rag_config.enabled:
+        try:
+            # Determine embedder URL: dedicated port or chat server port
+            if _external_backend:
+                embed_url = _external_backend["base_url"]
+            else:
+                embed_port = _rag_config.embedding_port if _rag_config.embedding_model else _cfg.get("llama_server", {}).get("port", 8080)
+                embed_url = f"http://localhost:{embed_port}"
+
+            _rag_store = RAGStore("ct1/data/rag.db")
+            await _rag_store.init()
+            _rag_embedder = RAGEmbedder(base_url=embed_url)
+            _rag_indexer = RAGIndexer(_rag_config, _rag_store, _rag_embedder)
+            _rag_retriever = RAGRetriever(_rag_store, _rag_embedder)
+            _rag_initialized = True
+
+            # Auto-index in background so the server starts immediately
+            async def _bg_index():
+                global _rag_indexing, _rag_progress
+                _rag_indexing = True
+                _rag_progress = {"running": True, "current": 0, "total": 0, "file": "", "stage": "scanning"}
+                try:
+                    print("[rag] Indexing documents...")
+                    def _progress(stage: str, current: int, total: int, file: str = ""):
+                        _rag_progress = {"running": True, "current": current, "total": total, "file": file, "stage": stage}
+                    stats = await _rag_indexer.index_folder(progress_cb=_progress)
+                    print(f"[rag] Indexed: {stats}")
+                finally:
+                    _rag_indexing = False
+                    _rag_progress = {"running": False, "current": 0, "total": 0, "file": "", "stage": "idle"}
+            asyncio.create_task(_bg_index())
+        except Exception as e:
+            print(f"[rag] Init failed: {e}")
+            _rag_initialized = False
+
     global _health_task, _watcher_task
     if not _external_backend and preference == "local":
         _health_task = asyncio.create_task(_health_monitor(port=_cfg.get("llama_server", {}).get("port", 8080)))
@@ -618,6 +672,10 @@ async def lifespan(application: FastAPI):
                 pass
     if _db:
         await _db.close()
+    if _rag_store:
+        await _rag_store.close()
+    if _rag_embedder:
+        await _rag_embedder.close()
     if _cache:
         await _cache.close()
     if _orch:
@@ -985,6 +1043,7 @@ class PatchConfig(BaseModel):
     flash_attn: bool | None = None
     cont_batching: bool | None = None
     plan_cache_fast: bool | None = None
+    rag_enabled: bool | None = None
 
 
 @app.patch("/api/config")
@@ -1025,13 +1084,19 @@ async def patch_config(body: PatchConfig):
     if body.plan_cache_fast is not None:
         _raw_cfg.setdefault("plan_cache", {})["enable_fast_path"] = body.plan_cache_fast
         changed = True
+    if body.rag_enabled is not None:
+        _raw_cfg.setdefault("rag", {})["enabled"] = body.rag_enabled
+        changed = True
 
     if changed:
         _CONFIG_PATH.write_text(
             yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
             encoding="utf-8",
         )
-        needs_restart = body.n_gpu_layers is not None or body.flash_attn is not None or body.cont_batching is not None
+        needs_restart = (
+            body.n_gpu_layers is not None or body.flash_attn is not None
+            or body.cont_batching is not None or body.rag_enabled is not None
+        )
         return {"ok": True, "needs_restart": needs_restart}
     return {"ok": True, "needs_restart": False}
 
@@ -1053,6 +1118,196 @@ async def compact_conversation(body: CompactRequest):
     except Exception as e:
         print(f"[api] compact endpoint error: {e}")
         return {"error": str(e), "conversation": body.conversation}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# RAG (Retrieval-Augmented Generation) API
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.get("/api/rag/status")
+async def rag_status():
+    """Return RAG status: enabled, file count, chunk count, context cost."""
+    global _rag_store, _rag_initialized, _rag_indexing
+    if not _rag_store:
+        return {"enabled": False, "initialized": _rag_initialized, "indexing": _rag_indexing,
+                "files": 0, "chunks": 0, "context_cost": 0, "embedding_dim": 0}
+    return {
+        "enabled": _rag_config.enabled,
+        "initialized": _rag_initialized,
+        "indexing": _rag_indexing,
+        "files": await _rag_store.count_files(),
+        "chunks": (actual_chunks := await _rag_store.count_chunks()),
+        "context_cost": round(min(actual_chunks, _rag_config.chunks_per_query) * await _rag_store.avg_chunk_tokens()),
+        "embedding_dim": _rag_store.embedding_dim,
+        "chunk_size": _rag_config.chunk_size,
+        "chunks_per_query": _rag_config.chunks_per_query,
+        "data_dir": str(_rag_config.data_path.resolve()),
+        "supported_extensions": sorted(_RAG_SUPPORTED_EXT),
+        "max_file_mb": _rag_config.max_file_mb,
+    }
+
+
+@app.get("/api/rag/files")
+async def rag_list_files():
+    """List all indexed files with metadata."""
+    global _rag_store
+    if not _rag_store:
+        return {"files": []}
+    files = await _rag_store.list_files()
+    return {
+        "files": [
+            {
+                "name": f["name"],
+                "hash": f.get("hash", ""),
+                "size_bytes": f.get("size_bytes", 0),
+                "size_mb": round(f.get("size_bytes", 0) / 1024 / 1024, 2),
+                "chunk_count": f.get("chunk_count", 0),
+                "char_count": f.get("char_count", 0),
+                "indexed_at": f.get("indexed_at"),
+            }
+            for f in files
+        ]
+    }
+
+
+@app.delete("/api/rag/files/{name}")
+async def rag_remove_file(name: str):
+    """Remove a file and its chunks from the RAG index."""
+    global _rag_indexer
+    if not _rag_indexer:
+        raise HTTPException(503, "RAG not initialised")
+    ok = await _rag_indexer.remove_file(name)
+    return {"removed": ok, "name": name}
+
+
+from fastapi import UploadFile, File as _F
+
+
+@app.post("/api/rag/upload")
+async def rag_upload_file(file: UploadFile = _F(...)):
+    """Upload a file to the RAG data folder and index it."""
+    global _rag_config, _rag_indexer, _rag_indexing
+    if not _rag_indexer:
+        raise HTTPException(503, "RAG not initialised")
+    if not file.filename:
+        raise HTTPException(400, "No filename provided")
+
+    # Validate extension
+    suffix = file.filename.lower().rsplit(".", 1)[-1] if "." in file.filename else ""
+    if f".{suffix}" not in _RAG_SUPPORTED_EXT:
+        raise HTTPException(400, f"Unsupported file type: .{suffix}. Supported: {', '.join(sorted(_RAG_SUPPORTED_EXT))}")
+
+    # Save to data folder
+    data_path = _rag_config.data_path
+    data_path.mkdir(parents=True, exist_ok=True)
+    dest = data_path / file.filename
+
+    content = await file.read()
+    size_mb = len(content) / 1024 / 1024
+    if size_mb > _rag_config.max_file_mb:
+        raise HTTPException(400, f"File too large: {size_mb:.1f}MB (limit: {_rag_config.max_file_mb}MB)")
+
+    dest.write_bytes(content)
+
+    # Index the file
+    _rag_indexing = True
+    try:
+        result = await _rag_indexer.index_file(dest)
+        if result and "error" in result:
+            # Keep the file on disk but report the indexing error
+            raise HTTPException(500, f"Indexing failed: {result['error']}")
+        return {"uploaded": file.filename, "indexed": result}
+    finally:
+        _rag_indexing = False
+
+
+@app.post("/api/rag/reindex")
+async def rag_reindex():
+    """Rebuild the entire RAG index from files in the data folder."""
+    global _rag_indexer, _rag_indexing, _rag_progress
+    if not _rag_indexer:
+        raise HTTPException(503, "RAG not initialised")
+    if _rag_indexing:
+        raise HTTPException(409, "Indexing already in progress")
+    _rag_indexing = True
+    _rag_progress = {"running": True, "current": 0, "total": 0, "file": "", "stage": "scanning"}
+    try:
+        def _progress(stage: str, current: int, total: int, file: str = ""):
+            _rag_progress = {"running": True, "current": current, "total": total, "file": file, "stage": stage}
+        stats = await _rag_indexer.index_folder(progress_cb=_progress)
+        return {"ok": True, **stats}
+    except Exception as e:
+        raise HTTPException(500, f"Re-index failed: {e}")
+    finally:
+        _rag_indexing = False
+        _rag_progress = {"running": False, "current": 0, "total": 0, "file": "", "stage": "idle"}
+
+
+@app.get("/api/rag/reindex/progress")
+async def rag_reindex_progress():
+    """Poll for current reindexing progress."""
+    global _rag_progress
+    return _rag_progress
+
+
+@app.get("/api/rag/data-files")
+async def rag_data_files():
+    """List all files in the RAG uploads folder (not just indexed ones)."""
+    global _rag_config
+    from pathlib import Path
+    from ct1.rag.config import SUPPORTED_EXTENSIONS as _REXT
+    data_path = _rag_config.data_path
+    if not data_path.exists():
+        return {"files": [], "data_dir": str(data_path.resolve())}
+    files = []
+    for ext in sorted(_REXT):
+        for p in sorted(data_path.glob(f"**/*{ext}")):
+            try:
+                st = p.stat()
+                files.append({
+                    "name": p.name,
+                    "rel_path": str(p.relative_to(data_path)),
+                    "size_bytes": st.st_size,
+                    "size_mb": round(st.st_size / 1024 / 1024, 2),
+                    "modified": st.st_mtime,
+                })
+            except OSError:
+                pass
+    return {"files": files, "data_dir": str(data_path.resolve())}
+
+
+@app.delete("/api/rag/data-files/{name}")
+async def rag_delete_data_file(name: str):
+    """Delete a file from the RAG uploads folder and remove it from the index."""
+    global _rag_config, _rag_indexer
+    data_path = _rag_config.data_path
+    target = data_path / name
+    # Prevent path traversal
+    try:
+        target.resolve().relative_to(data_path.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid filename")
+    if not target.exists():
+        raise HTTPException(404, "File not found")
+    if _rag_indexer:
+        await _rag_indexer.remove_file(name)
+    target.unlink()
+    return {"deleted": name}
+
+
+class RAGSearchRequest(BaseModel):
+    query: str
+    top_k: int = 5
+
+
+@app.post("/api/rag/search")
+async def rag_search(body: RAGSearchRequest):
+    """Test search: embed a query and return top chunks."""
+    global _rag_retriever
+    if not _rag_retriever:
+        raise HTTPException(503, "RAG not initialised")
+    results = await _rag_retriever.search(body.query, top_k=body.top_k)
+    return {"query": body.query, "results": results}
 
 
 async def _refresh_lm_studio_state() -> None:
@@ -1323,7 +1578,7 @@ async def get_vram():
     try:  # NVIDIA
         r = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=4,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=4,
         )
         if r.returncode == 0:
             vram_gb = round(int(r.stdout.strip().splitlines()[0]) / 1024, 1)
@@ -1333,7 +1588,7 @@ async def get_vram():
         try:
             r = subprocess.run(
                 ["wmic", "path", "Win32_VideoController", "get", "AdapterRAM", "/format:value"],
-                capture_output=True, text=True, timeout=4,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=4,
             )
             best = 0
             for line in r.stdout.splitlines():
@@ -1848,10 +2103,31 @@ def _rollback_model_config(prev_model, prev_context):
 async def _rollback_and_restart(prev_model, prev_context) -> bool:
     """Revert config and try to restart llama-server with the previous model.
     Returns True if recovery succeeded."""
-    global _server_procs, _orch, _cfg
-    _rollback_model_config(prev_model, prev_context)
+    global _server_procs, _orch, _cfg, _raw_cfg
     if not prev_model:
+        # Nothing to revert to — clear active_model so health-check doesn't loop
+        _raw_cfg["active_model"] = ""
+        _CONFIG_PATH.write_text(
+            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
         return False
+
+    # Verify the previous model file still exists on disk before attempting restart
+    models_dir_rel = _raw_cfg.get("models_dir", "models")
+    models_dir = _CONFIG_PATH.resolve().parent.parent.parent / models_dir_rel
+    if not (models_dir / prev_model).exists():
+        print(f"[api] Cannot revert: previous model file '{prev_model}' no longer exists on disk")
+        _raw_cfg["active_model"] = ""
+        if prev_context is not None:
+            _raw_cfg["context_size"] = prev_context
+        _CONFIG_PATH.write_text(
+            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        return False
+
+    _rollback_model_config(prev_model, prev_context)
     try:
         _cfg = resolve_config(_raw_cfg, str(_CONFIG_PATH))
         _server_procs = await start_server(str(_CONFIG_PATH))
@@ -1861,6 +2137,12 @@ async def _rollback_and_restart(prev_model, prev_context) -> bool:
         return True
     except Exception as re:
         print(f"[api] Recovery with previous model also failed: {re}")
+        # Clear active_model so subsequent health-check restarts don't keep failing
+        _raw_cfg["active_model"] = ""
+        _CONFIG_PATH.write_text(
+            yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
         return False
 
 
@@ -1930,9 +2212,10 @@ class RestartBody(BaseModel):
 @app.post("/api/restart")
 async def restart_model(body: RestartBody):
     """Restart the current model with an optional context_size override."""
-    global _raw_cfg, _cfg, _orch, _server_procs, _swapping, _active_think_tasks
+    global _raw_cfg, _cfg, _orch, _server_procs, _swapping, _active_think_tasks, _update_state
 
     _swapping = True
+    _update_state.clear()
     try:
         # Drain active generation tasks (max 10s)
         if _is_generating > 0:
@@ -2194,6 +2477,7 @@ async def ws_think(websocket: WebSocket):
                     ws_id = msg.get("workspace_id")
                     incoming_conv_id = msg.get("conversation_id")
                     force_clear_kv = bool(msg.get("force_clear_kv"))
+                    _rag_enabled = bool(msg.get("rag_enabled", False))
 
                     if _orch and force_clear_kv:
                         await _orch.clear_kv_cache()
@@ -2346,6 +2630,31 @@ async def ws_think(websocket: WebSocket):
                                     if part.get("type") == "text":
                                         part["text"] = f"{ctx}\n\n{part['text']}"
                                         break
+
+                    # ── RAG: inject relevant document context ──
+                    if _rag_retriever and _rag_initialized and _rag_enabled:
+                        try:
+                            _rag_query = goal if isinstance(goal, str) else " ".join(
+                                p.get("text", "") for p in goal
+                                if isinstance(p, dict) and p.get("type") == "text"
+                            )
+                            print(f"[rag] searching for: {_rag_query[:120]}...")
+                            _rag_context = await _rag_retriever.format_context(
+                                _rag_query, top_k=_rag_config.chunks_per_query,
+                            )
+                            if _rag_context:
+                                print(f"[rag] injected {_rag_context.count(chr(10))} lines of context")
+                                if isinstance(actual_goal, str):
+                                    actual_goal = _rag_context + "\n\n" + actual_goal
+                                elif isinstance(actual_goal, list):
+                                    for part in actual_goal:
+                                        if part.get("type") == "text":
+                                            part["text"] = _rag_context + "\n\n" + part["text"]
+                                            break
+                            else:
+                                print(f"[rag] no relevant chunks found for query")
+                        except Exception as _rag_err:
+                            print(f"[rag] context injection error: {_rag_err}")
 
                     _search_capability = bool(
                         msg.get("search_capability", msg.get("web_search", False))

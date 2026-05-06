@@ -35,6 +35,15 @@ CT-2 wraps any local model in a structured multi-phase pipeline: deterministic r
 - **Source tiering** — results sorted by domain quality (news wires, Wikipedia prioritized; social/JS-heavy sites skipped)
 - **Injected context** — search results formatted as a timestamped context block injected before generation
 
+### RAG (Retrieval-Augmented Generation)
+- **Local document grounding** — drop PDFs, text files, code, markdown, CSV, JSON, and HTML into `rag_data/`; CT-2 indexes them and injects relevant chunks into every message
+- **Per-conversation toggle** — enable RAG with the folder button next to Search; turn it off for chats where document context isn't needed
+- **Auto-index on startup** — unchanged files skip re-indexing (SHA256 hash check); new files are chunked and embedded automatically
+- **Embedding via the loaded model** — uses llama.cpp's `/v1/embeddings` endpoint, no second model required
+- **Configurable** — chunk size, overlap, top-k retrieval count, file size limits, dedicated embedding model port
+- **Works across all modes** — Chat, Design, Code, and Computer modes all see RAG context when the toggle is on
+- **Web UI upload** — drag-and-drop files in Settings → RAG, or drop them directly into the `rag_data/` folder
+
 ### UI
 - **Live HTML preview** — resizable split panel that streams rendered HTML as it generates; opens automatically for Design outputs
 - **Context usage bar** — real-time token count and fill indicator in the chat input
@@ -101,6 +110,109 @@ Enable Atlas Mode for tasks where output quality matters more than response time
 **Performance tradeoff**
 
 With K = 2 candidates the total generation time roughly doubles; K = 5 takes ~5×. Candidate 0 streams immediately so the UI is never blank — additional candidates run in the background and the best result is shown when selection completes. For simple or conversational messages Atlas will usually set K = 1 automatically (no overhead).
+
+---
+
+## RAG (Retrieval-Augmented Generation)
+
+RAG grounds the model's responses in your own documents — project specs, API docs, research notes, brand guidelines, meeting transcripts. CT-2 indexes text files from a local folder and injects the most relevant chunks as context before every message.
+
+### How it works
+
+```
+┌─────────────────────────────────────────┐
+│  rag_data/                              │
+│  ├── api-docs.md                        │
+│  ├── brand-guide.pdf                    │
+│  └── project-spec.txt                   │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+  Indexing  (startup + manual re-index)
+  ├─ Parse: PDF (PyMuPDF), CSV/TSV, JSON, plain text (.md/.py/.txt/...)
+  ├─ Chunk: split on paragraph boundaries, merge to ~400 tokens with 100-token overlap
+  ├─ Embed: POST /v1/embeddings → float32 vectors
+  └─ Store: SQLite (metadata) + numpy .npy (embeddings, memory-mapped)
+               │
+               ▼
+  Per-message  (when RAG toggle is on)
+  ├─ Embed user query → same embedding endpoint
+  ├─ Cosine similarity search → top-k chunks (default 5)
+  └─ Format as [RAG CONTEXT] block → prepend to message before generation
+```
+
+### Setup
+
+1. **Enable RAG** in `model_config.yaml`:
+   ```yaml
+   rag:
+     enabled: true
+   ```
+
+2. **Add files** to the `rag_data/` folder (created automatically):
+   - Drag-and-drop files directly into the folder, OR
+   - Use **Settings → RAG** to upload files through the Web UI
+
+3. **Restart** CT-2. Files are indexed on startup — you'll see `[rag] Indexed: ...` in the console.
+
+4. **Toggle RAG on** in the chat composer — click the folder icon next to the Search button.
+
+### Supported file types
+
+| Category | Extensions |
+|----------|-----------|
+| Documents | `.pdf`, `.txt`, `.md`, `.rst` |
+| Code | `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.java`, `.go`, `.rs`, `.c`, `.cpp`, `.h`, `.cs`, `.rb`, `.php` |
+| Web | `.html`, `.htm`, `.css`, `.scss`, `.less`, `.svg` |
+| Data | `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.xml`, `.csv`, `.tsv` |
+| Scripts | `.sh`, `.bat`, `.ps1`, `.sql` |
+
+### Configuration
+
+```yaml
+rag:
+  enabled: false            # set to true to activate
+  data_dir: rag_data        # folder for document files
+  embedding_model: ""       # empty = use chat model for embeddings
+  embedding_port: 8081      # port for dedicated embedding model (if set)
+  chunks_per_query: 5       # how many chunks to inject per message
+  chunk_size: 400           # target tokens per chunk
+  chunk_overlap: 100        # token overlap between consecutive chunks
+  max_file_mb: 25           # skip files larger than this
+```
+
+### Context budget
+
+Each RAG query injects approximately **chunks_per_query × chunk_size** tokens. With defaults (5 × 400 = 2,000 tokens), a 4K model has ~2,000 tokens left for conversation, which is tight. Recommendations:
+
+| Model context | chunks_per_query | Effective remaining |
+|--------------|-----------------|-------------------|
+| 4K | 2–3 | Tight — reduce chunks in Settings |
+| 8K | 3–5 | Usable |
+| 16K+ | 5–10 | Comfortable |
+
+CT-2's existing context compaction still works — if history + RAG exceeds the limit, older turns are automatically summarized.
+
+### Dedicated embedding model (optional)
+
+By default, CT-2 uses the loaded chat model for embeddings. You can optionally download a lightweight dedicated embedding model for faster, lower-VRAM indexing:
+
+1. Open **Settings → RAG → Embedding Model**
+2. Search Hugging Face for `nomic-embed-text-v1.5` or `bge-small-en` (~130–140 MB)
+3. Download and select it — CT-2 spins up a second llama-server on the embedding port
+
+Dedicated embedding models use negligible VRAM and start in seconds.
+
+### API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/rag/status` | Index state, chunk count, context cost, supported types |
+| `GET` | `/api/rag/files` | List all indexed files with hash/size/chunks/date |
+| `POST` | `/api/rag/upload` | Upload a file (multipart form) → auto-index |
+| `DELETE` | `/api/rag/files/{name}` | Remove a file and its chunks from the index |
+| `POST` | `/api/rag/reindex` | Full re-index of the data folder |
+| `POST` | `/api/rag/search` | Test query → returns top matching chunks with scores |
 
 ---
 
@@ -176,6 +288,14 @@ CT-2-WebUI/
 │   │   ├── gguf_reader.py     # Reads context_length from GGUF binary headers
 │   │   ├── web_fetcher.py     # URL content extraction for in-chat URL pasting
 │   │   └── web_searcher.py    # DuckDuckGo search with source tiering
+│   ├── rag/
+│   │   ├── config.py          # RAG configuration (loaded from model_config.yaml)
+│   │   ├── parser.py          # Text extraction from .pdf, .txt, .md, .csv, .json, code
+│   │   ├── chunker.py         # Paragraph-level chunking with overlap
+│   │   ├── embedder.py        # Batch embeddings via llama-server /v1/embeddings
+│   │   ├── store.py           # SQLite metadata + numpy .npy embedding store
+│   │   ├── retriever.py       # Query → embed → cosine similarity → top-k chunks
+│   │   └── indexer.py         # Full pipeline: hash → parse → chunk → embed → store
 │   ├── server/
 │   │   ├── api.py             # FastAPI + WebSocket server (all endpoints)
 │   │   ├── launcher.py        # llama-server process management
@@ -257,6 +377,17 @@ journal:
   lessons_on_startup: 10
 sessions:
   path: ct1/data/sessions
+
+# ── RAG (Retrieval-Augmented Generation) ────────
+rag:
+  enabled: false            # set to true to activate document indexing
+  data_dir: rag_data        # folder for .pdf, .txt, .md, .py, .json, etc.
+  # embedding_model: ""     # empty = use loaded chat model for embeddings
+  # embedding_port: 8081     # port for dedicated embedding model
+  chunks_per_query: 5        # top-k chunks injected per message
+  chunk_size: 400            # target tokens per chunk
+  chunk_overlap: 100         # token overlap between chunks
+  max_file_mb: 25            # skip files larger than this
 ```
 
 ---
@@ -506,6 +637,17 @@ All system prompts are editable at runtime from **Settings → Prompts** — no 
 | `WS` | `/ws/think` | Streaming generation WebSocket |
 | `GET` | `/api/web-search` | Run a DuckDuckGo search and return structured results |
 
+### RAG
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/rag/status` | Index state, chunk count, context cost estimate |
+| `GET` | `/api/rag/files` | List indexed files with metadata |
+| `POST` | `/api/rag/upload` | Upload file via multipart form → validate type/size → index |
+| `DELETE` | `/api/rag/files/{name}` | Remove file and its chunks from the index |
+| `POST` | `/api/rag/reindex` | Full re-index of all files in `rag_data/` |
+| `POST` | `/api/rag/search` | Test query → top matching chunks with relevance scores |
+
 ### Conversations & Memory
 
 | Method | Path | Description |
@@ -553,6 +695,7 @@ Connect to `/ws/think` and send:
   "conversation_id": "uuid",
   "mode_override": "chat|design|code|auto",
   "web_search": false,
+  "rag_enabled": false,
   "skip_refinement": false,
   "atlas": null
 }

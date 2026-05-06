@@ -198,6 +198,8 @@ interface ChatState {
     atlasPhase: 'estimating' | 'generating' | 'testing' | 'selecting' | 'repairing' | null;
     atlasEffort: AtlasEffort | null;
     forceClearKvOnNextThink: boolean;
+    /** RAG toggle — per-conversation on/off */
+    ragEnabled: boolean;
 }
 
 const initial: ChatState = {
@@ -244,6 +246,7 @@ const initial: ChatState = {
     atlasPhase: null,
     atlasEffort: null,
     forceClearKvOnNextThink: false,
+    ragEnabled: false,
 };
 
 export const chat = writable<ChatState>({ ...initial });
@@ -338,6 +341,7 @@ function clearTransientTurnState(s: ChatState) {
     s.atlasCandidates = [];
     s.atlasPhase = null;
     s.atlasEffort = null;
+    s.isCompacting = false;
 }
 
 function cloneSearchActivities(searches: SearchActivity[]): SearchActivity[] {
@@ -462,12 +466,12 @@ function handleEvent(data: Record<string, any>) {
                 s.streamingThinking = '';
                 break;
             case 'done': {
+                s.isCompacting = false;
                 // If stopGeneration already committed the partial turn, skip
                 const lastTurn = s.conversation[s.conversation.length - 1];
                 if (s.phase === 'done' && lastTurn?.role === 'assistant') {
                     break;
                 }
-                s.isCompacting = false;
                 s.phase = 'done';
                 s.response = data.response || s.streamingText || '';
                 s.thinking = data.thinking || s.streamingThinking || '';
@@ -525,6 +529,10 @@ function handleEvent(data: Record<string, any>) {
                         autoContinuations: Number(data.auto_continuations || 0),
                     },
                 ];
+                // Reset tokenCount now that the response is in conversation history.
+                // Otherwise the same tokens are counted twice: once via estimateConvTokens
+                // (on the conversation turn content) and once via tokenCount.
+                s.tokenCount = 0;
                 break;
             }
             // ── Precision-Design pipeline events ──
@@ -923,6 +931,13 @@ export function setMode(mode: ModeOverride) {
     });
 }
 
+export function toggleRag() {
+    chat.update((s) => {
+        s.ragEnabled = !s.ragEnabled;
+        return s;
+    });
+}
+
 export function undo() {
     chat.update((s) => {
         if (s.undoStack.length === 0) return s;
@@ -1111,6 +1126,7 @@ export async function sendThink(goal: string, attachments: Attachment[] = []) {
     let convId: string | null = null;
     let s_contextFiles: string[] = [];
     let forceClearKv = false;
+    let s_ragEnabled = false;
     const unsub = chat.subscribe((s) => {
         conv = s.conversation;
         mode = s.modeOverride;
@@ -1118,6 +1134,7 @@ export async function sendThink(goal: string, attachments: Attachment[] = []) {
         convId = s.conversationId;
         s_contextFiles = s.contextFiles;
         forceClearKv = s.forceClearKvOnNextThink;
+        s_ragEnabled = s.ragEnabled;
     });
     unsub();
 
@@ -1289,6 +1306,7 @@ export async function sendThink(goal: string, attachments: Attachment[] = []) {
         ...(s_contextFiles.length > 0 ? { context_files: s_contextFiles } : {}),
         ...(searchEnabled ? { search_capability: true } : {}),
         ...(forceClearKv ? { force_clear_kv: true } : {}),
+        ...(s_ragEnabled ? { rag_enabled: true } : {}),
         ...(prefs.requireCommandApproval ? { require_command_approval: true } : {}),
     });
 }

@@ -5,6 +5,7 @@
     import { newConversation, setWorkspaceId, setMode, loadFromHistory } from '$lib/stores/chat';
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
     import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
+    import { setModelSwapping, clearModelSwapping, startRagPolling } from '$lib/stores/backgroundTasks';
     import StatusIndicator from '$lib/components/StatusIndicator.svelte';
     import ModelDownloader from '$lib/components/ModelDownloader.svelte';
 
@@ -54,6 +55,21 @@
     let planCacheClearing = $state(false);
     let planCacheMsg = $state('');
     let planCacheFast = $state(false);
+
+    // ── RAG ───────────────────────────────────────────────────────
+    let ragStatus = $state<Record<string, any>>({});
+    let ragFiles = $state<any[]>([]);
+    let ragDataFiles = $state<any[]>([]);
+    let ragLoading = $state(false);
+    let ragReindexing = $state(false);
+    let ragProgress = $state<Record<string, any>>({running: false, current: 0, total: 0, file: '', stage: ''});
+    let ragMsg = $state('');
+    let ragUploading = $state(false);
+    let ragDragOver = $state(false);
+    let ragFileInput = $state<HTMLInputElement | undefined>(undefined);
+    let ragEnabling = $state(false);
+    let ragNeedsRestart = $state(false);
+    let _ragPollTimer: ReturnType<typeof setInterval> | undefined = undefined;
 
     function shortName(name: string) {
         return name.replace(/\.gguf$/i, '').replace(/[._-][Qq]\d+[_A-Za-z0-9]*$/, '');
@@ -121,23 +137,146 @@
         } finally { planCacheClearing = false; }
     }
 
+    // ── RAG functions ─────────────────────────────────────────────
+    async function fetchRag() {
+        ragLoading = true; ragMsg = '';
+        try {
+            const [statusRes, filesRes, dataRes] = await Promise.all([
+                fetch('/api/rag/status'),
+                fetch('/api/rag/files'),
+                fetch('/api/rag/data-files'),
+            ]);
+            ragStatus = await statusRes.json();
+            ragFiles = (await filesRes.json()).files ?? [];
+            ragDataFiles = (await dataRes.json()).files ?? [];
+        } catch (e: any) { ragMsg = e.message || 'Failed to load RAG status'; }
+        finally { ragLoading = false; }
+    }
+
+    async function ragUpload(file: File) {
+        ragUploading = true; ragMsg = '';
+        try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await fetch('/api/rag/upload', { method: 'POST', body: fd });
+            const d = await res.json();
+            if (!res.ok) { ragMsg = d.detail || 'Upload failed'; return; }
+            ragMsg = d.error ? `Indexing error: ${d.error}` : `Uploaded: ${file.name}`;
+            await fetchRag();
+        } catch (e: any) { ragMsg = e.message || 'Upload failed'; }
+        finally { ragUploading = false; }
+    }
+
+    async function ragDelete(name: string) {
+        ragMsg = '';
+        try {
+            const res = await fetch(`/api/rag/files/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            if (res.ok) { ragMsg = `Removed: ${name}`; await fetchRag(); }
+            else { ragMsg = 'Delete failed'; }
+        } catch (e: any) { ragMsg = e.message || 'Delete failed'; }
+    }
+
+    async function ragDeleteFile(name: string) {
+        ragMsg = '';
+        try {
+            const res = await fetch(`/api/rag/data-files/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            if (res.ok) { ragMsg = `Deleted: ${name}`; await fetchRag(); }
+            else { ragMsg = 'Delete failed'; }
+        } catch (e: any) { ragMsg = e.message || 'Delete failed'; }
+    }
+
+    async function ragReindex() {
+        ragReindexing = true; ragMsg = '';
+        ragProgress = {running: true, current: 0, total: 0, file: '', stage: 'scanning'};
+        // Start global polling for the persistent banner
+        startRagPolling();
+        // Start local polling for the inline progress bar (smoother at 200ms)
+        if (_ragPollTimer) clearInterval(_ragPollTimer);
+        _ragPollTimer = setInterval(async () => {
+            try {
+                const p = await (await fetch('/api/rag/reindex/progress')).json();
+                ragProgress = p;
+                if (!p.running && _ragPollTimer) {
+                    clearInterval(_ragPollTimer);
+                    _ragPollTimer = undefined;
+                }
+            } catch { /* ignore poll errors */ }
+        }, 200);
+        try {
+            const res = await fetch('/api/rag/reindex', { method: 'POST' });
+            const d = await res.json();
+            // Final progress pull
+            try { ragProgress = await (await fetch('/api/rag/reindex/progress')).json(); } catch {}
+            if (_ragPollTimer) { clearInterval(_ragPollTimer); _ragPollTimer = undefined; }
+            ragMsg = d.ok ? `Re-indexed: ${d.files_added} added, ${d.files_updated} updated, ${d.files_skipped} skipped, ${d.errors} errors` : (d.detail || 'Re-index failed');
+            await fetchRag();
+        } catch (e: any) {
+            if (_ragPollTimer) { clearInterval(_ragPollTimer); _ragPollTimer = undefined; }
+            ragMsg = e.message || 'Re-index failed';
+        } finally {
+            ragReindexing = false;
+            ragProgress = {running: false, current: 0, total: 0, file: '', stage: 'idle'};
+        }
+    }
+
+    function handleRagDrop(e: DragEvent) {
+        e.preventDefault(); ragDragOver = false;
+        const file = e.dataTransfer?.files?.[0];
+        if (file) ragUpload(file);
+    }
+
+    function handleRagFilePick() {
+        const file = ragFileInput?.files?.[0];
+        if (file) { ragUpload(file); if (ragFileInput) ragFileInput.value = ''; }
+    }
+
+    async function toggleRagEnabled() {
+        ragEnabling = true; ragMsg = '';
+        try {
+            const newVal = !ragStatus.enabled;
+            const res = await fetch('/api/config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rag_enabled: newVal }),
+            });
+            const d = await res.json();
+            if (d.ok) {
+                ragStatus = { ...ragStatus, enabled: newVal };
+                ragNeedsRestart = true;
+            } else {
+                ragMsg = 'Failed to save setting.';
+            }
+        } catch (e: any) { ragMsg = e.message || 'Failed'; }
+        finally { ragEnabling = false; }
+    }
+
+    async function restartForRag() {
+        await restartModel();
+        ragNeedsRestart = false;
+        ragMsg = '';
+        await fetchRag();
+    }
+
     async function selectModel(name: string) {
         if (name === activeModel) { pickerOpen = false; return; }
         pickerOpen = false; switching = true; switchError = '';
+        setModelSwapping(shortName(name));
         try {
             const res = await fetch('/api/model/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name }) });
             const d = await res.json();
             if (d.error) { switchError = d.error; } else { await loadData(); notifyModelSwitch(); }
         } catch (e: any) { switchError = e.message || 'Failed'; }
-        finally { switching = false; }
+        finally { switching = false; clearModelSwapping(); }
     }
 
     async function restartModel() {
         switching = true; switchError = '';
+        serverUpdate.set({});
+        promptsSaved = {};
         try {
             const res = await fetch('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context_size: contextSize, n_gpu_layers: gpuLayers, flash_attn: flashAttn, cont_batching: contBatching }) });
             const d = await res.json();
-            if (d.error) { switchError = d.error; } else { runningContextSize = contextSize; runningGpuLayers = gpuLayers; runningFlashAttn = flashAttn; runningContBatching = contBatching; serverUpdate.set({}); promptsSaved = {}; await loadData(); }
+            if (d.error) { switchError = d.error; } else { runningContextSize = contextSize; runningGpuLayers = gpuLayers; runningFlashAttn = flashAttn; runningContBatching = contBatching; await loadData(); }
         } catch (e: any) { switchError = e.message || 'Failed'; }
         finally { switching = false; }
     }
@@ -398,6 +537,7 @@
 
     onMount(async () => {
         await Promise.all([loadData(), loadModes(), loadWorkspaces(), loadPrompts(), fetchPlanCache()]);
+        fetchRag();
         _mounted = true;
     });
 
@@ -415,6 +555,7 @@
         { id: 'atlas',      label: 'Atlas mode' },
         { id: 'prompts',    label: 'System prompts' },
         { id: 'interface',  label: 'Interface' },
+        { id: 'rag',        label: 'RAG' },
         { id: 'plancache',  label: 'Plan cache' },
         { id: 'workspaces', label: 'Workspaces' },
         { id: 'status',     label: 'Status' },
@@ -458,10 +599,14 @@
                     {#if activeModel}
                         <div class="c2-model-card">
                             <div class="c2-model-icon">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                                    <rect x="2" y="2" width="20" height="20" rx="4" stroke="currentColor" stroke-width="1.6"/>
-                                    <path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                                </svg>
+                                {#if switching}
+                                    <span class="c2-spinner" style="width:16px;height:16px;border-width:2px;"></span>
+                                {:else}
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                                        <rect x="2" y="2" width="20" height="20" rx="4" stroke="currentColor" stroke-width="1.6"/>
+                                        <path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                                    </svg>
+                                {/if}
                             </div>
                             <div class="c2-model-info">
                                 <div class="c2-model-name">{shortName(activeModel)}</div>
@@ -470,7 +615,11 @@
                                     · {formatCtx(availableModels.find(m => m.name === activeModel)?.context_length ?? null)} context
                                 </div>
                             </div>
-                            <span class="c2-badge c2-badge-green">LOADED</span>
+                            {#if switching}
+                                <span class="c2-badge c2-badge-yellow">SWITCHING…</span>
+                            {:else}
+                                <span class="c2-badge c2-badge-green">LOADED</span>
+                            {/if}
                         </div>
                     {/if}
 
@@ -1078,7 +1227,7 @@
                                     class="c2-seg-btn"
                                     class:c2-seg-active={$preferences.uiStyle === v}
                                     onclick={() => setUiStyle(v)}
-                                >{v === 'ct2' ? 'Modern' : 'Default'}</button>
+                                >{v === 'ct2' ? 'Modern' : 'Classic'}</button>
                             {/each}
                         </div>
                     </div>
@@ -1119,6 +1268,197 @@
                         {/if}
                     </div>
                 </div>
+
+            <!-- ── RAG ── -->
+            {:else if activeSection === 'rag'}
+                <div class="c2-sh">
+                    <h1 class="c2-sh-title">RAG</h1>
+                    <p class="c2-sh-sub">Index your documents so the AI can pull in the most relevant passages before every reply — PDFs, notes, code, data files.</p>
+                </div>
+
+                {#if ragLoading}
+                    <div class="c2-skeleton"></div>
+                {:else}
+                    <!-- Enable toggle -->
+                    <div class="c2-row">
+                        <div class="c2-row-label">
+                            <div class="c2-row-name">Document indexing</div>
+                            <div class="c2-row-desc">When on, the AI searches your indexed documents before every reply and injects the most relevant passages as context. Requires a server restart when changed.</div>
+                        </div>
+                        <div class="c2-row-control">
+                            <button
+                                class="c2-switch"
+                                class:c2-switch-on={ragStatus.enabled}
+                                onclick={toggleRagEnabled}
+                                disabled={ragEnabling}
+                                role="switch"
+                                aria-checked={ragStatus.enabled}
+                                aria-label="Toggle document indexing"
+                            >
+                                <span class="c2-switch-knob"></span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Restart required notice -->
+                    {#if ragNeedsRestart}
+                        <div class="c2-rag-restart">
+                            <div class="c2-rag-restart-left">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="flex-shrink:0">
+                                    <path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                                <span>Server restart required to apply this change.</span>
+                            </div>
+                            <button class="c2-btn-outline c2-btn-warn" onclick={restartForRag} disabled={switching}>
+                                {switching ? 'Restarting…' : 'Restart now'}
+                            </button>
+                        </div>
+                    {/if}
+
+                    {#if ragStatus.enabled && !ragNeedsRestart}
+                        <!-- Upload drop zone -->
+                        <div
+                            class="c2-rag-drop"
+                            class:c2-rag-drop-over={ragDragOver}
+                            ondragover={(e) => { e.preventDefault(); ragDragOver = true; }}
+                            ondragleave={() => ragDragOver = false}
+                            ondrop={handleRagDrop}
+                            onclick={() => ragFileInput?.click()}
+                            role="button"
+                            tabindex="0"
+                        >
+                            <input
+                                bind:this={ragFileInput}
+                                type="file"
+                                accept=".pdf,.txt,.md,.markdown,.rst,.py,.js,.ts,.jsx,.tsx,.java,.go,.rs,.c,.cpp,.h,.hpp,.cs,.rb,.php,.html,.htm,.css,.scss,.less,.json,.yaml,.yml,.toml,.ini,.cfg,.xml,.csv,.tsv,.log,.sh,.bat,.ps1,.sql,.svg"
+                                onchange={handleRagFilePick}
+                                style="display:none"
+                            />
+                            <span class="c2-rag-drop-icon">
+                                {#if ragUploading}
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="c2-rag-spin">
+                                        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8" stroke-dasharray="18 38" stroke-linecap="round"/>
+                                    </svg>
+                                {:else}
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                                        <path d="M12 15V5M12 5L8 9M12 5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                                        <path d="M4 17v1a2 2 0 002 2h12a2 2 0 002-2v-1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                                    </svg>
+                                {/if}
+                            </span>
+                            <span class="c2-rag-drop-text">{ragUploading ? 'Uploading…' : 'Drop a file here or click to browse'}</span>
+                            <span class="c2-rag-drop-hint">PDF · Markdown · Text · Code · CSV · JSON · HTML{ragStatus.max_file_mb ? ` · Max ${ragStatus.max_file_mb}MB` : ''}</span>
+                        </div>
+
+                        <!-- Feedback message -->
+                        {#if ragMsg}
+                            <div class="c2-rag-msg" class:c2-rag-msg-err={ragMsg.toLowerCase().includes('fail') || ragMsg.toLowerCase().includes('error')}>
+                                {ragMsg}
+                            </div>
+                        {/if}
+
+                        <!-- Reindex progress bar -->
+                        {#if ragReindexing && ragProgress.total > 0}
+                            <div class="c2-rag-progress-wrap">
+                                <div class="c2-rag-progress-bar">
+                                    <div
+                                        class="c2-rag-progress-fill"
+                                        style="width: {Math.round((ragProgress.current / ragProgress.total) * 100)}%"
+                                    ></div>
+                                </div>
+                                <div class="c2-rag-progress-text">
+                                    <span>{ragProgress.current} / {ragProgress.total} files</span>
+                                    <span class="c2-rag-progress-pct">{Math.round((ragProgress.current / ragProgress.total) * 100)}%</span>
+                                </div>
+                                {#if ragProgress.file}
+                                    <div class="c2-rag-progress-file" title={ragProgress.file}>{ragProgress.file}</div>
+                                {/if}
+                            </div>
+                        {:else if ragReindexing}
+                            <div class="c2-rag-progress-wrap">
+                                <div class="c2-rag-progress-bar">
+                                    <div class="c2-rag-progress-fill c2-rag-progress-indeterminate"></div>
+                                </div>
+                                <div class="c2-rag-progress-text">Scanning folder…</div>
+                            </div>
+                        {/if}
+
+                        <!-- Files in rag uploads folder -->
+                        {#if ragDataFiles.length > 0}
+                            <div class="c2-subsection-label">
+                                Files in <code class="c2-rag-path-label">ct1/data/rag_uploads/</code>
+                                <span class="c2-rag-count-badge">{ragDataFiles.length}</span>
+                            </div>
+                            <div class="c2-rag-datafile-list">
+                                {#each ragDataFiles as df (df.name)}
+                                    <div class="c2-rag-datafile" class:c2-rag-datafile-idx={ragFiles.some((f: any) => f.name === df.name)}>
+                                        <div class="c2-rag-datafile-info">
+                                            <span class="c2-rag-datafile-name">{df.name}</span>
+                                            <span class="c2-rag-datafile-meta">
+                                                {df.size_mb} MB
+                                                {#if ragFiles.some((f: any) => f.name === df.name)}
+                                                    · indexed → {ragFiles.find((f: any) => f.name === df.name)?.chunk_count ?? 0} chunk{ragFiles.find((f: any) => f.name === df.name)?.chunk_count !== 1 ? 's' : ''}
+                                                {:else}
+                                                    · not indexed
+                                                {/if}
+                                            </span>
+                                        </div>
+                                        <div class="c2-rag-datafile-actions">
+                                            <span class="c2-rag-datafile-dot" class:green={ragFiles.some((f: any) => f.name === df.name)}></span>
+                                            <button class="c2-btn-ghost c2-btn-err-small" onclick={() => ragDeleteFile(df.name)} title="Delete file from disk">🗑</button>
+                                        </div>
+                                    </div>
+                                {/each}
+                            </div>
+                        {:else}
+                            <p class="c2-rag-empty">No files in <code>ct1/data/rag_uploads/</code> yet. Drop a file above to get started.</p>
+                        {/if}
+
+                        <!-- Indexed files summary -->
+                        {#if ragFiles.length > 0}
+                            <div class="c2-subsection-label">
+                                Indexed files
+                                <span class="c2-rag-count-badge">{ragFiles.length}</span>
+                            </div>
+                            {#each ragFiles as f}
+                                <div class="c2-rag-file">
+                                    <div class="c2-rag-file-info">
+                                        <span class="c2-rag-file-name">{f.name}</span>
+                                        <span class="c2-rag-file-meta">{f.size_mb} MB · {f.chunk_count} chunk{f.chunk_count !== 1 ? 's' : ''}</span>
+                                    </div>
+                                    <button class="c2-btn-ghost c2-btn-err-small" onclick={() => ragDelete(f.name)} title="Remove from index">✕</button>
+                                </div>
+                            {/each}
+                        {:else if ragDataFiles.length > 0}
+                            <p class="c2-rag-empty">Files exist in <code>ct1/data/rag_uploads/</code> but nothing is indexed yet. Click Re-index below.</p>
+                        {:else}
+                            <p class="c2-rag-empty">No documents indexed yet. Drop a file above to get started, or place files in the <code>ct1/data/rag_uploads/</code> folder and click Re-index.</p>
+                        {/if}
+
+                        <!-- Actions + stats -->
+                        <div class="c2-rag-actions">
+                            <button class="c2-btn-outline" onclick={ragReindex} disabled={ragReindexing}>
+                                {ragReindexing ? 'Re-indexing…' : 'Re-index folder'}
+                            </button>
+                            {#if (ragStatus.files ?? 0) > 0}
+                                <span class="c2-rag-stats">
+                                    {ragStatus.files} file{ragStatus.files !== 1 ? 's' : ''}
+                                    · {ragStatus.chunks} chunks
+                                    {#if (ragStatus.context_cost ?? 0) > 0}· ~{ragStatus.context_cost} tokens/msg{/if}
+                                </span>
+                            {/if}
+                        </div>
+
+                        <!-- Context budget note -->
+                        {#if (ragStatus.context_cost ?? 0) > 0}
+                            <div class="c2-rag-budget">
+                                Each message injects ~{ragStatus.context_cost} tokens of document context.
+                                With a {config.context_size ? Math.round(config.context_size / 1024) + 'K' : '?'} context window, ~{Math.max(0, (config.context_size ?? 4096) / 3.5 - (ragStatus.context_cost ?? 2000)) | 0} tokens remain for conversation per turn.
+                                CT-2 compacts history automatically when the window fills.
+                            </div>
+                        {/if}
+                    {/if}
+                {/if}
 
             <!-- ── WORKSPACES ── -->
             <!-- ── PLAN CACHE ── -->
@@ -1571,6 +1911,19 @@
         color: var(--c2-ok);
         border-color: oklch(0.5 0.1 150 / 0.4);
     }
+    :global([data-theme="light"]) .c2-badge-green {
+        background: oklch(0.94 0.05 150 / 0.5);
+        border-color: oklch(0.62 0.10 150 / 0.45);
+    }
+    .c2-badge-yellow {
+        background: oklch(0.35 0.07 85 / 0.28);
+        color: var(--c2-warn);
+        border-color: oklch(0.55 0.10 85 / 0.4);
+    }
+    :global([data-theme="light"]) .c2-badge-yellow {
+        background: oklch(0.94 0.05 85 / 0.5);
+        border-color: oklch(0.65 0.10 85 / 0.45);
+    }
 
     /* Subsection label */
     .c2-subsection-label {
@@ -1621,8 +1974,10 @@
         font-family: inherit;
         cursor: pointer;
         transition: background 120ms;
-        border: 1px solid transparent;
+        border: 1px solid var(--c2-border-2);
+        color: var(--c2-fg-1);
     }
+    .c2-btn-outline:hover:not(:disabled) { background: var(--c2-bg-2); }
     .c2-btn-warn { color: var(--c2-warn); border-color: oklch(0.68 0.10 80 / 0.4); }
     .c2-btn-err { color: var(--c2-err); border-color: oklch(0.55 0.15 25 / 0.4); }
     .c2-btn-outline:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -2031,5 +2386,276 @@
         font-weight: 600;
         background: color-mix(in srgb, var(--c2-accent) calc(var(--score, 0.5) * 100%), var(--c2-bg-3));
         color: var(--c2-accent-fg);
+    }
+
+    /* RAG */
+    .c2-rag-restart {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 4px;
+        padding: 11px 16px;
+        border-radius: 10px;
+        border: 1px solid oklch(0.68 0.10 80 / 0.3);
+        background: oklch(0.68 0.10 80 / 0.07);
+    }
+    .c2-rag-restart-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--c2-warn);
+    }
+    .c2-rag-empty {
+        padding: 28px 0 12px;
+        font-size: 13px;
+        color: var(--c2-fg-3);
+        line-height: 1.55;
+    }
+    .c2-rag-actions {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-top: 16px;
+    }
+    .c2-rag-stats {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11.5px;
+        color: var(--c2-fg-3);
+    }
+    .c2-rag-drop {
+        margin-top: 16px;
+        border: 1.5px dashed var(--c2-border-2);
+        border-radius: 12px;
+        padding: 32px 20px;
+        text-align: center;
+        cursor: pointer;
+        background: var(--c2-bg-1);
+        transition: border-color var(--c2-transition), background var(--c2-transition);
+        user-select: none;
+    }
+    .c2-rag-drop:hover,
+    .c2-rag-drop-over {
+        border-color: var(--c2-accent);
+        background: var(--c2-accent-dim);
+    }
+    .c2-rag-drop-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 10px;
+        color: var(--c2-fg-3);
+        transition: color var(--c2-transition);
+    }
+    .c2-rag-drop:hover .c2-rag-drop-icon,
+    .c2-rag-drop-over .c2-rag-drop-icon {
+        color: var(--c2-accent);
+    }
+    .c2-rag-spin {
+        animation: rag-spin 1s linear infinite;
+    }
+    @keyframes rag-spin {
+        to { transform: rotate(360deg); }
+    }
+    .c2-rag-drop-text {
+        display: block;
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--c2-fg-0);
+    }
+    .c2-rag-drop-hint {
+        display: block;
+        font-size: 11px;
+        font-family: 'Geist Mono', monospace;
+        letter-spacing: 0.2px;
+        color: var(--c2-fg-3);
+        margin-top: 6px;
+    }
+    .c2-rag-msg {
+        margin-top: 10px;
+        font-size: 12.5px;
+        color: var(--c2-ok);
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--c2-border-1);
+        background: var(--c2-bg-2);
+    }
+    .c2-rag-msg-err {
+        color: var(--c2-err);
+    }
+    .c2-rag-file {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 11px 14px;
+        border: 1px solid var(--c2-border-1);
+        border-radius: 10px;
+        background: var(--c2-bg-1);
+        margin-top: 6px;
+        transition: background var(--c2-transition);
+    }
+    .c2-rag-file:hover {
+        background: var(--c2-bg-2);
+    }
+    .c2-rag-file-info {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+    .c2-rag-file-name {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--c2-fg-0);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .c2-rag-file-meta {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        color: var(--c2-fg-3);
+        margin-top: 3px;
+    }
+    .c2-rag-budget {
+        margin-top: 16px;
+        font-size: 12px;
+        color: var(--c2-fg-2);
+        line-height: 1.6;
+        padding: 12px 14px;
+        border: 1px solid var(--c2-border-1);
+        border-radius: 10px;
+        background: var(--c2-bg-1);
+    }
+
+    /* ── RAG progress bar ────────────────────────────────────────── */
+    .c2-rag-progress-wrap {
+        margin-top: 14px;
+        padding: 14px 16px;
+        border: 1px solid var(--c2-border-1);
+        border-radius: 10px;
+        background: var(--c2-bg-1);
+    }
+    .c2-rag-progress-bar {
+        width: 100%;
+        height: 6px;
+        border-radius: 3px;
+        background: var(--c2-bg-3);
+        overflow: hidden;
+    }
+    .c2-rag-progress-fill {
+        height: 100%;
+        border-radius: 3px;
+        background: var(--c2-accent);
+        transition: width 250ms ease-out;
+    }
+    .c2-rag-progress-indeterminate {
+        width: 30%;
+        animation: rag-indeterminate 1.4s ease-in-out infinite;
+    }
+    @keyframes rag-indeterminate {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(400%); }
+    }
+    .c2-rag-progress-text {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 8px;
+        font-family: 'Geist Mono', monospace;
+        font-size: 11.5px;
+        color: var(--c2-fg-2);
+    }
+    .c2-rag-progress-pct {
+        font-weight: 600;
+        color: var(--c2-accent);
+    }
+    .c2-rag-progress-file {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--c2-fg-3);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* ── RAG data files list ─────────────────────────────────────── */
+    .c2-rag-path-label {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        background: var(--c2-bg-3);
+        color: var(--c2-fg-2);
+    }
+    .c2-rag-count-badge {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10.5px;
+        font-weight: 600;
+        padding: 1px 7px;
+        border-radius: 10px;
+        background: var(--c2-accent-dim);
+        color: var(--c2-accent);
+        margin-left: 6px;
+        vertical-align: middle;
+    }
+    .c2-rag-datafile-list {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        margin-top: 6px;
+    }
+    .c2-rag-datafile {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 9px 14px;
+        border: 1px solid var(--c2-border-1);
+        border-radius: 8px;
+        background: var(--c2-bg-1);
+        transition: background var(--c2-transition);
+    }
+    .c2-rag-datafile:hover {
+        background: var(--c2-bg-2);
+    }
+    .c2-rag-datafile-idx {
+        border-left: 3px solid var(--c2-ok);
+    }
+    .c2-rag-datafile-info {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+    .c2-rag-datafile-name {
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--c2-fg-0);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .c2-rag-datafile-meta {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10.5px;
+        color: var(--c2-fg-3);
+        margin-top: 2px;
+    }
+    .c2-rag-datafile-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+    }
+    .c2-rag-datafile-dot {
+        flex-shrink: 0;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--c2-fg-4);
+        transition: background var(--c2-transition);
+    }
+    .c2-rag-datafile-dot.green {
+        background: var(--c2-ok);
     }
 </style>

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { tick, onMount } from 'svelte';
-    import { chat, sendThink, stopGeneration, setMode, revertToTurn, editTurn, setFeedback, regenerate, setContextSize, clearPendingCommands, clearPendingApproval, type Attachment } from '$lib/stores/chat';
+    import { chat, sendThink, stopGeneration, setMode, revertToTurn, editTurn, setFeedback, regenerate, setContextSize, clearPendingCommands, clearPendingApproval, toggleRag, type Attachment } from '$lib/stores/chat';
     import { preferences } from '$lib/stores/preferences';
     import { render } from '$lib/markdown';
     import PreviewPanel from './PreviewPanel.svelte';
@@ -32,6 +32,7 @@
     let taEl   = $state<HTMLTextAreaElement | null>(null);
     let hoveredTurn = $state<number | null>(null);
     let contextSize = $state(0);
+    let ragCost = $state(0);
     let expandedThinking = $state(new Set<number>());
     let expandedSearches = $state(new Set<number>());
     let latestCompactionOpen = $state(false);
@@ -81,29 +82,62 @@
 
     onMount(async () => {
         try {
-            const [cfg, mdl] = await Promise.all([
+            const [cfg, mdl, rag] = await Promise.all([
                 fetch('/api/config').then(r => r.json()),
                 fetch('/api/model').then(r => r.json()),
+                fetch('/api/rag/status').then(r => r.json()),
             ]);
-            // /api/model is more reliable for context_size (reads raw config directly)
             const sz = mdl.context_size ?? cfg.context_size ?? 0;
             contextSize = sz;
             setContextSize(sz);
+            ragCost = rag.enabled ? (rag.context_cost ?? 0) : 0;
         } catch {}
     });
 
     // ── Derived ──────────────────────────────────────────────────
     let isActive  = $derived($chat.phase !== 'idle' && $chat.phase !== 'done');
 
-    // Context usage bar
+    function estimateConvTokens(conv: any[]): number {
+        return Math.round(conv.reduce((acc, t) => {
+            const c = t.content;
+            if (typeof c === 'string') return acc + c.length / 3.5;
+            if (Array.isArray(c)) return acc + c.reduce((a: number, p: any) => {
+                if (p?.type === 'text') return a + (p.text?.length ?? 0) / 3.5;
+                if (p?.type === 'image_url') return a + 85;
+                return a + 16;
+            }, 0);
+            return acc + JSON.stringify(c ?? '').length / 3.5;
+        }, 0));
+    }
+
+    // ── Context accounting ───────────────────────────────────────
+    // System prompt overhead: base prompt + tier suffix + few-shot.
+    // Conservative estimate — actual size varies by route and model tier.
+    const SYSTEM_PROMPT_ESTIMATE = 1200;
+
+    // Compaction uses effectiveCtx, not raw contextSize, to decide when to
+    // compact. Align the bar with the same threshold so users see what matters.
+    function getEffectiveCtx(raw: number): number {
+        const overhead = Math.min(800, Math.round(raw * 0.4));
+        return Math.max(512, raw - overhead);
+    }
+
+    // Total estimated tokens: conversation history (chars/3.5) +
+    // streaming output tokens (exact from backend) + system prompt +
+    // RAG injected content per message.
     let usedTokens = $derived(
-        Math.round($chat.conversation.reduce((acc, t) => acc + t.content.length, 0) / 3.5)
-        + $chat.tokenCount
+        estimateConvTokens($chat.conversation) + $chat.tokenCount + ($chat.ragEnabled ? ragCost : 0) + SYSTEM_PROMPT_ESTIMATE
     );
-    let ctxPct   = $derived(contextSize > 0 ? Math.min(100, Math.round(usedTokens / contextSize * 100)) : 0);
+    let effectiveCtx = $derived(contextSize > 0 ? getEffectiveCtx(contextSize) : 0);
+    let ctxPct   = $derived(effectiveCtx > 0 ? Math.min(100, Math.round(usedTokens / effectiveCtx * 100)) : 0);
     let ctxLabel = $derived(usedTokens >= 1000 ? `${(usedTokens / 1000).toFixed(1)}K` : `${usedTokens}`);
     let ctxMax   = $derived(contextSize >= 1000 ? `${Math.round(contextSize / 1000)}K` : `${contextSize}`);
+    let compactionZone = $derived(ctxPct >= 75);  // matches the 0.75 threshold in sendThink
     let showCtxBar = $derived(contextSize > 0 && $chat.conversation.length > 0);
+    let ctxTooltip = $derived(
+        `${usedTokens} est. tokens used / ${effectiveCtx} effective\n` +
+        `(raw context: ${contextSize}, system: ~${SYSTEM_PROMPT_ESTIMATE}, RAG: ~${$chat.ragEnabled ? ragCost : 0})`
+    );
     let latestCompactedTurn = $derived(
         [...$chat.conversation].reverse().find((turn) => !!turn.isCompacted) ?? null
     );
@@ -744,7 +778,7 @@
                         placeholder="Ask CT-2 anything…"
                         rows={1}
                         onkeydown={handleKey}
-                        disabled={isActive || $chat.isCompacting}
+                        disabled={$chat.isCompacting}
                     ></textarea>
                 </div>
 
@@ -777,23 +811,42 @@
                             </svg>
                             Search
                         </button>
+
+                        <button
+                            class="c2-mode-pill"
+                            class:c2-mode-active={$chat.ragEnabled}
+                            onclick={toggleRag}
+                            disabled={isActive}
+                            title={$chat.ragEnabled ? 'RAG on — documents injected into context' : 'RAG off — click to enable document context'}
+                        >
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <path d="M2 3h4l1 2h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                                <path d="M6 9v3M10 9v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                            RAG
+                        </button>
                     </div>
 
                     <div style="flex:1"></div>
 
                     {#if showCtxBar}
-                        <div class="c2-ctx-bar" title="{usedTokens} / {contextSize} tokens used ({ctxPct}%)">
+                        <div class="c2-ctx-bar" class:c2-ctx-compacting={$chat.isCompacting} title={ctxTooltip}>
                             <div class="c2-ctx-track">
+                                <!-- compaction zone marker at 75% -->
+                                <span class="c2-ctx-zone" class:c2-ctx-zonepass={compactionZone}></span>
                                 <div
                                     class="c2-ctx-fill"
-                                    class:c2-ctx-warn={ctxPct >= 70}
-                                    class:c2-ctx-crit={ctxPct >= 90}
+                                    class:c2-ctx-warn={ctxPct >= 50}
+                                    class:c2-ctx-crit={ctxPct >= 75}
+                                    class:c2-ctx-full={ctxPct >= 95}
                                     style="width: max(5px, {ctxPct}%)"
                                 ></div>
                             </div>
-                            <span class="c2-ctx-label">{ctxLabel} / {ctxMax}</span>
+                            <span class="c2-ctx-label" class:c2-ctx-labelwarn={compactionZone}>{ctxLabel} / {ctxMax}</span>
                             {#if $chat.isCompacting}
                                 <span class="c2-ctx-badge compacting">Compacting…</span>
+                            {:else if compactionZone && !isActive}
+                                <span class="c2-ctx-badge near-limit">Near limit</span>
                             {:else if latestCompactionSummary}
                                 <span class="c2-ctx-badge compacted">Summary ready</span>
                             {/if}
@@ -1067,7 +1120,7 @@
     /* ── Assistant turn ────────────────────────────────────────── */
     .c2-turn-assistant {
         position: relative;
-        padding-left: 30px;
+        padding-left: 42px;
         display: flex;
         flex-direction: column;
         gap: 10px;
@@ -1076,15 +1129,15 @@
 
     .c2-rail {
         position: absolute;
-        left: 10px; top: 6px; bottom: 6px;
-        width: 2px;
+        left: 8px; top: 6px; bottom: 6px;
+        width: 1.5px;
         border-radius: 999px;
         background: var(--c2-border-1);
     }
 
     .c2-rail-node {
         position: absolute;
-        left: 4px; top: 2px;
+        left: 2px; top: 2px;
         width: 14px; height: 14px;
         border-radius: 50%;
         background: var(--c2-bg-1);
@@ -1095,7 +1148,7 @@
     }
 
     .c2-rail-inner {
-        width: 5px; height: 5px;
+        width: 4px; height: 4px;
         border-radius: 50%;
         background: var(--c2-accent);
     }
@@ -1349,7 +1402,7 @@
         max-width: 100%;
         color: var(--c2-fg-0);
         font-size: 14px;
-        line-height: 1.65;
+        line-height: 1.7;
     }
 
     /* Markdown content inside ai bubble */
@@ -1694,29 +1747,51 @@
         align-items: center;
         gap: 7px;
         flex-shrink: 0;
+        transition: opacity 200ms;
+    }
+    .c2-ctx-bar.c2-ctx-compacting {
+        opacity: 0.6;
     }
     .c2-ctx-track {
+        position: relative;
         width: 72px;
         height: 4px;
         border-radius: 999px;
         background: var(--c2-bg-3);
         overflow: hidden;
     }
+    /* Compaction threshold marker at 75% */
+    .c2-ctx-zone {
+        position: absolute;
+        left: 75%; top: 0; bottom: 0;
+        width: 1px;
+        background: var(--c2-border-2);
+        z-index: 1;
+        transition: background 300ms;
+    }
+    .c2-ctx-zone.c2-ctx-zonepass {
+        background: var(--c2-warn);
+    }
     .c2-ctx-fill {
+        position: relative;
         height: 100%;
         border-radius: 999px;
         background: var(--c2-fg-3);
         transition: width 400ms ease, background 400ms ease;
         min-width: 5px;
+        z-index: 0;
     }
     .c2-ctx-fill.c2-ctx-warn { background: var(--c2-warn); }
     .c2-ctx-fill.c2-ctx-crit { background: var(--c2-err); }
+    .c2-ctx-fill.c2-ctx-full { background: var(--c2-err); box-shadow: 0 0 6px var(--c2-err); }
     .c2-ctx-label {
         font-family: 'Geist Mono', monospace;
         font-size: 10.5px;
         color: var(--c2-fg-3);
         white-space: nowrap;
+        transition: color 300ms;
     }
+    .c2-ctx-label.c2-ctx-labelwarn { color: var(--c2-warn); }
     .c2-ctx-badge {
         display: inline-flex;
         align-items: center;
@@ -1733,6 +1808,11 @@
         color: var(--c2-warn);
         background: color-mix(in srgb, var(--c2-warn) 12%, transparent);
         border-color: color-mix(in srgb, var(--c2-warn) 24%, transparent);
+    }
+    .c2-ctx-badge.near-limit {
+        color: var(--c2-warn);
+        background: color-mix(in srgb, var(--c2-warn) 8%, transparent);
+        border-color: color-mix(in srgb, var(--c2-warn) 18%, transparent);
     }
     .c2-ctx-badge.compacted {
         color: var(--c2-fg-2);

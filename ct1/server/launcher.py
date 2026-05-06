@@ -74,7 +74,7 @@ def _is_llama_server_running() -> bool:
         if os.name == "nt":
             r = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq llama-server.exe", "/NH"],
-                capture_output=True, text=True
+                capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             return "llama-server.exe" in r.stdout
         else:
@@ -93,7 +93,7 @@ def _get_llama_pid():
         if os.name == "nt":
             r = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq llama-server.exe", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
             for line in r.stdout.strip().splitlines():
                 # CSV format: "llama-server.exe","1234","Console","1","..."
@@ -105,7 +105,7 @@ def _get_llama_pid():
                         pass
         else:
             r = subprocess.run(
-                ["pgrep", "-f", "llama-server"], capture_output=True, text=True
+                ["pgrep", "-f", "llama-server"], capture_output=True, text=True, encoding="utf-8", errors="replace"
             )
             if r.returncode == 0:
                 return int(r.stdout.strip().split()[0])
@@ -429,6 +429,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
                 "context_size": effective_context,
                 "cont_batching": raw_cfg.get("cont_batching", False),
                 "flash_attn": raw_cfg.get("flash_attn", False),
+                "embeddings": raw_cfg.get("rag", {}).get("enabled", False),
             },
             "_gguf_context_length": gguf_context,
             "models": {
@@ -590,6 +591,8 @@ def build_server_command(s: dict) -> list:
         cmd.append("--cont-batching")
     if s.get("flash_attn"):
         cmd += ["--flash-attn", "on"]
+    if s.get("embeddings"):
+        cmd += ["--embeddings", "--pooling", "last"]
     return cmd
 
 def _drain_stderr(proc: subprocess.Popen, label: str = "llama"):

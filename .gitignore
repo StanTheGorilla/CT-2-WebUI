@@ -20,7 +20,9 @@ ct1/data/workspaces/
 ct1/data/dpo_dataset.jsonl
 ct1/data/benchmarks/
 ct1/data/*.db
+ct1/data/*.npy
 ct1/data/sessions/
+ct1/data/rag_uploads/
 
 # ── Model files (large GGUF binaries — download separately) ────────
 models/*.gguf
