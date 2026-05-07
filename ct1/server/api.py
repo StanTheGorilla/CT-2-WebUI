@@ -623,6 +623,7 @@ async def lifespan(application: FastAPI):
                 try:
                     print("[rag] Indexing documents...")
                     def _progress(stage: str, current: int, total: int, file: str = ""):
+                        global _rag_progress
                         _rag_progress = {"running": True, "current": current, "total": total, "file": file, "stage": stage}
                     stats = await _rag_indexer.index_folder(progress_cb=_progress)
                     print(f"[rag] Indexed: {stats}")
@@ -663,7 +664,7 @@ async def lifespan(application: FastAPI):
             try:
                 _done, _pending = await asyncio.wait(snapshot, timeout=15.0)
                 if _pending:
-                    print(f"[api] Shutdown: {len(_pending)} generation(s) did not finish in 30s — cancelling")
+                    print(f"[api] Shutdown: {len(_pending)} generation(s) did not finish in 15s — cancelling")
                     for task in _pending:
                         task.cancel()
                     # Await cancellation to complete before tearing down resources
@@ -1233,6 +1234,7 @@ async def rag_reindex():
     _rag_progress = {"running": True, "current": 0, "total": 0, "file": "", "stage": "scanning"}
     try:
         def _progress(stage: str, current: int, total: int, file: str = ""):
+            global _rag_progress
             _rag_progress = {"running": True, "current": current, "total": total, "file": file, "stage": stage}
         stats = await _rag_indexer.index_folder(progress_cb=_progress)
         return {"ok": True, **stats}
@@ -2959,18 +2961,39 @@ async def ws_think(websocket: WebSocket):
                 try:
                     await asyncio.gather(current_think_task, stream_task)
                 except asyncio.CancelledError:
-                    await queue.put({
-                        "event": "done",
-                        "response": "",
-                        "route": "",
-                        "truncated": False,
-                        "auto_continuations": 0,
-                    })
-                    await stream_task
+                    # Cancellation source is either user-stop (the cancel watcher
+                    # cancelled current_think_task) or server shutdown (uvicorn
+                    # cancelled this whole ASGI task). When gather raises
+                    # CancelledError it has ALREADY cancelled stream_task, so
+                    # `await stream_task` would re-raise — that previously
+                    # leaked CancelledError out of this handler and tripped
+                    # uvicorn's graceful-shutdown force-kill timer.
+                    #
+                    # Instead, write the final 'done' directly to the WebSocket
+                    # (the queue/stream pump is dead) and swallow any failure —
+                    # the WS may already be closing during shutdown.
+                    try:
+                        await websocket.send_json({
+                            "event": "done",
+                            "response": "",
+                            "route": "",
+                            "truncated": False,
+                            "auto_continuations": 0,
+                        })
+                    except (asyncio.CancelledError, Exception):
+                        pass
                 finally:
                     cancel_task.cancel()
                     try:
                         await cancel_task  # ensure task terminates before outer loop reads WS again
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    # Make sure stream_task is also reaped so we don't leak a
+                    # cancelled task across iterations of the outer loop.
+                    if not stream_task.done():
+                        stream_task.cancel()
+                    try:
+                        await stream_task
                     except (asyncio.CancelledError, Exception):
                         pass
                     current_think_task = None
