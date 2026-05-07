@@ -15,8 +15,8 @@ async def test_health_endpoint(client):
     r = await client.get("/api/status")
     assert r.status_code == 200
     data = r.json()
-    assert "brain" in data
-    assert "minds" in data
+    assert "model" in data
+    assert "version" in data
 
 
 @pytest.mark.asyncio
@@ -40,5 +40,6 @@ async def test_config_endpoint(client):
     r = await client.get("/api/config")
     assert r.status_code == 200
     data = r.json()
-    assert "models" in data
-    assert "deliberation" in data
+    assert "model" in data
+    assert "temperature" in data
+    assert "context_size" in data

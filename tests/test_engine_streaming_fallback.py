@@ -17,6 +17,9 @@ def _make_engine():
     engine.frequency_penalty = 0.0
     engine.max_tokens = 512
     engine.base_url = "http://localhost:8080"
+    engine.is_external = False
+    engine.model_name = ""
+    engine.repeat_penalty = 1.10
     return engine
 
 

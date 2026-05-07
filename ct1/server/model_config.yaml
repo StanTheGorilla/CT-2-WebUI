@@ -2,11 +2,11 @@ executable: auto
 backend: vulkan
 inference_backend: local
 models_dir: models
-active_model: gemma-4-e2b-it.Q4_K_M.gguf
+active_model: gemma-4-E4B-it-Q4_0.gguf
 port: 8080
 n_gpu_layers: 99
 parallel_slots: 1
-context_size: 34816
+context_size: 46080
 temperature: 0.6
 top_p: 0.9
 top_k: 40

@@ -14,10 +14,6 @@ export function exportMarkdown(title: string, turns: Turn[]): string {
     return md;
 }
 
-export function exportJSON(title: string, turns: Turn[]): string {
-    return JSON.stringify({ title, messages: turns }, null, 2);
-}
-
 export function downloadText(content: string, filename: string, mime: string = 'text/plain') {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
