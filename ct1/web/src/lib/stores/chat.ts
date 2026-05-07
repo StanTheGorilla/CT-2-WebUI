@@ -187,6 +187,8 @@ interface ChatState {
     genStartTime: number;
     tokensPerSec: number;
     isCompacting: boolean;
+    /** epoch ms when the current compaction started (0 when idle) */
+    compactStartedAt: number;
     savedFiles: string[];
     fetchingUrls: { url: string; status: 'fetching' | 'done' | 'failed'; error?: string }[];
     fetchedContent: { url: string; title: string; content: string;
@@ -237,6 +239,7 @@ const initial: ChatState = {
     genStartTime: 0,
     tokensPerSec: 0,
     isCompacting: false,
+    compactStartedAt: 0,
     savedFiles: [],
     fetchingUrls: [],
     fetchedContent: [],
@@ -256,6 +259,41 @@ export const pendingInputPrompt = writable<string>('');
 // Model context size — set once from /api/config so sendThink can decide when to compact
 let _contextSize = 0;
 export function setContextSize(n: number) { _contextSize = n; }
+
+// In-flight compaction abort handle. Only one compaction can be running at a
+// time (sendThink is the only caller and it awaits before sending).
+let _compactAbort: AbortController | null = null;
+
+/** User-initiated cancel from the UI. Aborts the in-flight /api/compact fetch.
+ *  The catch-block in sendThink will fall back to mechanical compaction so the
+ *  user still gets a sane conversation state. */
+export function cancelCompaction() {
+    _compactAbort?.abort();
+}
+
+/** Mechanical compaction used as a fallback when /api/compact fails, times
+ *  out, or the user cancels. Keeps the first user turn (initial intent) plus
+ *  the last 4 turns, with a marker explaining the elision. Always finishes in
+ *  microseconds — this is the safety net. */
+function mechanicalCompactClient(conv: Array<{ role: string; content: any }>):
+    Array<{ role: string; content: any }>
+{
+    if (conv.length <= 5) return conv;
+    const firstUser = conv.find(t => t.role === 'user');
+    const tail = conv.slice(-4);
+    const elidedCount = conv.length - tail.length - (firstUser ? 1 : 0);
+    const summaryTurn = {
+        role: 'user',
+        content:
+            `[CONTEXT SUMMARY — ${elidedCount} earlier turns elided to free context]\n\n` +
+            (firstUser
+                ? `Original request: ${typeof firstUser.content === 'string'
+                    ? firstUser.content.slice(0, 400)
+                    : '(multimodal)'}`
+                : '')
+    };
+    return [summaryTurn, ...tail];
+}
 
 function estimateContentTokens(content: unknown): number {
     if (typeof content === 'string') {
@@ -342,6 +380,7 @@ function clearTransientTurnState(s: ChatState) {
     s.atlasPhase = null;
     s.atlasEffort = null;
     s.isCompacting = false;
+    s.compactStartedAt = 0;
 }
 
 function cloneSearchActivities(searches: SearchActivity[]): SearchActivity[] {
@@ -467,6 +506,7 @@ function handleEvent(data: Record<string, any>) {
                 break;
             case 'done': {
                 s.isCompacting = false;
+                s.compactStartedAt = 0;
                 // If stopGeneration already committed the partial turn, skip
                 const lastTurn = s.conversation[s.conversation.length - 1];
                 if (s.phase === 'done' && lastTurn?.role === 'assistant') {
@@ -593,6 +633,20 @@ function handleEvent(data: Record<string, any>) {
             case 'assembling':
                 s.phase = 'assembling';
                 s.streamingText = '';
+                break;
+            case 'refining':
+                // Final CSS-polish pass — the page is already assembled and
+                // visible in preview. Surface this so the user knows the
+                // remaining work is just polish, not new generation.
+                s.phase = 'refining';
+                s.streamingText = '';
+                break;
+            case 'polished':
+                // CSS polish finished; if the orchestrator returned an updated
+                // page, swap it into the preview before 'done' arrives.
+                if (typeof data.code === 'string' && data.code) {
+                    s.streamingText = data.code;
+                }
                 break;
             case 'retrying':
                 s.phase = 'fixing';
@@ -740,10 +794,12 @@ function handleEvent(data: Record<string, any>) {
                 break;
             case 'compacting':
                 s.isCompacting = true;
+                if (!s.compactStartedAt) s.compactStartedAt = Date.now();
                 if (data.message) s.warning = data.message;
                 break;
             case 'continued':
                 s.isCompacting = false;
+                s.compactStartedAt = 0;
                 s.warning = data.truncated
                     ? (data.message || 'The response still hit the context limit and may be incomplete.')
                     : '';
@@ -753,6 +809,7 @@ function handleEvent(data: Record<string, any>) {
                 break;
             case 'error':
                 s.isCompacting = false;
+                s.compactStartedAt = 0;
                 s.phase = 'done';
                 s.response = `**Error:** ${data.message || 'Unknown error'}`;
                 break;
@@ -1075,7 +1132,11 @@ export function clearContextFiles() {
 }
 
 export function stopGeneration() {
-    ws?.send({ type: 'cancel' });
+    // Abort any in-flight compaction fetch first — without this, sendThink's
+    // await on /api/compact would still resolve and then push a 'think'
+    // request to the WS after the user already pressed Stop.
+    try { _compactAbort?.abort(); } catch { /* ignore */ }
+    try { ws?.send({ type: 'cancel' }); } catch { /* ignore — ws may be down */ }
     chat.update((s) => {
         const partial = s.streamingText || '';
         const thinking = s.streamingThinking || '';
@@ -1111,8 +1172,6 @@ export function stopGeneration() {
 
         clearTransientTurnState(s);
 
-        s.response = partial;
-        s.thinking = thinking;
         s.savedFiles = preserveSavedFiles;
 
         return s;
@@ -1201,47 +1260,71 @@ export async function sendThink(goal: string, attachments: Attachment[] = []) {
         );
         const projectedPrompt = historyTokens + pendingUserTokens;
         if (projectedPrompt > effectiveCtx - replyReserve || historyTokens / effectiveCtx >= 0.75) {
-            chat.update(s => { s.isCompacting = true; return s; });
+            // 180s ceiling — long enough for a small local model to summarize a
+            // full context, short enough that a wedged backend can't trap the UI.
+            const COMPACT_TIMEOUT_MS = 180_000;
+            _compactAbort = new AbortController();
+            const timeoutId = setTimeout(() => _compactAbort?.abort(), COMPACT_TIMEOUT_MS);
+            chat.update(s => {
+                s.isCompacting = true;
+                s.compactStartedAt = Date.now();
+                return s;
+            });
+
+            let compacted: any[] | null = null;
+            let usedFallback = false;
             try {
                 const res = await fetch('/api/compact', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ conversation: backendConv }),
+                    signal: _compactAbort.signal,
                 });
                 if (res.ok) {
                     const data = await res.json();
-                    if (data.conversation?.length > 0) {
-                        backendConv = data.conversation;
-                        // Replace frontend conversation with the compacted view
-                        chat.update(s => {
-                            const summaryTurn: Turn = {
-                                role: 'assistant',
-                                content: data.conversation[0].content,
-                                isCompacted: true,
-                            };
-                            // Preserve latest code turn if compaction produced one
-                            const codeTurn = data.conversation.length > 1
-                                ? data.conversation[data.conversation.length - 1]
-                                : null;
-                            s.conversation = codeTurn
-                                ? [summaryTurn, { role: 'assistant', content: codeTurn.content, isCode: true }]
-                                : [summaryTurn];
-                            s.isCompacting = false;
-                            return s;
-                        });
-                        // Update `conv` so position count is correct
-                        conv = get(chat).conversation;
-                    } else {
-                        chat.update(s => { s.isCompacting = false; return s; });
-                    }
-                } else {
-                    chat.update(s => { s.isCompacting = false; return s; });
+                    if (data.conversation?.length > 0) compacted = data.conversation;
                 }
-            } catch {
-                chat.update(s => { s.isCompacting = false; return s; });
+            } catch (e) {
+                // Aborted (user-cancel or timeout) or network error — fall through.
+                console.warn('[compact] fetch failed, using mechanical fallback', e);
+            } finally {
+                clearTimeout(timeoutId);
+                _compactAbort = null;
             }
+
+            if (!compacted) {
+                compacted = mechanicalCompactClient(backendConv);
+                usedFallback = true;
+            }
+
+            backendConv = compacted;
+            chat.update(s => {
+                const summaryTurn: Turn = {
+                    role: 'assistant',
+                    content: compacted![0].content,
+                    isCompacted: true,
+                };
+                const codeTurn = compacted!.length > 1
+                    ? compacted![compacted!.length - 1]
+                    : null;
+                s.conversation = codeTurn
+                    ? [summaryTurn, { role: 'assistant', content: codeTurn.content, isCode: true }]
+                    : [summaryTurn];
+                s.isCompacting = false;
+                s.compactStartedAt = 0;
+                if (usedFallback) {
+                    s.warning = 'Used quick fallback compaction — earlier turns trimmed without an LLM summary.';
+                }
+                return s;
+            });
+            conv = get(chat).conversation;
         }
     }
+
+    // If the user clicked Stop while we were compacting, bail out before
+    // pushing a new 'think' request to the WS. stopGeneration set
+    // cancelRequested=true and committed a stopped turn — respect that.
+    if (get(chat).cancelRequested) return;
 
     chat.update((s) => {
         s.conversation = [...s.conversation, {

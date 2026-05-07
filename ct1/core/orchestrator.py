@@ -1663,11 +1663,20 @@ class Orchestrator:
             "explanation": explanation_text,
         }
 
-    async def compact_conversation(self, conversation: list[dict]) -> list[dict]:
+    async def compact_conversation(
+        self,
+        conversation: list[dict],
+        fast: bool = False,
+    ) -> list[dict]:
         """Compact a long conversation into an actionable summary + latest artifact.
 
         Returns 1-2 turns: a user-role summary and optionally the latest code
         as an assistant turn, so the model can continue editing it.
+
+        When ``fast=True`` (or when the LLM summarizer fails), a mechanical
+        summary is built locally without any model call. This guarantees the
+        compaction step always finishes in milliseconds — the safety net that
+        keeps the UI from hanging on slow hardware.
         """
         if not conversation:
             return []
@@ -1692,6 +1701,49 @@ class Orchestrator:
                 if is_bare_html or is_bare_script:
                     latest_code = content
                     break
+
+        def _user_text(m: dict) -> str:
+            """Pull user-authored text out of a turn, handling multimodal content."""
+            c = m.get("content", "")
+            if isinstance(c, list):
+                for part in c:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        c = part.get("text", "")
+                        break
+            return c.strip() if isinstance(c, str) else ""
+
+        # IMMUTABLE LAYER — preserve every word the user said. The LLM summary
+        # paraphrases assistant turns (lossy is fine), but the user's brief and
+        # corrections are pinned verbatim so the model never drifts off the
+        # original intent. This is the load-bearing fix for "after compaction
+        # the AI built something completely different".
+        user_turns = [t for t in (_user_text(m) for m in conversation if m.get("role") == "user") if t]
+        original_brief = ""
+        later_directives: list[str] = []
+        if user_turns:
+            # First user message = the brief. Cap at 1500 chars to bound size.
+            original_brief = user_turns[0][:1500] + ("…" if len(user_turns[0]) > 1500 else "")
+            # Subsequent user messages = corrections/refinements. Keep them all
+            # if they fit, else last 8. Each capped at 400 chars.
+            tail = user_turns[1:] if len(user_turns) <= 9 else user_turns[-8:]
+            later_directives = [t[:400] + ("…" if len(t) > 400 else "") for t in tail]
+        verbatim_block = ""
+        if original_brief:
+            verbatim_block += f"ORIGINAL REQUEST (user, verbatim):\n{original_brief}\n"
+        if later_directives:
+            quoted = "\n".join(f'  - "{d}"' for d in later_directives)
+            verbatim_block += f"\nUSER CORRECTIONS / REFINEMENTS (verbatim, in order):\n{quoted}\n"
+
+        def _mechanical_summary() -> str:
+            """Deterministic summary without any LLM call. The user-intent
+            block is added separately (verbatim) — this just describes what
+            the assistant has done so far."""
+            assistant_count = sum(1 for m in conversation if m.get("role") == "assistant")
+            return (
+                f"COMPLETED: {assistant_count} prior assistant turns ({len(conversation)} total messages elided).\n"
+                "CURRENT STATE: Latest artifact preserved below if present.\n"
+                "PENDING: Honor the user intent above and continue from where the latest artifact leaves off."
+            )
 
         # Build a transcript, skipping slim placeholders and truncating large blobs
         lines = []
@@ -1734,38 +1786,48 @@ class Orchestrator:
 
         prompt = (
             "Summarize this AI assistant conversation into a compact, actionable context block.\n"
+            "The user's exact words will be preserved verbatim alongside your summary, "
+            "so focus on describing what the assistant DID and the current state — "
+            "do not re-paraphrase the user's requirements.\n"
             "Use exactly these section headers:\n"
-            "PROJECT: [what is being built — type, purpose, key requirements]\n"
             "COMPLETED: [what has been finished — include files created and commands run]\n"
-            "PREFERENCES: [user's style, design, or functional preferences explicitly stated]\n"
             "CURRENT STATE: [the current output or working state — describe concisely]\n"
             "PENDING: [unfinished work, errors still to fix, or next steps the user mentioned]\n\n"
-            "Be specific and actionable. Bullet points inside sections are fine.\n"
-            "If this is a workspace/coding session, list the key files created and their purpose.\n"
-            "This summary replaces the full conversation history — make it self-contained.\n\n"
+            "Be specific and actionable. Bullet points inside sections are fine.\n\n"
             f"CONVERSATION TO SUMMARIZE:\n{transcript}"
         )
 
-        try:
-            raw = await self.engine._call(
-                [{"role": "user", "content": prompt}],
-                max_tokens=700,
-                temperature=0.1,
-                enable_thinking=False,
-            )
-            summary = raw if isinstance(raw, str) else raw.get("text", "")
-            summary = strip_think_tags(summary).strip()
-        except Exception as e:
-            print(f"[orch] compact_conversation summary failed: {e}")
-            summary = f"Previous conversation with {len(conversation)} messages."
+        if fast:
+            summary = _mechanical_summary()
+        else:
+            try:
+                raw = await self.engine._call(
+                    [{"role": "user", "content": prompt}],
+                    max_tokens=400,
+                    temperature=0.1,
+                    enable_thinking=False,
+                )
+                summary = raw if isinstance(raw, str) else raw.get("text", "")
+                summary = strip_think_tags(summary).strip()
+                if not summary:
+                    summary = _mechanical_summary()
+            except Exception as e:
+                print(f"[orch] compact_conversation LLM summary failed, using mechanical: {e}")
+                summary = _mechanical_summary()
 
-        compacted = [{
-            "role": "user",
-            "content": (
-                f"[CONTEXT SUMMARY — {len(conversation)} turns compacted to save memory]\n\n"
-                f"{summary}"
-            ),
-        }]
+        # Compose final compacted turn: header + verbatim user intent + summary.
+        # Verbatim block goes BEFORE the LLM summary so it's the first thing the
+        # model attends to when reading the context.
+        compacted_content = f"[CONTEXT SUMMARY — {len(conversation)} turns compacted to save memory]\n\n"
+        if verbatim_block:
+            compacted_content += (
+                "═══ USER INTENT (preserved verbatim — treat as authoritative) ═══\n"
+                f"{verbatim_block}\n"
+                "═══ ASSISTANT PROGRESS (summarized) ═══\n"
+            )
+        compacted_content += summary
+
+        compacted = [{"role": "user", "content": compacted_content}]
 
         if latest_code:
             # Truncate very large artifacts; enough for the model to edit
@@ -1834,9 +1896,14 @@ class Orchestrator:
                 attempt=attempts,
             )
 
+            # fast=True: mechanical truncation only — mid-generation context
+            # overflow must recover in milliseconds, not minutes. The model is
+            # already past its context budget; running another LLM summary call
+            # would just compound the slowness.
             compacted_history = await self.compact_conversation(
                 continuation_context
-                or [{"role": "user", "content": goal_text}]
+                or [{"role": "user", "content": goal_text}],
+                fast=True,
             )
             summary_turn = (
                 compacted_history[:1]

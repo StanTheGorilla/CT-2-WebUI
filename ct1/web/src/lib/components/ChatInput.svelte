@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, pendingInputPrompt, setContextSize, toggleRag, type Attachment, type ModeOverride } from '$lib/stores/chat';
+    import { chat, sendThink, setMode, stopGeneration, toggleContextFile, clearContextFiles, pendingInputPrompt, setContextSize, toggleRag, cancelCompaction, type Attachment, type ModeOverride } from '$lib/stores/chat';
     import { preferences, toggleWebSearch } from '$lib/stores/preferences';
     import { isUpdating } from '$lib/stores/serverUpdate';
     import { CHAT_MODE_LABELS } from '$lib/chatUi';
@@ -162,6 +162,21 @@
     );
     const showCtxBar = $derived(contextSize > 0 && $chat.conversation.length > 0);
     const hasCompactedHistory = $derived($chat.conversation.some((turn) => !!turn.isCompacted));
+
+    // 1-second tick used to compute elapsed compaction time. Runs only while
+    // a compaction is in flight to avoid waking the page needlessly.
+    let nowMs = $state(Date.now());
+    $effect(() => {
+        if (!$chat.isCompacting || !$chat.compactStartedAt) return;
+        const id = setInterval(() => { nowMs = Date.now(); }, 1000);
+        nowMs = Date.now();
+        return () => clearInterval(id);
+    });
+    const compactElapsedSec = $derived(
+        $chat.compactStartedAt > 0
+            ? Math.max(0, Math.floor((nowMs - $chat.compactStartedAt) / 1000))
+            : 0
+    );
 
     function getExtension(name: string): string {
         const i = name.lastIndexOf('.');
@@ -359,9 +374,28 @@
                 {ctxLabel} / {ctxMax} tokens
             </span>
             {#if $chat.isCompacting}
-                <span class="ctx-state-badge compacting">Compacting history…</span>
+                <span class="ctx-state-badge compacting" role="status" aria-live="polite">
+                    <span class="ctx-state-dot" aria-hidden="true"></span>
+                    <span class="ctx-state-label">Compacting history</span>
+                    <span class="ctx-state-sep" aria-hidden="true">·</span>
+                    <span class="ctx-state-meta">{compactElapsedSec}s</span>
+                    <button
+                        type="button"
+                        class="ctx-state-cancel"
+                        onclick={cancelCompaction}
+                        title="Cancel and use a quick fallback summary"
+                        aria-label="Cancel compaction"
+                    >Cancel</button>
+                </span>
             {:else if hasCompactedHistory}
-                <span class="ctx-state-badge compacted">History summarized</span>
+                <span class="ctx-state-badge compacted">
+                    <span class="ctx-state-check" aria-hidden="true">
+                        <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
+                            <path d="M2 5.2L4 7L8 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </span>
+                    <span class="ctx-state-label">History summarized</span>
+                </span>
             {/if}
         </div>
     {/if}
@@ -1032,8 +1066,9 @@
     .ctx-state-badge {
         display: inline-flex;
         align-items: center;
-        height: 20px;
-        padding: 0 9px;
+        gap: 6px;
+        height: 22px;
+        padding: 0 10px;
         border-radius: 999px;
         font-size: 10.5px;
         font-weight: 600;
@@ -1046,10 +1081,81 @@
         color: var(--brain);
         background: rgba(232, 133, 12, 0.10);
         border-color: rgba(232, 133, 12, 0.22);
+        padding-right: 4px; /* tighter on the cancel side — chip has its own padding */
     }
     .ctx-state-badge.compacted {
         color: var(--text-secondary);
         background: var(--surface);
         border-color: var(--border);
+    }
+    .ctx-state-label {
+        line-height: 1;
+    }
+    .ctx-state-meta {
+        color: var(--brain);
+        opacity: 0.78;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+    }
+    .ctx-state-sep {
+        opacity: 0.5;
+        line-height: 1;
+        font-weight: 400;
+    }
+    .ctx-state-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--brain);
+        box-shadow: 0 0 0 0 rgba(232, 133, 12, 0.45);
+        animation: ctxStatePulse 1.4s ease-in-out infinite;
+        flex-shrink: 0;
+    }
+    @keyframes ctxStatePulse {
+        0%   { box-shadow: 0 0 0 0 rgba(232, 133, 12, 0.45); transform: scale(1);    }
+        70%  { box-shadow: 0 0 0 6px rgba(232, 133, 12, 0);  transform: scale(1.05); }
+        100% { box-shadow: 0 0 0 0 rgba(232, 133, 12, 0);    transform: scale(1);    }
+    }
+    .ctx-state-check {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: rgba(120, 120, 120, 0.18);
+        color: var(--text-secondary);
+        flex-shrink: 0;
+    }
+    .ctx-state-cancel {
+        appearance: none;
+        margin-left: 2px;
+        padding: 0 9px;
+        height: 18px;
+        line-height: 18px;
+        border-radius: 999px;
+        font-size: 9.5px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--brain);
+        background: rgba(232, 133, 12, 0.06);
+        border: 1px solid rgba(232, 133, 12, 0.35);
+        cursor: pointer;
+        transition: background 0.14s ease, border-color 0.14s ease, transform 0.08s ease;
+    }
+    .ctx-state-cancel:hover {
+        background: rgba(232, 133, 12, 0.18);
+        border-color: rgba(232, 133, 12, 0.6);
+    }
+    .ctx-state-cancel:active {
+        transform: translateY(0.5px);
+    }
+    .ctx-state-cancel:focus-visible {
+        outline: 2px solid rgba(232, 133, 12, 0.55);
+        outline-offset: 1px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .ctx-state-dot { animation: none; }
     }
 </style>
