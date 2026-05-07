@@ -11,8 +11,12 @@ class Mind(Engine):
         self.name = name
 
     @staticmethod
-    def _strip_think_tags(text: str) -> str:
-        return re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+    def _text(result) -> str:
+        return result if isinstance(result, str) else result.get("text", "")
+
+    @classmethod
+    def _strip_think_tags(cls, text) -> str:
+        return re.sub(r"<think>[\s\S]*?</think>", "", cls._text(text)).strip()
 
     def _system_prompt(self) -> str:
         return (

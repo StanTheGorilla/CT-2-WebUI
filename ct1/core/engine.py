@@ -1740,9 +1740,10 @@ class Engine:
             {"role": "user", "content": prompt},
         ]
         try:
-            return await self._call(
+            result = await self._call(
                 messages, max_tokens=128, enable_thinking=False
             )
+            return result["text"] if isinstance(result, dict) else result
         except Exception:
             return None
 
