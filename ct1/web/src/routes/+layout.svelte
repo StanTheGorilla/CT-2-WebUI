@@ -62,8 +62,12 @@
 
     let pre = $state<HTMLPreElement | null>(null);
 
-    onMount(() => {
-        if (!pre) return;
+    // Donut animation — runs whenever the <pre> element is in the DOM.
+    // Using $effect (not onMount) so it re-arms when the user switches the
+    // classic background from "image" back to "default" without a reload.
+    $effect(() => {
+        const el = pre;
+        if (!el) return;
 
         const R1 = 1, R2 = 2, K2 = 5;
         const charW = 8.4, charH = 14;
@@ -75,7 +79,6 @@
         const luminanceChars = '.,-~:;=!*#$@';
 
         function renderFrame() {
-            if (!pre) return;
             const output: string[] = new Array(screenW * screenH).fill(' ');
             const zbuffer: number[] = new Array(screenW * screenH).fill(0);
 
@@ -110,13 +113,13 @@
                 }
                 frame += '\n';
             }
-            pre.textContent = frame;
+            if (el) el.textContent = frame;
             A += 0.03;
             B += 0.015;
         }
 
-        const id = setInterval(renderFrame, 100);
         renderFrame();
+        const id = setInterval(renderFrame, 100);
         return () => clearInterval(id);
     });
 </script>
