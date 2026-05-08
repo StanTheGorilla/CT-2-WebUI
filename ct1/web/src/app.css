@@ -333,6 +333,41 @@ pre {
     border-radius: inherit;
 }
 
+/* ─────────────────────────────────────────────────────────────────
+   Smooth light ↔ dark theme cross-fade
+
+   Two paths, picked at runtime in toggleTheme() (preferences.ts):
+
+   1. View Transitions API (modern Chromium): snapshots both states,
+      cross-fades at the compositor level — no per-property work.
+      We just slow the default fade so it matches the fallback feel.
+
+   2. Fallback: while the `.theme-transitioning` class is on <html>,
+      every element animates its color/border/shadow to the new
+      computed value. The class is removed after 320ms so it never
+      interferes with hover or active animations.
+   ───────────────────────────────────────────────────────────────── */
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: 320ms;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.theme-transitioning,
+.theme-transitioning *,
+.theme-transitioning *::before,
+.theme-transitioning *::after {
+    transition:
+        background-color 320ms cubic-bezier(0.4, 0, 0.2, 1),
+        color 320ms cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 320ms cubic-bezier(0.4, 0, 0.2, 1),
+        box-shadow 320ms cubic-bezier(0.4, 0, 0.2, 1),
+        fill 320ms cubic-bezier(0.4, 0, 0.2, 1),
+        stroke 320ms cubic-bezier(0.4, 0, 0.2, 1),
+        outline-color 320ms cubic-bezier(0.4, 0, 0.2, 1),
+        text-decoration-color 320ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
 /* ================================================================
    CT-2 DESIGN SYSTEM TOKENS
    Uses --c2-* var names alongside the base --bg/--text scale used

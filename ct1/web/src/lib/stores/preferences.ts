@@ -76,10 +76,34 @@ function applyTheme(theme: Theme) {
     document.documentElement.setAttribute('data-theme', theme);
 }
 
+// How long the theme cross-fade lasts. Must match `.theme-transitioning` in app.css.
+const THEME_TRANSITION_MS = 320;
+
+function flipTheme() {
+    preferences.update((p) => ({ ...p, theme: p.theme === 'light' ? 'dark' : 'light' }));
+}
+
 export function toggleTheme() {
-    preferences.update((p) => {
-        return { ...p, theme: p.theme === 'light' ? 'dark' : 'light' };
-    });
+    if (!browser) {
+        flipTheme();
+        return;
+    }
+
+    // Modern Chromium: snapshot-and-fade between old + new states. Smoothest path.
+    const startView = (document as Document & {
+        startViewTransition?: (cb: () => void) => unknown;
+    }).startViewTransition;
+    if (typeof startView === 'function') {
+        startView.call(document, flipTheme);
+        return;
+    }
+
+    // Fallback: enable a global color/shadow/border transition for the duration
+    // of the swap, then strip it so it doesn't interfere with hover/active anims.
+    const root = document.documentElement;
+    root.classList.add('theme-transitioning');
+    flipTheme();
+    setTimeout(() => root.classList.remove('theme-transitioning'), THEME_TRANSITION_MS);
 }
 
 export function setCt2Bg(bg: Ct2Bg) {
