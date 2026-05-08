@@ -309,7 +309,10 @@ pre {
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
         transition-duration: 120ms !important;
-        animation-duration: 120ms !important;
+        /* Do NOT clamp animation-duration — that would force infinite-loop
+           indicators (spinners, pulse dots, cursor blink) to run at 120ms
+           and look frantic. We collapse entrance animations explicitly via
+           @keyframes overrides below. */
     }
     /* Shorten entrance/one-shot animations but leave looping indicators alone */
     @keyframes slideUp { 0% { opacity: 1; transform: none; } }
