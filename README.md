@@ -694,7 +694,7 @@ CT-2-WebUI/
 │   ├── modes/        # YAML route definitions (direct, code, design)
 │   ├── prompts/      # System prompts (.txt, runtime-editable)
 │   ├── templates/    # Fallbacks + reusable snippets
-│   └── web/          # SvelteKit frontend (modern + classic UIs)
+│   └── web/          # SvelteKit frontend
 ├── models/           # .gguf files (gitignored)
 ├── bin/              # Downloaded llama-server binaries (gitignored)
 └── tests/

@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { goto } from '$app/navigation';
-    import { preferences, toggleTheme, setUiStyle, setCt2Bg } from '$lib/stores/preferences';
+    import { preferences, toggleTheme, setCt2Bg } from '$lib/stores/preferences';
     import { newConversation, setWorkspaceId, setMode, loadFromHistory } from '$lib/stores/chat';
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
     import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
@@ -1260,24 +1260,6 @@
 
                 <div class="c2-row">
                     <div class="c2-row-label">
-                        <div class="c2-row-name">UI style <span class="c2-param">/ uiStyle</span></div>
-                        <div class="c2-row-desc">Switch between the classic interface and this redesign.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <div class="c2-seg">
-                            {#each (['classic', 'ct2'] as const) as v}
-                                <button
-                                    class="c2-seg-btn"
-                                    class:c2-seg-active={$preferences.uiStyle === v}
-                                    onclick={() => setUiStyle(v)}
-                                >{v === 'ct2' ? 'Modern' : 'Classic'}</button>
-                            {/each}
-                        </div>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
                         <div class="c2-row-name">Web search</div>
                         <div class="c2-row-desc">Allow the model to query the web when the search pill is active.</div>
                     </div>
@@ -1304,7 +1286,7 @@
                         {#if confirmReset}
                             <div style="display:inline-flex;gap:8px;">
                                 <button class="c2-btn-ghost" onclick={() => confirmReset = false}>Cancel</button>
-                                <button class="c2-btn-danger" onclick={() => { preferences.set({ theme: 'light', uiStyle: 'ct2', classicBg: 'default', ct2Bg: 'image', showThinking: false, designRefinement: true, webSearchEnabled: false, requireCommandApproval: false, notifyOnDone: true, atlasMode: false, atlasEffortMode: 'auto', atlasEffortLevel: 3, atlasSelfVerification: true, atlasMultiPerspective: true, atlasIterativeRefinement: true }); confirmReset = false; }}>Yes, reset</button>
+                                <button class="c2-btn-danger" onclick={() => { preferences.set({ theme: 'light', ct2Bg: 'image', showThinking: false, designRefinement: true, webSearchEnabled: false, requireCommandApproval: false, notifyOnDone: true, atlasMode: false, atlasEffortMode: 'auto', atlasEffortLevel: 3, atlasSelfVerification: true, atlasMultiPerspective: true, atlasIterativeRefinement: true }); confirmReset = false; }}>Yes, reset</button>
                             </div>
                         {:else}
                             <button class="c2-btn-outline c2-btn-err" onclick={() => confirmReset = true}>Reset…</button>
