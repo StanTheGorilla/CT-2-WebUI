@@ -18,6 +18,8 @@ CT-2 wraps any local model in a structured pipeline (route → plan → generate
 - [Requirements](#requirements)
 - [Highlights](#highlights)
 - [Configuration](#configuration)
+- [Sharing on the home network](#sharing-on-the-home-network)
+- [Security model](#security-model)
 - [How each mode works](#how-each-mode-works) *(collapsed)*
 - [RAG](#rag-retrieval-augmented-generation) *(collapsed)*
 - [Atlas Mode](#atlas-mode) *(collapsed)*
@@ -108,6 +110,7 @@ Open **http://localhost:8000** and pick a model in **Settings**.
 | **Resilience** | Health monitor, auto-restart, config rollback on failed model swap |
 | **Privacy** | No API keys, no telemetry, no cloud |
 | **Two UIs** | A modern interface and a classic interface — switch in Settings |
+| **Single or shared** | Default single-user (binds `127.0.0.1`). Optional shared-password mode for hosting one model for the whole family — see [below](#sharing-on-the-home-network) |
 
 Full feature lists for each area are in the collapsed sections below.
 
@@ -157,9 +160,62 @@ rag:
   chunk_size: 400
   chunk_overlap: 100
   max_file_mb: 25
+
+auth:
+  mode: none                 # none | password   (accounts: roadmap)
+  password_hash: ""           # bcrypt; set via Settings → Security
+  session_secret: ""          # auto-generated on first start
+  allowed_origins: []         # extra LAN origins for CORS / WS, e.g. http://192.168.1.42:8000
+  bind_when_auth: 0.0.0.0     # what to bind to when mode != none
 ```
 
+> Override the bind address at run time with `CT2_HOST=127.0.0.1`. Useful when fronting CT-2 with a reverse proxy.
+
 All system prompts live in `ct1/prompts/` as `.txt` files and are editable at runtime from **Settings → Prompts**. Reset any prompt to its shipped default with the Reset button.
+
+---
+
+## Sharing on the home network
+
+CT-2 WebUI runs in **single-user mode by default** — it binds to `127.0.0.1` only, no login screen, just open the browser and use it. This is the right behaviour for the 99% case (you and your laptop).
+
+If you want to host one model and let your family use it from their own devices, switch on **shared-password mode**:
+
+1. Open **Settings → Security**.
+2. Enter a password and click **Enable password**.
+3. Restart CT-2.
+4. The bind opens to `0.0.0.0` so other devices on the LAN can reach `http://<your-pc-ip>:8000`.
+5. Each device sees a login screen on first visit. Sessions last 30 days per browser.
+
+Changing the password signs every other device out automatically. Switching back to single-user wipes the password and reverts the bind to localhost on next start.
+
+> **Adding LAN origins.** If browsers on the LAN connect by IP (`http://192.168.1.42:8000`), add that origin under `auth.allowed_origins` in `model_config.yaml` so the WebSocket origin check accepts it. CORS and WS upgrades both honour the same allow-list.
+
+> **Exposing beyond the home.** Don't expose CT-2 directly to the internet — terminate TLS at a reverse proxy (Caddy, Tailscale Funnel, Cloudflare Tunnel) and point it at `127.0.0.1:8000`. Then set `CT2_HOST=127.0.0.1` so CT-2 binds only to the proxy.
+
+A future release will add **per-user accounts** with isolated chat history. Today, all authed devices share one account in password mode — the foundation is already in place so accounts will land as a drop-in.
+
+---
+
+## Security model
+
+CT-2 WebUI is built to run on your own hardware. The default posture reflects that — a solo user shouldn't have to think about auth at all — but every defence still kicks in if the surface area widens.
+
+| Concern | What CT-2 does |
+|---------|---------------|
+| **Network exposure** | Default bind is `127.0.0.1`. Only widens to `0.0.0.0` when you turn on `auth.mode = password`. Override either way with `CT2_HOST`. |
+| **Browser drive-by attacks** | CORS allow-list is computed from `auth.mode` + your configured origins (no `*`). The `/ws/think` and `/ws/terminal` WebSockets reject any `Origin` not on the list — this closes the DNS-rebinding vector against localhost. |
+| **Authentication** | Optional shared-password mode: bcrypt-hashed password in `model_config.yaml`, HMAC-signed session cookies (`httpOnly`, `samesite=lax`), 30-day TTL. Rotating the password rotates the signing secret, invalidating every other device. |
+| **Privacy** | No telemetry, no analytics, no outbound calls except the inference backend you point CT-2 at, optional DuckDuckGo search, and the URL fetcher when you paste a link. Conversations live in a local SQLite file. |
+
+**Known limits — read these before opening it up.**
+
+- **No HTTPS by default.** Password mode sends the password in cleartext. On a trusted home network this is acceptable (the realistic threat is a roommate's laptop, not a sniffer); for anything more, terminate TLS at a reverse proxy.
+- **No rate limiting.** A logged-in user (or every browser tab they have open) can spam the inference backend.
+- **No SSRF guard on the URL fetcher** — when chat-pasting a link, the fetcher will resolve and fetch any URL the model is asked to load. Don't enable web search on a server with sensitive internal services on the same LAN.
+- **Per-user isolation isn't here yet.** Password mode is one shared account. If your family member needs their own private chat history, wait for the accounts release.
+
+Found something? Open a private security advisory on the GitHub repo (Security tab → Report a vulnerability) rather than a public issue.
 
 ---
 
@@ -490,6 +546,19 @@ The combined difficulty score (0.0–1.0) maps to candidate count and a **thinki
 | `POST` | `/api/restart` | Restart with optional context_size override |
 | `POST` | `/api/llama/update/{backend}` | Download latest llama-server binary |
 | `GET` | `/api/llama/update/{backend}/status` | Poll download progress |
+
+</details>
+
+<details>
+<summary><b>Authentication</b></summary>
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/auth/status` | `{mode, authenticated, needs_setup}` — the frontend hits this on boot to decide between the chat shell and the login screen. Always public. |
+| `POST` | `/api/auth/login` | `{password}` — sets the session cookie on success. 401 on wrong password. |
+| `POST` | `/api/auth/logout` | Clears the session cookie. |
+| `POST` | `/api/auth/password` | `{new_password, current_password?, enable?}` — first-time setup or password change. Rotates the session secret on change so other devices are signed out. |
+| `POST` | `/api/auth/disable` | `{password}` — switch back to single-user mode. Wipes the password hash and rotates the secret. |
 
 </details>
 
