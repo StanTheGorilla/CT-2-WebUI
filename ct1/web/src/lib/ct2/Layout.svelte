@@ -16,7 +16,7 @@
     import { modelSwitchCount, notifyModelSwitch, modelSwapping } from '$lib/stores/model';
     import { backgroundTasks, setModelSwapping, clearModelSwapping } from '$lib/stores/backgroundTasks';
     import { toasts, dismissToast, showToast } from '$lib/stores/toasts';
-    import { fly } from 'svelte/transition';
+    import { fly, fade } from 'svelte/transition';
 
     let { children } = $props();
 
@@ -328,7 +328,7 @@
         <!-- Center: phase indicator or model switcher -->
         <div class="c2-tb-center">
             {#if isGenerating}
-                <div class="c2-phase-pill">
+                <div class="c2-phase-pill" in:fade={{ duration: 160 }} out:fade={{ duration: 120 }}>
                     <span class="c2-pulse-dot"></span>
                     <span class="c2-phase-text">{currentPhaseLabel()}</span>
                     <div class="c2-phase-dots">
@@ -342,7 +342,7 @@
                     </div>
                 </div>
             {:else}
-                <div class="c2-model-pill">
+                <div class="c2-model-pill" in:fade={{ duration: 160, delay: 40 }} out:fade={{ duration: 120 }}>
                     <button
                         class="c2-model-btn"
                         class:c2-model-btn-open={modelPickerOpen}

@@ -1630,6 +1630,9 @@
         border-radius: 10px;
         overflow: hidden;
         position: relative;
+        /* Isolate paint/layout so per-token streaming doesn't reflow the
+           surrounding chat history. */
+        contain: layout paint style;
     }
 
     .c2-gen-card::before {
@@ -1671,8 +1674,8 @@
         color: var(--c2-fg-0);
         white-space: pre-wrap;
         word-break: break-word;
-        max-height: 400px;
-        overflow: hidden;
+        /* Let the card grow naturally; the chat feed handles scroll-to-bottom
+           so the cursor stays visible during streaming. */
     }
 
     /* ── Blinking cursor ───────────────────────────────────────── */
@@ -1684,8 +1687,10 @@
         vertical-align: text-bottom;
         background: var(--c2-accent);
         border-radius: 1px;
-        animation: c2-cursor-blink 1s step-end infinite;
+        /* Soft ease for a calm pulse instead of a hard terminal blink */
+        animation: c2-cursor-blink 1.05s ease-in-out infinite;
         opacity: 0.85;
+        will-change: opacity;
     }
 
     /* ── Stop button ───────────────────────────────────────────── */

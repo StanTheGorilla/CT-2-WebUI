@@ -409,8 +409,8 @@ pre {
     50% { opacity: 0.45; transform: scale(0.82); }
 }
 @keyframes c2-cursor-blink {
-    0%, 49% { opacity: 1; }
-    50%, 100% { opacity: 0; }
+    0%, 40% { opacity: 0.95; }
+    60%, 100% { opacity: 0.15; }
 }
 @keyframes c2-spin {
     to { transform: rotate(360deg); }
