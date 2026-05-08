@@ -1,5 +1,18 @@
+/* Inter + JetBrains Mono — still used by some classic-era components.
+   TODO: also self-host once we audit usage. */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap');
+
+/* Self-hosted Geist + Geist Mono + Instrument Serif via @fontsource.
+   Local woff2 means no FOUT, no Google Fonts round-trip, offline-safe. */
+@import '@fontsource/geist/300.css';
+@import '@fontsource/geist/400.css';
+@import '@fontsource/geist/500.css';
+@import '@fontsource/geist/600.css';
+@import '@fontsource/geist/700.css';
+@import '@fontsource/geist-mono/400.css';
+@import '@fontsource/geist-mono/500.css';
+@import '@fontsource/instrument-serif/400.css';
+@import '@fontsource/instrument-serif/400-italic.css';
 
 :root {
     --bg: #F5F3F0;
