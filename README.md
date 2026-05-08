@@ -1,244 +1,49 @@
-# CT-2
+# CT-2 WebUI
 
-A fully local AI assistant with a modern SvelteKit web interface. Works with **llama.cpp** (llama-server), **Ollama**, or **LM Studio** — no API keys, no cloud, no telemetry.
+A local AI assistant with a SvelteKit web interface. Runs against **llama.cpp** (`llama-server`), **Ollama**, or **LM Studio** — no API keys, no cloud, no telemetry.
 
-CT-2 wraps any local model in a structured multi-phase pipeline: deterministic routing → self-planning → streaming generation → validation → optional refinement. The result is significantly more consistent output quality than prompting the model directly.
+CT-2 wraps any local model in a structured pipeline (route → plan → generate → validate → optional refinement) instead of prompting it directly. The result is more consistent output for design, code, and structured tasks than naked chat — especially on small models.
 
----
-
-## Features
-
-### Core Pipeline
-- **Deterministic routing** — keyword/regex classifier resolves to a mode with zero AI overhead; all rules live in `ct1/modes/*.yaml`
-- **Self-planning** — lightweight JSON spec phase before generation (output type, components, structure)
-- **Streaming generation** — full token-level streaming with thinking traces visible in the UI
-- **Validation** — HTML structural checks, Python AST validation, JS brace matching; deterministic cleanup and repetition trimming
-- **Selective refinement** — optional self-refinement pass (Design mode: spacing, colors, hover states)
-- **Atlas Mode** — test-time compute scaling: generate K candidates, score each, select the best
-
-### Modes
-- **Chat** — direct conversational responses; question detection skips planning overhead
-- **Design** — spec → generate → validate → CSS-only refine; produces complete, clean single-file HTML/CSS pages
-- **Code** — generates Python, JavaScript, TypeScript, Go, Rust, Bash, SQL, and more
-- **Auto** — routes automatically to the best mode based on message content
-
-### Intelligence
-- **Thinking support** — extended reasoning (`<think>` blocks) auto-enabled for supported models (Qwen3, DeepSeek R1, Nemotron Nano, Gemma 4); visible as a collapsible trace in the UI
-- **Journal system** — learns from past interactions; injects relevant lessons into future prompts
-- **LLM-refined conversation titles** — heuristic extraction followed by a fast AI-generated title, delivered via WebSocket after generation completes
-- **Component cache** — thumbs-up on a Design or Code response saves it to a searchable cache for future injection
-
-### Web Search
-- **DuckDuckGo integration** — toggle the search button in the chat composer; no API key required
-- **LLM query extraction** — the model extracts a focused, de-pronominalized search query from your message and conversation history
-- **Explicit mode** — prefix your message with `!search ` to supply the exact query yourself
-- **Source tiering** — results sorted by domain quality (news wires, Wikipedia prioritized; social/JS-heavy sites skipped)
-- **Injected context** — search results formatted as a timestamped context block injected before generation
-
-### RAG (Retrieval-Augmented Generation)
-- **Local document grounding** — drop PDFs, text files, code, markdown, CSV, JSON, and HTML into `rag_data/`; CT-2 indexes them and injects relevant chunks into every message
-- **Per-conversation toggle** — enable RAG with the folder button next to Search; turn it off for chats where document context isn't needed
-- **Auto-index on startup** — unchanged files skip re-indexing (SHA256 hash check); new files are chunked and embedded automatically
-- **Embedding via the loaded model** — uses llama.cpp's `/v1/embeddings` endpoint, no second model required
-- **Configurable** — chunk size, overlap, top-k retrieval count, file size limits, dedicated embedding model port
-- **Works across all modes** — Chat, Design, Code, and Computer modes all see RAG context when the toggle is on
-- **Web UI upload** — drag-and-drop files in Settings → RAG, or drop them directly into the `rag_data/` folder
-
-### UI
-- **Live HTML preview** — resizable split panel that streams rendered HTML as it generates; opens automatically for Design outputs
-- **Context usage bar** — real-time token count and fill indicator in the chat input
-- **Download buttons** — save Design output as `index.html`; save Code output with the correct file extension per language
-- **Code syntax highlighting** — per-language highlighting with one-click copy on all code blocks
-- **Retry with versions** — regenerate any response; navigate all prior versions with ← 1/2 → controls
-- **Mode badges** — each conversation in the sidebar shows the mode it used
-- **Stop generation** — cancel mid-stream; connection closed immediately to stop GPU work
-- **Image attachments** — attach images to any message when a vision-capable model is loaded
-
-### Infrastructure
-- **Multi-backend support** — auto-detects and connects to llama-server (llama.cpp), Ollama, or LM Studio; no manual configuration required
-- **Auto-download llama-server** — downloads the correct Vulkan or CUDA build on first start
-- **In-place llama-server update** — Settings UI includes an update button that replaces the binary while the server is stopped
-- **Background health monitor** — pings the inference backend every 30 seconds; auto-restarts after 3 consecutive failures
-- **Config rollback** — if a new model fails to load, automatically reverts to the previous working model and restarts
-- **KV cache management** — clears the KV cache between conversations and on context switches to prevent cross-contamination
-- **AMD Vulkan safe shutdown** — 30-second graceful drain before SIGTERM to prevent GPU memory fragmentation
-
-### Memory & History
-- **SQLite conversation history** — all messages, routes, and feedback stored locally
-- **Full-text search** — search across all past conversations from the sidebar
-- **Session restore** — conversations grouped by time (Today / Yesterday / This Week / Older); click any to restore
-- **Thumbs up / down feedback** — per-message; positive feedback on design/code responses auto-caches the output
-
-### Atlas Mode
-
-Atlas Mode applies test-time compute scaling to improve output quality for demanding tasks. Instead of generating a single response, CT-2 generates **K candidates** and returns the best one.
-
-**How K is determined**
-
-Atlas estimates task difficulty from four signals before generating anything:
-
-| Signal | Weight | Source |
-|--------|--------|--------|
-| Cache similarity | 30% | How closely the request matches cached component embeddings |
-| Journal pattern match | 25% | Overlap with lessons learned from past interactions |
-| Keyword complexity | 20% | Density of complexity keywords + message length |
-| Conversation depth | 25% | Number of prior turns in the session |
-
-The combined difficulty score (0.0–1.0) maps to a candidate count:
-
-| Difficulty | K candidates |
-|------------|-------------|
-| < 0.4 | 1 (single pass) |
-| 0.4–0.6 | 2 |
-| 0.6–0.8 | 3 |
-| ≥ 0.8 | 5 |
-
-The same score selects a **thinking tier** (nothink → light → standard → hard → extreme) that controls the token budget allocated to the model's reasoning trace.
-
-**How candidates are scored**
-
-- Candidate 0 (baseline) streams live to the UI as normal.
-- Candidates 1+ run silently in the background with a different perspective prompt injected (e.g. "systems architect", "performance engineer", "security-conscious lead").
-- Each candidate is scored by running self-generated test cases against the output and blending the result with the model's own reflection score (60% test / 40% reflection).
-- The highest-scoring candidate is selected and returned.
-- If all candidates score below 0.5 and the model's context window is ≥ 32K, Atlas attempts one iterative repair pass using failure analysis + Plan-Refine Chain of Thought.
-
-**When to use it**
-
-Enable Atlas Mode for tasks where output quality matters more than response time: complex algorithms, multi-constraint code, architecture design, or any request where a single generation pass produces inconsistent results.
-
-**Performance tradeoff**
-
-With K = 2 candidates the total generation time roughly doubles; K = 5 takes ~5×. Candidate 0 streams immediately so the UI is never blank — additional candidates run in the background and the best result is shown when selection completes. For simple or conversational messages Atlas will usually set K = 1 automatically (no overhead).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![SvelteKit](https://img.shields.io/badge/SvelteKit-5-orange)](https://kit.svelte.dev)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue)](https://www.python.org)
+[![Backends](https://img.shields.io/badge/Backends-llama.cpp%20%7C%20Ollama%20%7C%20LM%20Studio-green)](#requirements)
 
 ---
 
-## RAG (Retrieval-Augmented Generation)
+## Table of contents
 
-RAG grounds the model's responses in your own documents — project specs, API docs, research notes, brand guidelines, meeting transcripts. CT-2 indexes text files from a local folder and injects the most relevant chunks as context before every message.
-
-### How it works
-
-```
-┌─────────────────────────────────────────┐
-│  rag_data/                              │
-│  ├── api-docs.md                        │
-│  ├── brand-guide.pdf                    │
-│  └── project-spec.txt                   │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-  Indexing  (startup + manual re-index)
-  ├─ Parse: PDF (PyMuPDF), CSV/TSV, JSON, plain text (.md/.py/.txt/...)
-  ├─ Chunk: split on paragraph boundaries, merge to ~400 tokens with 100-token overlap
-  ├─ Embed: POST /v1/embeddings → float32 vectors
-  └─ Store: SQLite (metadata) + numpy .npy (embeddings, memory-mapped)
-               │
-               ▼
-  Per-message  (when RAG toggle is on)
-  ├─ Embed user query → same embedding endpoint
-  ├─ Cosine similarity search → top-k chunks (default 5)
-  └─ Format as [RAG CONTEXT] block → prepend to message before generation
-```
-
-### Setup
-
-1. **Enable RAG** in `model_config.yaml`:
-   ```yaml
-   rag:
-     enabled: true
-   ```
-
-2. **Add files** to the `rag_data/` folder (created automatically):
-   - Drag-and-drop files directly into the folder, OR
-   - Use **Settings → RAG** to upload files through the Web UI
-
-3. **Restart** CT-2. Files are indexed on startup — you'll see `[rag] Indexed: ...` in the console.
-
-4. **Toggle RAG on** in the chat composer — click the folder icon next to the Search button.
-
-### Supported file types
-
-| Category | Extensions |
-|----------|-----------|
-| Documents | `.pdf`, `.txt`, `.md`, `.rst` |
-| Code | `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.java`, `.go`, `.rs`, `.c`, `.cpp`, `.h`, `.cs`, `.rb`, `.php` |
-| Web | `.html`, `.htm`, `.css`, `.scss`, `.less`, `.svg` |
-| Data | `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.xml`, `.csv`, `.tsv` |
-| Scripts | `.sh`, `.bat`, `.ps1`, `.sql` |
-
-### Configuration
-
-```yaml
-rag:
-  enabled: false            # set to true to activate
-  data_dir: rag_data        # folder for document files
-  embedding_model: ""       # empty = use chat model for embeddings
-  embedding_port: 8081      # port for dedicated embedding model (if set)
-  chunks_per_query: 5       # how many chunks to inject per message
-  chunk_size: 400           # target tokens per chunk
-  chunk_overlap: 100        # token overlap between consecutive chunks
-  max_file_mb: 25           # skip files larger than this
-```
-
-### Context budget
-
-Each RAG query injects approximately **chunks_per_query × chunk_size** tokens. With defaults (5 × 400 = 2,000 tokens), a 4K model has ~2,000 tokens left for conversation, which is tight. Recommendations:
-
-| Model context | chunks_per_query | Effective remaining |
-|--------------|-----------------|-------------------|
-| 4K | 2–3 | Tight — reduce chunks in Settings |
-| 8K | 3–5 | Usable |
-| 16K+ | 5–10 | Comfortable |
-
-CT-2's existing context compaction still works — if history + RAG exceeds the limit, older turns are automatically summarized.
-
-### Dedicated embedding model (optional)
-
-By default, CT-2 uses the loaded chat model for embeddings. You can optionally download a lightweight dedicated embedding model for faster, lower-VRAM indexing:
-
-1. Open **Settings → RAG → Embedding Model**
-2. Search Hugging Face for `nomic-embed-text-v1.5` or `bge-small-en` (~130–140 MB)
-3. Download and select it — CT-2 spins up a second llama-server on the embedding port
-
-Dedicated embedding models use negligible VRAM and start in seconds.
-
-### API
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/rag/status` | Index state, chunk count, context cost, supported types |
-| `GET` | `/api/rag/files` | List all indexed files with hash/size/chunks/date |
-| `POST` | `/api/rag/upload` | Upload a file (multipart form) → auto-index |
-| `DELETE` | `/api/rag/files/{name}` | Remove a file and its chunks from the index |
-| `POST` | `/api/rag/reindex` | Full re-index of the data folder |
-| `POST` | `/api/rag/search` | Test query → returns top matching chunks with scores |
+- [Why CT-2 WebUI](#why-ct-2-webui)
+- [Quick start](#quick-start)
+- [Requirements](#requirements)
+- [Highlights](#highlights)
+- [Configuration](#configuration)
+- [How each mode works](#how-each-mode-works) *(collapsed)*
+- [RAG](#rag-retrieval-augmented-generation) *(collapsed)*
+- [Atlas Mode](#atlas-mode) *(collapsed)*
+- [API reference](#api-reference) *(collapsed)*
+- [WebSocket protocol](#websocket-protocol) *(collapsed)*
+- [Troubleshooting](#troubleshooting)
+- [Project layout](#project-layout)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## Requirements
+## Why CT-2 WebUI
 
-- **Python 3.11+**
-- **Node.js 20+**
-- **An inference backend** — one of:
-  - **llama.cpp** (`llama-server`) — auto-downloaded on first start; requires a `.gguf` model file
-  - **Ollama** — if `ollama serve` is running on port `11434`, CT-2 detects it automatically
-  - **LM Studio** — if LM Studio's local server is running on port `1234`, CT-2 detects it automatically
+Most local-LLM front-ends are thin chat wrappers. CT-2 WebUI adds the pieces a single naked prompt usually misses:
 
-**Recommended GGUF models** (for llama-server backend):
-- [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF) — best balance of speed and quality; full thinking support
-- [Gemma 4 E4B](https://huggingface.co/google/gemma-4-e4b-it-GGUF) — Google's efficient 4B model
-- [NVIDIA Nemotron-Mini-4B](https://huggingface.co/nvidia/Nemotron-Mini-4B-Instruct-GGUF) — strong reasoning
-
-> **Note:** Models without `<think>` support work but produce less consistent multi-step output. Models smaller than ~1.7B are unreliable for structured output.
-
-> **Vision:** If your model has a paired multimodal projector (`mmproj-*.gguf` in the same directory), CT-2 detects it automatically and enables image attachments.
+- **A real pipeline.** Routing → planning → generation → validation → optional refinement. Quality stays consistent across runs instead of being a coin flip.
+- **A working journal.** The app remembers lessons from past interactions and injects relevant ones into future prompts.
+- **Test-time compute.** Atlas Mode generates K candidates, scores them against self-generated tests, and returns the best — for tasks where one shot isn't enough.
+- **Local document grounding.** Drop files into a folder, RAG indexes them on startup, and every message can pull in the most relevant chunks.
+- **Multi-backend out of the box.** Auto-detects llama-server, Ollama, or LM Studio. The llama-server binary downloads itself on first start.
+- **No telemetry, no accounts, no API keys.** Everything runs on your machine.
 
 ---
 
-## Quick Start
-
-### 1. Clone and install
+## Quick start
 
 ```bash
 git clone https://github.com/StanTheGorilla/CT-2-WebUI.git
@@ -247,121 +52,90 @@ cd CT-2-WebUI
 # Python backend
 pip install -r ct1/requirements.txt
 
-# Web frontend (built automatically on first start — optional to pre-build)
+# Web frontend (auto-builds on first start; pre-build is optional)
 cd ct1/web && npm install && cd ../..
-```
 
-### 2. Add a model (llama-server backend only)
-
-Place any instruction-tuned `.gguf` file in the `models/` directory:
-
-```bash
+# Add a model (skip if using Ollama or LM Studio)
 huggingface-cli download Qwen/Qwen3-4B-GGUF --local-dir models/
-```
 
-Skip this step if you're using Ollama or LM Studio — CT-2 reads their model lists directly.
-
-### 3. Start
-
-```bash
+# Start
 python -m ct1.server.api
 ```
 
-Open **http://localhost:8000** — go to **Settings** to select your model and backend.
+Open **http://localhost:8000** and pick a model in **Settings**.
 
-> On first start with llama-server: the SvelteKit frontend is built and `llama-server` is downloaded for your GPU (Vulkan or CUDA). This takes a minute; subsequent starts are instant.
+> First start: the SvelteKit frontend is built and `llama-server` is downloaded for your GPU (Vulkan or CUDA). Subsequent starts are instant.
 
 ---
 
-## Project Structure
+## Requirements
 
-```
-CT-2-WebUI/
-├── ct1/
-│   ├── core/
-│   │   ├── orchestrator.py    # Main pipeline (route → plan → generate → validate → refine)
-│   │   ├── engine.py          # LLM interface (streaming, thinking, search query extraction)
-│   │   ├── atlas.py           # Atlas Mode (multi-candidate test-time compute)
-│   │   ├── formatter.py       # Output cleanup, type detection, HTML/CSS polishing
-│   │   ├── validator.py       # Structural validation (HTML, Python AST, JS)
-│   │   ├── assembler.py       # Design component assembly and patching
-│   │   ├── gguf_reader.py     # Reads context_length from GGUF binary headers
-│   │   ├── web_fetcher.py     # URL content extraction for in-chat URL pasting
-│   │   └── web_searcher.py    # DuckDuckGo search with source tiering
-│   ├── rag/
-│   │   ├── config.py          # RAG configuration (loaded from model_config.yaml)
-│   │   ├── parser.py          # Text extraction from .pdf, .txt, .md, .csv, .json, code
-│   │   ├── chunker.py         # Paragraph-level chunking with overlap
-│   │   ├── embedder.py        # Batch embeddings via llama-server /v1/embeddings
-│   │   ├── store.py           # SQLite metadata + numpy .npy embedding store
-│   │   ├── retriever.py       # Query → embed → cosine similarity → top-k chunks
-│   │   └── indexer.py         # Full pipeline: hash → parse → chunk → embed → store
-│   ├── server/
-│   │   ├── api.py             # FastAPI + WebSocket server (all endpoints)
-│   │   ├── launcher.py        # llama-server process management
-│   │   ├── backend_detector.py # Auto-detects Ollama, LM Studio, llama-server
-│   │   ├── health.py          # Dead-process detection utilities
-│   │   ├── downloader.py      # llama-server binary download + extraction
-│   │   ├── cache_policy.py    # KV cache clear decision logic
-│   │   └── model_config.yaml  # Model and inference configuration
-│   ├── memory/
-│   │   ├── conversation_db.py # SQLite conversation + message storage
-│   │   ├── journal.py         # Learning journal (lessons from past interactions)
-│   │   ├── journal_reader.py  # Journal retrieval and stats
-│   │   ├── session_store.py   # Session persistence
-│   │   └── component_cache.py # Cached high-quality design/code outputs
-│   ├── modes/
-│   │   ├── registry.py        # ModeRegistry: YAML loading, routing, hot-reload
-│   │   ├── direct.yaml        # Chat mode (ROUTE_DIRECT)
-│   │   ├── code.yaml          # Code mode (ROUTE_CODE)
-│   │   └── design.yaml        # Design mode (ROUTE_DESIGN)
-│   ├── prompts/
-│   │   ├── manager.py         # PromptManager (load, get, save, reset, hot-reload)
-│   │   └── *.txt              # All system prompts — editable at runtime via Settings
-│   ├── templates/
-│   │   ├── fallbacks.py       # Deterministic fallback outputs when generation fails
-│   │   └── snippets.py        # Reusable component snippets
-│   └── web/                   # SvelteKit frontend
-│       └── src/
-│           ├── routes/
-│           │   ├── +page.svelte          # Main chat interface
-│           │   ├── +layout.svelte        # App shell + sidebar
-│           │   ├── settings/+page.svelte # Settings UI
-│           │   └── journal/+page.svelte  # Journal viewer
-│           └── lib/
-│               ├── stores/               # Svelte stores (chat, conversations, preferences)
-│               ├── components/           # Shared UI components
-│               └── markdown.ts           # Markdown + LaTeX renderer
-├── models/                    # Place .gguf files here (gitignored)
-├── bin/                       # Downloaded llama-server binaries (gitignored)
-└── tests/
-```
+- **Python 3.11+**
+- **Node.js 20+**
+- **An inference backend** — one of:
+  - **llama.cpp** (`llama-server`) — auto-downloaded; needs a `.gguf` model file in `models/`
+  - **Ollama** — detected automatically if `ollama serve` is on `:11434`
+  - **LM Studio** — detected automatically if its local server is on `:1234`
+
+**Recommended GGUF models** (llama-server backend):
+
+| Model | Why |
+|------|-----|
+| [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B-GGUF) | Best balance of speed + quality; full thinking support |
+| [Gemma 4 E4B](https://huggingface.co/google/gemma-4-e4b-it-GGUF) | Google's efficient 4B |
+| [Nemotron-Mini-4B](https://huggingface.co/nvidia/Nemotron-Mini-4B-Instruct-GGUF) | Strong reasoning |
+
+> Models without `<think>` support work but produce less consistent multi-step output. Models smaller than ~1.7B are unreliable for structured outputs.
+>
+> If your model has a paired multimodal projector (`mmproj-*.gguf` next to the main file), CT-2 detects it and enables image attachments automatically.
+
+---
+
+## Highlights
+
+| Area | What you get |
+|------|-------------|
+| **Modes** | Chat · Design · Code · Auto (router-driven). Manual override per-message. |
+| **Streaming** | Token-level streaming of both answer and `<think>` trace |
+| **Live HTML preview** | Resizable split panel; opens automatically for Design output |
+| **Web search** | DuckDuckGo, no API key. LLM extracts a focused query from your message + history |
+| **RAG** | Local document grounding (PDF/text/code/CSV/JSON/HTML). Auto-index on startup |
+| **Atlas Mode** | Multi-candidate test-time compute with self-generated test scoring |
+| **Journal** | Lessons from past interactions are injected into future prompts |
+| **Component cache** | Thumbs-up on a Design or Code response saves it for future reference injection |
+| **History** | SQLite, full-text search, restore any conversation |
+| **Backends** | llama.cpp · Ollama · LM Studio — auto-detected |
+| **Resilience** | Health monitor, auto-restart, config rollback on failed model swap |
+| **Privacy** | No API keys, no telemetry, no cloud |
+| **Two UIs** | A modern interface and a classic interface — switch in Settings |
+
+Full feature lists for each area are in the collapsed sections below.
 
 ---
 
 ## Configuration
 
-`ct1/server/model_config.yaml` — edit manually or via the Settings UI:
+`ct1/server/model_config.yaml` — edit by hand or via Settings:
 
 ```yaml
 executable: auto          # auto-discovers llama-server in bin/ or PATH
-backend: vulkan           # llama-server GPU backend: vulkan (AMD/Intel) or cuda (NVIDIA)
-models_dir: models        # directory containing .gguf files
+backend: vulkan           # vulkan (AMD/Intel) or cuda (NVIDIA)
+models_dir: models
 active_model: null        # set via Settings UI
 
-port: 8080                # llama-server internal port
-n_gpu_layers: 99          # GPU layer offload (99 = all layers)
-context_size: 32768       # context window in tokens (capped by model's GGUF max)
-parallel_slots: 1         # concurrent request slots
+port: 8080
+n_gpu_layers: 99          # 99 = offload all
+context_size: 32768       # capped by model's GGUF max
+parallel_slots: 1
 
 temperature: 0.6
 top_p: 0.9
 top_k: 40
 presence_penalty: 1.0
 frequency_penalty: 0.0
-thinking_budget: -1       # -1 = unlimited thinking tokens
+thinking_budget: -1       # -1 = unlimited
 
-task_overrides:           # per-mode parameter overrides (editable in Settings)
+task_overrides:
   design:
     temperature: 0.4
   code:
@@ -375,41 +149,39 @@ task_overrides:           # per-mode parameter overrides (editable in Settings)
 journal:
   path: ct1/data/journals
   lessons_on_startup: 10
-sessions:
-  path: ct1/data/sessions
 
-# ── RAG (Retrieval-Augmented Generation) ────────
 rag:
-  enabled: false            # set to true to activate document indexing
-  data_dir: rag_data        # folder for .pdf, .txt, .md, .py, .json, etc.
-  # embedding_model: ""     # empty = use loaded chat model for embeddings
-  # embedding_port: 8081     # port for dedicated embedding model
-  chunks_per_query: 5        # top-k chunks injected per message
-  chunk_size: 400            # target tokens per chunk
-  chunk_overlap: 100         # token overlap between chunks
-  max_file_mb: 25            # skip files larger than this
+  enabled: false
+  data_dir: rag_data
+  chunks_per_query: 5
+  chunk_size: 400
+  chunk_overlap: 100
+  max_file_mb: 25
 ```
+
+All system prompts live in `ct1/prompts/` as `.txt` files and are editable at runtime from **Settings → Prompts**. Reset any prompt to its shipped default with the Reset button.
 
 ---
 
-## How Each Mode Works
+## How each mode works
 
-All messages pass through a shared entry point first:
+<details>
+<summary><b>Routing (shared entry point)</b></summary>
 
 ```
 User Message
     │
     ▼
-┌──────────────────────────────────────────┐
-│  ROUTE  (instant, no AI)                 │
-│  Keyword/regex classifier against        │
-│  ct1/modes/*.yaml patterns.              │
-│  Manual mode override skips this.        │
-│                                          │
+┌─────────────────────────────────────────┐
+│  ROUTE  (instant, no AI)                │
+│  Keyword/regex classifier against       │
+│  ct1/modes/*.yaml patterns.             │
+│  Manual mode override skips this.       │
+│                                         │
 │  → ROUTE_DIRECT   (Chat)                │
 │  → ROUTE_DESIGN   (Design)              │
-│  → ROUTE_CODE     (Code)               │
-└──────────────────┬───────────────────────┘
+│  → ROUTE_CODE     (Code)                │
+└──────────────────┬──────────────────────┘
                    │
          ┌─────────┴──────────┐
          │ Context detection  │  Previous code? Edit intent? New request?
@@ -418,12 +190,32 @@ User Message
         ┌──────────┼──────────┐
         ▼          ▼          ▼
       CHAT       DESIGN      CODE
-  (see below) (see below) (see below)
 ```
 
----
+Each mode is a YAML file in `ct1/modes/`. The `ModeRegistry` auto-discovers and hot-reloads them. New modes can be added by dropping a YAML file in or via the API.
 
-### Chat Mode (`ROUTE_DIRECT`)
+```yaml
+name: code
+route_id: ROUTE_CODE
+description: Code generation, debugging, refactoring
+priority: 3
+patterns:
+  - write\s+(?:\w+\s+){0,4}(?:function|class|script|...)
+  - implement\b
+negative_patterns:
+  - landing page
+task_overrides:
+  temperature: 0.25
+  top_p: 0.85
+  presence_penalty: 1.3
+```
+
+`negative_patterns` prevent false positives — "write a Python script for a landing page" routes to Design, not Code.
+
+</details>
+
+<details>
+<summary><b>Chat mode (ROUTE_DIRECT)</b></summary>
 
 ```
 Message
@@ -450,38 +242,33 @@ Response rendered as Markdown
   └─ Thinking trace (collapsible)
 ```
 
----
+</details>
 
-### Design Mode (`ROUTE_DESIGN`)
+<details>
+<summary><b>Design mode (ROUTE_DESIGN)</b></summary>
 
 ```
 Message
   ▼
-Phase 0 · Spec Generation
+Phase 0 · Spec generation
   │  Structured JSON plan — thinking disabled for speed
-  │  Output: { page_title, color_theme, layout_order, components[], interactions[] }
-  │
+  │  { page_title, color_theme, layout_order, components[], interactions[] }
   ▼
-Phase 0.5 · Spec Normalization  (mechanical, no AI)
+Phase 0.5 · Spec normalization  (mechanical)
   │  Strip invalid interaction names, normalize unknown component types
-  │
   ▼
-Phase 1 · HTML Generation  (streaming)
+Phase 1 · HTML generation  (streaming)
   │  Spec-guided prompt + Tailwind CDN instruction
   │  Temperature: 0.4  |  Full thinking enabled
-  │  Complete single-file HTML page streamed token-by-token
   │  Live HTML preview panel renders as tokens arrive
-  │
   ▼
 Phase 2 · Cleanup  (mechanical)
   │  strip_think_tags() → extract_code() → emit draft
-  │
   ▼
-Phase 3 · CSS-Only Refinement  (AI)
+Phase 3 · CSS-only refinement  (AI)
   │  Extract only the <style> block (~2–5 KB)
   │  Model polishes spacing, colors, hover states
-  │  Improved CSS reassembled back into page
-  │
+  │  Improved CSS reassembled back into the page
   ▼
 Output
   ├─ Live resizable HTML preview panel
@@ -490,9 +277,9 @@ Output
   └─ Thinking trace (collapsible)
 ```
 
-**Design edit (follow-up message):**
+**Design edits** (follow-up message):
 ```
-Edit intent detected (keyword match)
+Edit intent detected
   ▼
 Retrieve persisted spec → identify target component(s)
   ▼
@@ -501,9 +288,10 @@ patch_component_in_page() — surgical replacement in existing HTML
 Updated page → preview refreshes
 ```
 
----
+</details>
 
-### Code Mode (`ROUTE_CODE`)
+<details>
+<summary><b>Code mode (ROUTE_CODE)</b></summary>
 
 ```
 Message
@@ -541,131 +329,209 @@ Message
        ▼
      Output
        ├─ Code block with syntax highlighting + copy button
-       ├─ Language badge + download button (correct extension)
-       ├─ Explanation text (if model wrote prose before the fence)
-       ├─ Plan card (output_type, complexity)
+       ├─ Language badge + download (correct extension)
+       ├─ Explanation prose (if model wrote any before the fence)
+       ├─ Plan card
        └─ Thinking trace (collapsible)
 ```
 
-**Atlas Mode** (optional):
-```
-Estimate difficulty → Generate K candidates → Score each
-→ Select best → Continue to Format/Validate
-Candidate 0 streams live; others run silently
-```
+</details>
 
 ---
 
-## Modes System
+## RAG (Retrieval-Augmented Generation)
 
-Each mode is a YAML file in `ct1/modes/`. The `ModeRegistry` auto-discovers and hot-reloads them. Custom modes can be created via the API or by adding a new YAML file.
+RAG grounds the model's responses in your own documents — project specs, API docs, research notes, brand guidelines, meeting transcripts. CT-2 indexes text files from a local folder and injects the most relevant chunks before every message.
+
+<details>
+<summary><b>How it works</b></summary>
+
+```
+┌─────────────────────────────────────────┐
+│  rag_data/                              │
+│  ├── api-docs.md                        │
+│  ├── brand-guide.pdf                    │
+│  └── project-spec.txt                   │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+  Indexing  (startup + manual re-index)
+  ├─ Parse: PDF (PyMuPDF), CSV/TSV, JSON, plain text (.md/.py/.txt/...)
+  ├─ Chunk: split on paragraph boundaries, merge to ~400 tokens with 100-token overlap
+  ├─ Embed: POST /v1/embeddings → float32 vectors
+  └─ Store: SQLite (metadata) + numpy .npy (embeddings, memory-mapped)
+               │
+               ▼
+  Per-message  (when RAG toggle is on)
+  ├─ Embed user query → same embedding endpoint
+  ├─ Cosine similarity search → top-k chunks (default 5)
+  └─ Format as [RAG CONTEXT] block → prepend to message before generation
+```
+
+</details>
+
+<details>
+<summary><b>Setup, supported types, configuration</b></summary>
+
+**Setup**
+
+1. Enable RAG in `model_config.yaml`:
+   ```yaml
+   rag:
+     enabled: true
+   ```
+2. Add files to the `rag_data/` folder (created automatically) — drag-and-drop, or use **Settings → RAG**.
+3. Restart CT-2. Files are indexed on startup — you'll see `[rag] Indexed: ...` in the console.
+4. Toggle RAG on in the chat composer — folder icon next to Search.
+
+**Supported types**
+
+| Category | Extensions |
+|----------|-----------|
+| Documents | `.pdf`, `.txt`, `.md`, `.rst` |
+| Code | `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.java`, `.go`, `.rs`, `.c`, `.cpp`, `.h`, `.cs`, `.rb`, `.php` |
+| Web | `.html`, `.htm`, `.css`, `.scss`, `.less`, `.svg` |
+| Data | `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.xml`, `.csv`, `.tsv` |
+| Scripts | `.sh`, `.bat`, `.ps1`, `.sql` |
+
+**Configuration**
 
 ```yaml
-name: code
-route_id: ROUTE_CODE
-description: Code generation, debugging, refactoring
-priority: 3
-patterns:
-  - write\s+(?:\w+\s+){0,4}(?:function|class|script|...)
-  - implement\b
-  - debug\b
-negative_patterns:
-  - landing page
-lang_patterns:
-  - \bpython\b
-  - \bjavascript\b
-task_overrides:
-  temperature: 0.25
-  top_p: 0.85
-  presence_penalty: 1.3
+rag:
+  enabled: false            # set true to activate
+  data_dir: rag_data
+  embedding_model: ""       # empty = use chat model for embeddings
+  embedding_port: 8081      # port for dedicated embedding model (if set)
+  chunks_per_query: 5
+  chunk_size: 400
+  chunk_overlap: 100
+  max_file_mb: 25
 ```
 
-Routing evaluates modes in priority order. `negative_patterns` prevent false positives — e.g., "write a Python script for a landing page" routes to Design, not Code.
+**Context budget**
+
+Each query injects roughly `chunks_per_query × chunk_size` tokens. With defaults (5 × 400 = 2,000 tokens), a 4K model has ~2,000 left for conversation. Recommendations:
+
+| Model context | chunks_per_query | Comfort |
+|--------------|-----------------|---------|
+| 4K | 2–3 | Tight |
+| 8K | 3–5 | Usable |
+| 16K+ | 5–10 | Comfortable |
+
+CT-2's context compaction still works — if history + RAG exceed the limit, older turns are summarized.
+
+**Dedicated embedding model (optional)**
+
+By default the loaded chat model is used for embeddings. For faster, lower-VRAM indexing:
+
+1. Open **Settings → RAG → Embedding Model**
+2. Search Hugging Face for `nomic-embed-text-v1.5` or `bge-small-en` (~130–140 MB)
+3. Download and select it — CT-2 spins up a second llama-server on the embedding port
+
+</details>
 
 ---
 
-## Web Search
+## Atlas Mode
 
-Web search is off by default. Enable it per-message with the search button in the chat composer.
+Atlas Mode applies **test-time compute scaling** to improve output quality on demanding tasks. Instead of generating a single response, CT-2 generates **K candidates** and returns the best one.
 
-1. You send a message with web search enabled
-2. The LLM extracts a precise, standalone search query from your message and recent history (resolves pronouns)
-3. CT-2 queries DuckDuckGo and retrieves up to 5 results
-4. Results are sorted by source quality (news wires and encyclopaedic sources first; social media and JS-heavy sites skipped)
-5. Snippets are formatted into a timestamped context block injected before your message
-6. The model answers using up-to-date web information
+<details>
+<summary><b>How K is determined</b></summary>
 
-**Explicit query mode:** Prefix your message with `!search ` to bypass LLM query extraction and use your exact text.
+Atlas estimates task difficulty from four signals before generating anything:
+
+| Signal | Weight | Source |
+|--------|--------|--------|
+| Cache similarity | 30% | How closely the request matches cached component embeddings |
+| Journal pattern match | 25% | Overlap with lessons learned from past interactions |
+| Keyword complexity | 20% | Density of complexity keywords + message length |
+| Conversation depth | 25% | Number of prior turns in the session |
+
+The combined difficulty score (0.0–1.0) maps to candidate count and a **thinking tier** (nothink → light → standard → hard → extreme):
+
+| Difficulty | K candidates |
+|------------|-------------|
+| < 0.4 | 1 (single pass) |
+| 0.4–0.6 | 2 |
+| 0.6–0.8 | 3 |
+| ≥ 0.8 | 5 |
+
+</details>
+
+<details>
+<summary><b>How candidates are scored</b></summary>
+
+- Candidate 0 (baseline) streams live to the UI as normal.
+- Candidates 1+ run silently in the background with a different perspective prompt injected (e.g. "systems architect", "performance engineer", "security-conscious lead").
+- Each candidate is scored by running self-generated test cases against the output and blending with the model's own reflection score (60% test / 40% reflection).
+- The highest-scoring candidate is selected and returned.
+- If all candidates score below 0.5 and the model's context window is ≥ 32K, Atlas attempts one iterative repair pass using failure analysis + Plan-Refine Chain of Thought.
+
+</details>
+
+**When to use it.** Tasks where output quality matters more than response time: complex algorithms, multi-constraint code, architecture design, anything where one shot is inconsistent. With K=2 generation roughly doubles in time; K=5 is ~5×. Candidate 0 streams immediately so the UI is never blank — others run in the background and the best result is shown when selection completes. For simple or conversational messages Atlas usually picks K=1 (no overhead).
 
 ---
 
-## Prompts
+## API reference
 
-All system prompts are editable at runtime from **Settings → Prompts** — no restart required. Each prompt is a `.txt` file in `ct1/prompts/`. Reset any prompt to its shipped default with the Reset button.
-
-| Prompt | Purpose |
-|--------|---------|
-| `generator_text` | Chat mode system prompt |
-| `generator_design` | Design mode generator |
-| `generator_code` | Code mode generator |
-| `refine_css` | CSS-only refinement pass |
-| `solo_plan` | Planning phase prompt |
-| `spec_generator` | Design spec generation prompt |
-
----
-
-## API Reference
-
-### Server & Model
+<details>
+<summary><b>Server &amp; model</b></summary>
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/status` | Inference backend health check |
 | `GET` | `/api/config` | Full runtime configuration |
-| `GET` | `/api/models` | List available models (size, thinking support, vision, context length) |
-| `GET` | `/api/model` | Active model name, capabilities, and context size |
+| `GET` | `/api/models` | List available models (size, thinking, vision, context) |
+| `GET` | `/api/model` | Active model name, capabilities, context size |
 | `POST` | `/api/model/select` | Select a model and restart; auto-rollback on failure |
 | `POST` | `/api/backend/select` | Switch GPU backend (vulkan/cuda) and restart |
 | `POST` | `/api/restart` | Restart with optional context_size override |
 | `POST` | `/api/llama/update/{backend}` | Download latest llama-server binary |
 | `GET` | `/api/llama/update/{backend}/status` | Poll download progress |
 
-### Generation
+</details>
+
+<details>
+<summary><b>Generation, RAG, conversations, modes, prompts, cache</b></summary>
+
+**Generation**
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `WS` | `/ws/think` | Streaming generation WebSocket |
-| `GET` | `/api/web-search` | Run a DuckDuckGo search and return structured results |
+| `GET` | `/api/web-search` | DuckDuckGo search, structured results |
 
-### RAG
+**RAG**
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/rag/status` | Index state, chunk count, context cost estimate |
-| `GET` | `/api/rag/files` | List indexed files with metadata |
-| `POST` | `/api/rag/upload` | Upload file via multipart form → validate type/size → index |
-| `DELETE` | `/api/rag/files/{name}` | Remove file and its chunks from the index |
-| `POST` | `/api/rag/reindex` | Full re-index of all files in `rag_data/` |
-| `POST` | `/api/rag/search` | Test query → top matching chunks with relevance scores |
+| `GET` | `/api/rag/status` | Index state, chunk count, context cost |
+| `GET` | `/api/rag/files` | List indexed files |
+| `POST` | `/api/rag/upload` | Upload via multipart form → auto-index |
+| `DELETE` | `/api/rag/files/{name}` | Remove file and chunks |
+| `POST` | `/api/rag/reindex` | Full re-index of `rag_data/` |
+| `POST` | `/api/rag/search` | Test query → top matching chunks with scores |
 
-### Conversations & Memory
+**Conversations & memory**
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/conversations` | List chat history |
 | `POST` | `/api/conversations` | Create new conversation |
-| `GET` | `/api/conversations/{id}` | Get a conversation with all messages |
+| `GET` | `/api/conversations/{id}` | Get conversation with all messages |
 | `PATCH` | `/api/conversations/{id}` | Rename a conversation |
 | `DELETE` | `/api/conversations/{id}` | Delete a conversation |
 | `GET` | `/api/search` | Full-text search across all conversations |
-| `POST` | `/api/messages/{id}/feedback` | Submit thumbs up/down; thumbs-up auto-caches design/code output |
+| `POST` | `/api/messages/{id}/feedback` | Thumbs up/down; up auto-caches design/code output |
 | `GET` | `/api/journal` | List journal entries and stats |
 
-### Modes & Prompts
+**Modes & prompts**
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/modes` | List all loaded mode definitions |
+| `GET` | `/api/modes` | List loaded mode definitions |
 | `GET` | `/api/modes/{name}` | Get a single mode |
 | `PUT` | `/api/modes/{name}` | Update mode config; reloads registry |
 | `POST` | `/api/modes` | Create a new custom mode |
@@ -674,18 +540,23 @@ All system prompts are editable at runtime from **Settings → Prompts** — no 
 | `PUT` | `/api/prompts/{name}` | Update prompt content (persists to disk) |
 | `POST` | `/api/prompts/{name}/reset` | Reset prompt to default |
 
-### Component Cache
+**Component cache**
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/cache` | List cached components |
 | `DELETE` | `/api/cache/{id}` | Delete a cached component |
 
+</details>
+
 ---
 
-## WebSocket Event Protocol
+## WebSocket protocol
 
-Connect to `/ws/think` and send:
+<details>
+<summary><b>Connect to <code>/ws/think</code> and exchange messages</b></summary>
+
+Send:
 
 ```json
 {
@@ -701,7 +572,7 @@ Connect to `/ws/think` and send:
 }
 ```
 
-The server emits a sequence of events:
+Server emits a sequence of events:
 
 | Event | Description |
 |-------|-------------|
@@ -718,48 +589,65 @@ The server emits a sequence of events:
 
 Send `{"type": "cancel"}` at any time to stop active generation immediately.
 
+</details>
+
 ---
 
 ## Troubleshooting
 
-**`llama-server` not found**
-CT-2 auto-downloads it on first start. If that fails, download a [llama.cpp release](https://github.com/ggerganov/llama.cpp/releases) and place it in `bin/vulkan/` or `bin/cuda/`.
+**`llama-server` not found.** CT-2 auto-downloads it on first start. If that fails, grab a [llama.cpp release](https://github.com/ggerganov/llama.cpp/releases) and drop it in `bin/vulkan/` or `bin/cuda/`.
 
-**No models listed in Settings**
-Ensure your `.gguf` file is in the `models/` directory at the repo root. If using Ollama or LM Studio, confirm the backend server is running before starting CT-2.
+**No models listed in Settings.** Ensure your `.gguf` file is in `models/` at the repo root. If you're on Ollama or LM Studio, confirm the backend server is running before starting CT-2.
 
-**Model loads but responses are empty or broken**
-CT-2 uses ChatML by default. Ensure your model is instruction-tuned and supports ChatML or the standard instruct format. Check that `thinking_budget` is set to `-1` for unlimited.
+**Model loads but responses are empty or broken.** CT-2 uses ChatML by default — make sure your model is instruction-tuned and supports ChatML or the standard instruct format. Check that `thinking_budget` is `-1` for unlimited.
 
-**GPU not used / slow generation**
-Confirm `n_gpu_layers: 99` in `model_config.yaml`. Select the correct backend in Settings: Vulkan for AMD/Intel, CUDA for NVIDIA. Trigger a binary update from Settings if you suspect an outdated `llama-server`.
+**GPU not used / slow generation.** Confirm `n_gpu_layers: 99` in `model_config.yaml`. Pick the right backend in Settings: Vulkan for AMD/Intel, CUDA for NVIDIA. Trigger a binary update from Settings if `llama-server` may be outdated.
 
-**Port already in use**
-Change `port` in `model_config.yaml` (default `8080` for llama-server, `8000` for the FastAPI server).
+**Port already in use.** Change `port` in `model_config.yaml` (default `8080` for llama-server, `8000` for the FastAPI server).
 
-**AMD GPU — process hangs after stopping**
-CT-2 includes a 30-second graceful Vulkan shutdown. If `llama-server` still hangs: `taskkill /IM llama-server.exe /F` (Windows) or `pkill llama-server` (Linux/macOS).
+**AMD GPU — process hangs after stopping.** CT-2 includes a 30-second graceful Vulkan shutdown. If `llama-server` still hangs: `taskkill /IM llama-server.exe /F` on Windows or `pkill llama-server` on Linux/macOS.
 
-**Model swap fails and server is unresponsive**
-CT-2 automatically reverts `model_config.yaml` to the previous working model and attempts recovery. If recovery also fails, open Settings and manually select a working model.
+**Model swap fails and the server is unresponsive.** CT-2 reverts `model_config.yaml` to the previous working model and attempts recovery automatically. If recovery also fails, open Settings and pick a working model manually.
 
-**Web search not returning results**
-DuckDuckGo may rate-limit heavy use. Wait a few minutes and retry. Use the `!search` prefix to supply an exact query and skip AI extraction.
+**Web search not returning results.** DuckDuckGo may rate-limit heavy use — wait a few minutes and retry. Use `!search` to supply an exact query and skip AI extraction.
 
 ---
 
-## License
+## Project layout
 
-MIT
+```
+CT-2-WebUI/
+├── ct1/
+│   ├── core/         # Pipeline: orchestrator, engine, atlas, formatter, validator
+│   ├── rag/          # Indexing, chunking, embedding, retrieval
+│   ├── server/       # FastAPI app, llama-server launcher, backend detector, downloader
+│   ├── memory/       # SQLite history, journal, sessions, component cache
+│   ├── modes/        # YAML route definitions (direct, code, design)
+│   ├── prompts/      # System prompts (.txt, runtime-editable)
+│   ├── templates/    # Fallbacks + reusable snippets
+│   └── web/          # SvelteKit frontend (modern + classic UIs)
+├── models/           # .gguf files (gitignored)
+├── bin/              # Downloaded llama-server binaries (gitignored)
+└── tests/
+```
+
+---
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-feature`
 3. Commit your changes
-4. Push and open a Pull Request
+4. Run the test suite:
+   ```bash
+   pytest tests/
+   ```
+5. Push and open a Pull Request
 
-Run tests before submitting:
-```bash
-pytest tests/
-```
+Issues and discussions welcome — please include the model, backend, and OS you're running on.
+
+---
+
+## License
+
+[MIT](LICENSE)
