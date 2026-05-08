@@ -5,8 +5,64 @@ import re
 import yaml
 import os
 import signal
+import time
 from pathlib import Path
 from ct1.server.health import wait_for_server
+
+
+# ─── GPU / load diagnostics ───────────────────────────────────────────────
+# Updated by _drain_stderr whenever llama-server prints layer-offload info.
+# Read by /api/system/gpu-status so the UI can warn when a restart left the
+# model partially on CPU (the classic symptom of VRAM fragmentation).
+_layer_status: dict | None = None
+_LAYER_OFFLOAD_RE = re.compile(
+    r"offloaded\s+(?P<offloaded>\d+)\s*/\s*(?P<total>\d+)\s+layers?\s+to\s+GPU",
+    re.IGNORECASE,
+)
+
+
+def get_layer_status() -> dict | None:
+    """Return the most recent {offloaded, total, degraded} dict, or None.
+
+    `degraded=True` means the latest model load did not place every layer
+    on the GPU — a strong signal that throughput will be much slower than
+    a clean load, usually caused by AMD Vulkan VRAM fragmentation after
+    repeated restarts.
+    """
+    return _layer_status
+
+
+def reset_layer_status() -> None:
+    """Clear the cached status — call before starting a new server so a
+    failed launch doesn't show stale numbers from the previous run."""
+    global _layer_status
+    _layer_status = None
+
+
+def probe_used_vram_mb() -> int | None:
+    """Return total dedicated VRAM in use across all GPU adapters, in MB.
+
+    Windows-only (uses PowerShell PDH counters). Returns None if the probe
+    fails or is unavailable. Used purely for logging — never gates launch.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        ps = (
+            "(Get-Counter '\\GPU Adapter Memory(*)\\Dedicated Usage' "
+            "-ErrorAction SilentlyContinue).CounterSamples.CookedValue | "
+            "Measure-Object -Sum | Select -ExpandProperty Sum"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=4,
+        )
+        out = (r.stdout or "").strip()
+        if not out:
+            return None
+        return int(float(out) / 1024 / 1024)
+    except Exception:
+        return None
 
 
 def _find_llama_executable(project_root: Path, configured: str = "auto",
@@ -125,7 +181,6 @@ def _graceful_shutdown_llama(port: int = 8080, timeout: float = 10.0) -> bool:
 
     Returns True if the process exited cleanly within timeout.
     """
-    import time
     import urllib.request
 
     shutdown_signaled = False
@@ -176,22 +231,43 @@ def _graceful_shutdown_llama(port: int = 8080, timeout: float = 10.0) -> bool:
     return False
 
 
-def kill_existing_llama_servers(port: int = 8080):
+def kill_existing_llama_servers(port: int = 8080, *, hard: bool = False):
     """Kill any leftover llama-server processes before starting new ones.
 
     Tries graceful API shutdown first (preserves Vulkan driver state),
     falls back to force-kill only if graceful fails.
+
+    `hard=True` doubles the cooldown windows and bumps the graceful
+    timeout. Use it from /api/server/hard-reset when a normal restart
+    keeps producing partially-CPU loads — gives the AMD Vulkan driver
+    extra time to coalesce freed VRAM into a contiguous pool.
     """
     if not _is_llama_server_running():
+        # Even with no process running, log free VRAM if available — useful
+        # for confirming whether prior shutdowns released memory.
+        used = probe_used_vram_mb()
+        if used is not None:
+            print(f"[launcher] No llama-server running; VRAM in use: {used} MB")
         return
 
-    import time
+    used_before = probe_used_vram_mb()
+    if used_before is not None:
+        print(f"[launcher] VRAM in use before shutdown: {used_before} MB")
 
     # Step 1: Try graceful shutdown via API — this lets llama-server
     # call vkDestroyDevice and properly release GPU memory
-    if _graceful_shutdown_llama(port):
-        # GPU cooldown — driver reclaims VRAM
-        time.sleep(2)
+    graceful_timeout = 15.0 if hard else 10.0
+    if _graceful_shutdown_llama(port, timeout=graceful_timeout):
+        # GPU cooldown — driver reclaims VRAM. AMD Vulkan in particular
+        # needs a few seconds; bump it on Windows where fragmentation is worst.
+        if os.name == "nt":
+            time.sleep(8 if hard else 4)
+        else:
+            time.sleep(4 if hard else 2)
+        used_after = probe_used_vram_mb()
+        if used_after is not None and used_before is not None:
+            freed = used_before - used_after
+            print(f"[launcher] VRAM in use after cooldown: {used_after} MB (freed {freed} MB)")
         return
 
     # Step 2: Graceful failed — force kill as fallback
@@ -210,19 +286,28 @@ def kill_existing_llama_servers(port: int = 8080):
     except Exception:
         pass
 
-    # Poll until process is actually gone (up to 10s)
-    for _ in range(10):
+    # Poll until process is actually gone (up to 10–15s)
+    poll_seconds = 15 if hard else 10
+    for _ in range(poll_seconds):
         if not _is_llama_server_running():
             break
         time.sleep(1.0)
     else:
-        print("[launcher] WARNING: llama-server still alive after 10s — proceeding anyway")
+        print(f"[launcher] WARNING: llama-server still alive after {poll_seconds}s — proceeding anyway")
 
-    # GPU cooldown — brief pause so the driver can reclaim VRAM
+    # GPU cooldown — extra-long after force-kill since the process
+    # didn't get to call vkDestroyDevice cleanly.
     if os.name == "nt":
-        time.sleep(3)  # AMD Vulkan driver needs a moment to reclaim VRAM
+        time.sleep(12 if hard else 6)  # AMD Vulkan driver needs a long moment to reclaim VRAM
     else:
-        time.sleep(2)
+        time.sleep(5 if hard else 3)
+    used_after = probe_used_vram_mb()
+    if used_after is not None:
+        if used_before is not None:
+            freed = used_before - used_after
+            print(f"[launcher] VRAM in use after force-kill cooldown: {used_after} MB (freed {freed} MB)")
+        else:
+            print(f"[launcher] VRAM in use after force-kill cooldown: {used_after} MB")
 
 
 def load_raw_config(config_path: str = "ct1/server/model_config.yaml") -> dict:
@@ -596,10 +681,12 @@ def build_server_command(s: dict) -> list:
     return cmd
 
 def _drain_stderr(proc: subprocess.Popen, label: str = "llama"):
-    """Read llama-server stderr in a background thread and print key lines."""
+    """Read llama-server stderr in a background thread, print key lines, and
+    parse the layer-offload count into _layer_status for the UI."""
     import threading
 
     def _reader():
+        global _layer_status
         for raw_line in proc.stderr:
             line = raw_line.decode("utf-8", errors="replace").rstrip()
             if not line:
@@ -610,6 +697,24 @@ def _drain_stderr(proc: subprocess.Popen, label: str = "llama"):
                 "context", "error", "warning", "fail", "memory",
             ]):
                 print(f"[{label}] {line}")
+
+            # Parse 'offloaded N/M layers to GPU' so the UI can flag a
+            # degraded load (typical of post-fragmentation restarts).
+            m = _LAYER_OFFLOAD_RE.search(line)
+            if m:
+                offloaded = int(m.group("offloaded"))
+                total = int(m.group("total"))
+                _layer_status = {
+                    "offloaded": offloaded,
+                    "total": total,
+                    "degraded": offloaded < total,
+                }
+                if offloaded < total:
+                    print(
+                        f"[{label}] WARNING: only {offloaded}/{total} layers on GPU "
+                        f"— remainder running on CPU, throughput will be much slower. "
+                        f"Try a Hard reset to clear VRAM fragmentation."
+                    )
 
     t = threading.Thread(target=_reader, daemon=True)
     t.start()
@@ -642,8 +747,14 @@ async def _launch_one(s: dict) -> subprocess.Popen:
     return proc
 
 async def start_server(config_path: str = "ct1/server/model_config.yaml",
-                       context_size_override: int = None) -> list:
-    kill_existing_llama_servers()
+                       context_size_override: int = None,
+                       *, hard: bool = False) -> list:
+    """Launch llama-server (and optional specialist) for the active model.
+
+    `hard=True` extends shutdown cooldowns — see kill_existing_llama_servers.
+    """
+    reset_layer_status()  # don't show stale numbers if launch fails
+    kill_existing_llama_servers(hard=hard)
     cfg = load_config(config_path, context_size_override=context_size_override)
 
     director_proc = await _launch_one(cfg["llama_server"])
@@ -657,13 +768,25 @@ async def start_server(config_path: str = "ct1/server/model_config.yaml",
 
     return procs
 
-def stop_server(procs, port: int = 8080):
+def stop_server(procs, port: int = 8080, *, hard: bool = False):
+    """Stop the running llama-server process(es) and wait for VRAM cleanup.
+
+    Always sleeps after a graceful shutdown so the AMD Vulkan driver gets
+    time to coalesce freed VRAM into a contiguous pool. Without this wait
+    the next `start_server` call would launch into a fragmented pool and
+    silently fall back to partial CPU offload.
+    """
     if isinstance(procs, subprocess.Popen):
         procs = [procs]
 
+    used_before = probe_used_vram_mb()
+    if used_before is not None:
+        print(f"[launcher] VRAM in use before stop: {used_before} MB")
+
     # Try graceful API shutdown first — critical for AMD Vulkan cleanup
+    graceful = False
     if any(p and p.poll() is None for p in procs):
-        _graceful_shutdown_llama(port)
+        graceful = _graceful_shutdown_llama(port, timeout=15.0 if hard else 10.0)
 
     # Clean up any that didn't exit via API
     for proc in procs:
@@ -674,7 +797,23 @@ def stop_server(procs, port: int = 8080):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=5)
-    print("[launcher] Servers stopped.")
+
+    # GPU cooldown — must happen here, otherwise start_server's call to
+    # kill_existing_llama_servers will skip it (no process to kill).
+    if os.name == "nt":
+        wait_s = (8 if hard else 4) if graceful else (12 if hard else 6)
+    else:
+        wait_s = (4 if hard else 2) if graceful else (5 if hard else 3)
+    time.sleep(wait_s)
+
+    used_after = probe_used_vram_mb()
+    if used_after is not None:
+        if used_before is not None:
+            print(f"[launcher] Servers stopped. VRAM: {used_before} → {used_after} MB (freed {used_before - used_after} MB after {wait_s}s cooldown)")
+        else:
+            print(f"[launcher] Servers stopped. VRAM in use: {used_after} MB after {wait_s}s cooldown")
+    else:
+        print(f"[launcher] Servers stopped. {wait_s}s GPU cooldown complete.")
 
 
 if __name__ == "__main__":

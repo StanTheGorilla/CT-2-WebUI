@@ -35,6 +35,7 @@ from ct1.server.health import check_server_health
 from ct1.server.launcher import (
     load_raw_config, resolve_config,
     kill_existing_llama_servers, start_server, stop_server,
+    get_layer_status, probe_used_vram_mb,
     _detect_vision_support, _find_mmproj_path,
 )
 from ct1.memory.journal_reader import JournalReader
@@ -1809,6 +1810,22 @@ async def get_vram():
     return {"vram_gb": vram_gb}
 
 
+@app.get("/api/system/gpu-status")
+async def get_gpu_status():
+    """Return the most recent llama-server GPU layer offload + VRAM usage.
+
+    `layers.degraded=True` means the last load placed some model layers on
+    CPU (typical of post-fragmentation restarts) and throughput will be
+    much slower than a clean load. The UI uses this to show a warning toast.
+
+    `used_vram_mb` is best-effort (Windows PDH counters); null elsewhere.
+    """
+    return {
+        "layers": get_layer_status(),
+        "used_vram_mb": probe_used_vram_mb(),
+    }
+
+
 # ─── HF model browser & downloader ───────────────────────────────────────────
 
 
@@ -2475,6 +2492,54 @@ async def restart_model(body: RestartBody):
         await _orch.reset_engine_client()  # Flush stale TCP connections from prior server
 
         return {"status": "ok", "info": _cfg.get("_preset_info", {})}
+    finally:
+        _swapping = False
+
+
+@app.post("/api/server/hard-reset")
+async def hard_reset_server():
+    """Restart llama-server with extra-long shutdown cooldowns.
+
+    Use when /api/restart keeps producing partially-CPU loads. Forces a
+    longer wait for the AMD Vulkan driver to coalesce freed VRAM into a
+    clean contiguous pool before relaunching.
+    """
+    global _orch, _server_procs, _swapping, _active_think_tasks
+
+    _swapping = True
+    try:
+        # Drain active generation tasks (max 10s)
+        if _is_generating > 0:
+            snapshot = set(_active_think_tasks)
+            if snapshot:
+                try:
+                    _done, _pending = await asyncio.wait(snapshot, timeout=10.0)
+                    for task in _pending:
+                        task.cancel()
+                except Exception:
+                    pass
+
+        if _orch:
+            await _orch.close()
+            _orch = None
+
+        if _server_procs:
+            stop_server(_server_procs, hard=True)
+            _server_procs = []
+
+        try:
+            _server_procs = await start_server(str(_CONFIG_PATH), hard=True)
+        except Exception as e:
+            return {"error": f"Failed to start server: {e}"}
+
+        _orch = Orchestrator(str(_CONFIG_PATH), component_cache=_cache)
+        await _orch.reset_engine_client()
+
+        return {
+            "status": "ok",
+            "info": _cfg.get("_preset_info", {}),
+            "layers": get_layer_status(),
+        }
     finally:
         _swapping = False
 
