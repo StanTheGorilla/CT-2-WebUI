@@ -1261,7 +1261,7 @@
                         {#if confirmReset}
                             <div style="display:inline-flex;gap:8px;">
                                 <button class="c2-btn-ghost" onclick={() => confirmReset = false}>Cancel</button>
-                                <button class="c2-btn-danger" onclick={() => { preferences.set({ theme: 'light', uiStyle: 'ct2', classicBg: 'default', ct2Bg: 'image', showThinking: false, designRefinement: true, webSearchEnabled: false, requireCommandApproval: false, atlasMode: false, atlasEffortMode: 'auto', atlasEffortLevel: 3, atlasSelfVerification: true, atlasMultiPerspective: true, atlasIterativeRefinement: true }); confirmReset = false; }}>Yes, reset</button>
+                                <button class="c2-btn-danger" onclick={() => { preferences.set({ theme: 'light', uiStyle: 'ct2', classicBg: 'default', ct2Bg: 'image', showThinking: false, designRefinement: true, webSearchEnabled: false, requireCommandApproval: false, notifyOnDone: true, atlasMode: false, atlasEffortMode: 'auto', atlasEffortLevel: 3, atlasSelfVerification: true, atlasMultiPerspective: true, atlasIterativeRefinement: true }); confirmReset = false; }}>Yes, reset</button>
                             </div>
                         {:else}
                             <button class="c2-btn-outline c2-btn-err" onclick={() => confirmReset = true}>Reset…</button>

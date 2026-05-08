@@ -1,7 +1,8 @@
 <script lang="ts">
     import { tick, onMount } from 'svelte';
-    import { chat, sendThink, stopGeneration, setMode, revertToTurn, editTurn, setFeedback, regenerate, setContextSize, clearPendingCommands, clearPendingApproval, toggleRag, type Attachment } from '$lib/stores/chat';
+    import { chat, sendThink, stopGeneration, setMode, revertToTurn, editTurn, setFeedback, regenerate, setContextSize, clearPendingCommands, clearPendingApproval, toggleRag, cancelCompaction, toggleContextFile, clearContextFiles, pendingInputPrompt, type Attachment } from '$lib/stores/chat';
     import { preferences } from '$lib/stores/preferences';
+    import { showToast } from '$lib/stores/toasts';
     import { render } from '$lib/markdown';
     import PreviewPanel from './PreviewPanel.svelte';
     import ContextSummaryBlock from '$lib/components/ContextSummaryBlock.svelte';
@@ -21,6 +22,21 @@
 
     // ── Composer state ───────────────────────────────────────────
     let text = $state('');
+    let attachments = $state<Attachment[]>([]);
+    let fileInput = $state<HTMLInputElement | null>(null);
+    let visionSupported = $state(false);
+    let dragOver = $state(false);
+    let wsCtxOpen = $state(false);
+    let wsFileList = $state<string[]>([]);
+    let wsFileLoading = $state(false);
+    let wsFileReq = 0;
+    const TEXT_FILE_ACCEPT = '.txt,.html,.htm,.css,.js,.ts,.py,.json,.md,.csv,.xml,.yaml,.yml,.svg,.sh,.bat,.sql,.rb,.go,.rs,.java,.c,.cpp,.h,.hpp,.toml,.ini,.cfg';
+    const TEXT_EXTENSIONS = new Set([
+        'txt', 'html', 'htm', 'css', 'js', 'ts', 'py', 'json', 'md',
+        'csv', 'xml', 'yaml', 'yml', 'svg', 'sh', 'bat', 'sql', 'rb',
+        'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'toml', 'ini', 'cfg',
+    ]);
+    const IMAGE_MAX_PX = 1536;
     let feedEl = $state<HTMLDivElement | null>(null);
     let userNearBottom = $state(true);
 
@@ -91,11 +107,225 @@
             contextSize = sz;
             setContextSize(sz);
             ragCost = rag.enabled ? (rag.context_cost ?? 0) : 0;
+            visionSupported = mdl.vision_supported ?? false;
         } catch {}
+    });
+
+    // ── Attachment helpers ───────────────────────────────────────
+    const attachAccept = $derived(`${visionSupported ? 'image/*,' : ''}${TEXT_FILE_ACCEPT}`);
+    const attachLabel = $derived(visionSupported ? 'Attach file or image' : 'Attach file (current model has no vision)');
+
+    function getExtension(name: string): string {
+        const i = name.lastIndexOf('.');
+        return i >= 0 ? name.slice(i + 1).toLowerCase() : '';
+    }
+
+    function _resizeAndAttach(srcUrl: string, name: string) {
+        const img = new Image();
+        img.onload = () => {
+            const w = img.naturalWidth, h = img.naturalHeight;
+            if (w <= IMAGE_MAX_PX && h <= IMAGE_MAX_PX) {
+                attachments = [...attachments, { type: 'image', name, dataUrl: srcUrl }];
+                return;
+            }
+            const scale = IMAGE_MAX_PX / Math.max(w, h);
+            const canvas = document.createElement('canvas');
+            canvas.width  = Math.round(w * scale);
+            canvas.height = Math.round(h * scale);
+            canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+            attachments = [...attachments, { type: 'image', name, dataUrl: canvas.toDataURL('image/png') }];
+        };
+        img.src = srcUrl;
+    }
+
+    function readFiles(files: FileList | File[]) {
+        const remainingSlots = Math.max(0, 4 - attachments.length);
+        if (remainingSlots === 0) {
+            showToast('Up to 4 attachments per message', { variant: 'info' });
+            return;
+        }
+        let acceptedCount = 0;
+        let skippedVision = 0;
+        let skippedType = 0;
+        for (const file of Array.from(files)) {
+            if (acceptedCount >= remainingSlots) break;
+            const ext = getExtension(file.name);
+            if (file.type.startsWith('image/')) {
+                if (!visionSupported) { skippedVision += 1; continue; }
+                const reader = new FileReader();
+                const fileName = file.name || 'image.png';
+                reader.onload = () => _resizeAndAttach(reader.result as string, fileName);
+                reader.readAsDataURL(file);
+                acceptedCount += 1;
+            } else if (TEXT_EXTENSIONS.has(ext) || file.type.startsWith('text/')) {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const txt = reader.result as string;
+                    const truncated = txt.length > 8000
+                        ? txt.slice(0, 8000) + '\n\n[... truncated, file too large ...]'
+                        : txt;
+                    attachments = [...attachments, {
+                        type: 'file',
+                        name: file.name,
+                        dataUrl: '',
+                        textContent: truncated,
+                    }];
+                };
+                reader.readAsText(file);
+                acceptedCount += 1;
+            } else {
+                skippedType += 1;
+            }
+        }
+        if (skippedVision > 0) {
+            showToast('Switch to a vision model to attach images', {
+                variant: 'info',
+                title: 'Image skipped',
+            });
+        }
+        if (skippedType > 0 && acceptedCount === 0) {
+            showToast('Only text files and images are supported', { variant: 'info' });
+        }
+    }
+
+    function onAttachInput(e: Event) {
+        const target = e.target as HTMLInputElement;
+        if (target.files) readFiles(target.files);
+        target.value = '';
+    }
+
+    function onDrop(e: DragEvent) {
+        e.preventDefault();
+        dragOver = false;
+        if (e.dataTransfer?.files) readFiles(e.dataTransfer.files);
+    }
+    function onDragOver(e: DragEvent) { e.preventDefault(); dragOver = true; }
+    function onDragLeave() { dragOver = false; }
+
+    function onPaste(e: ClipboardEvent) {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        const images: File[] = [];
+        for (const item of items) {
+            if (item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (file) images.push(file);
+            }
+        }
+        if (images.length > 0 && visionSupported) {
+            e.preventDefault();
+            readFiles(images);
+        }
+    }
+
+    function removeAttachment(idx: number) {
+        attachments = attachments.filter((_, i) => i !== idx);
+    }
+
+    // ── Workspace context popover ────────────────────────────────
+    async function openWsCtx() {
+        const wsId = $chat.workspaceId;
+        if (!wsId) return;
+        wsCtxOpen = !wsCtxOpen;
+        if (!wsCtxOpen) return;
+        const reqId = ++wsFileReq;
+        wsFileList = [];
+        wsFileLoading = true;
+        try {
+            const res = await fetch(`/api/workspaces/${wsId}/files`);
+            const data = await res.json();
+            if (reqId !== wsFileReq || wsId !== $chat.workspaceId || !wsCtxOpen) return;
+            wsFileList = (data as Array<{ path: string; is_dir: boolean }>)
+                .filter(f => !f.is_dir).map(f => f.path);
+        } catch {
+            if (reqId === wsFileReq) wsFileList = [];
+        } finally {
+            if (reqId === wsFileReq) wsFileLoading = false;
+        }
+    }
+
+    function handleOutsideClick(e: MouseEvent) {
+        const target = e.target as HTMLElement;
+        if (!target.closest('.c2-ctx-popover') && !target.closest('.c2-ws-ctx-badge')) {
+            wsCtxOpen = false;
+        }
+    }
+    function handleGlobalKey(e: KeyboardEvent) {
+        if (e.key === 'Escape' && wsCtxOpen) wsCtxOpen = false;
+    }
+
+    // Reset workspace popover when switching workspaces
+    $effect(() => {
+        void $chat.workspaceId;
+        wsCtxOpen = false;
+        wsFileList = [];
+    });
+
+    // Listen for prefill prompts (e.g., from "Try again" buttons)
+    $effect(() => {
+        const prompt = $pendingInputPrompt;
+        if (prompt) {
+            text = prompt;
+            pendingInputPrompt.set('');
+            tick().then(() => taEl?.focus());
+        }
     });
 
     // ── Derived ──────────────────────────────────────────────────
     let isActive  = $derived($chat.phase !== 'idle' && $chat.phase !== 'done');
+
+    // ── Long-generation notification ─────────────────────────────
+    let genStartedAt = $state(0);
+    let lastIsActive = $state(false);
+    function playDoneChime() {
+        try {
+            const Ctx = (window.AudioContext || (window as any).webkitAudioContext);
+            if (!Ctx) return;
+            const ctx = new Ctx();
+            const beep = (freq: number, when: number, dur = 0.12) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0, ctx.currentTime + when);
+                gain.gain.linearRampToValueAtTime(0.08, ctx.currentTime + when + 0.01);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + when + dur);
+                osc.connect(gain).connect(ctx.destination);
+                osc.start(ctx.currentTime + when);
+                osc.stop(ctx.currentTime + when + dur + 0.05);
+            };
+            beep(880, 0);
+            beep(1175, 0.13);
+            setTimeout(() => ctx.close().catch(() => {}), 600);
+        } catch {}
+    }
+    function fireDoneNotification() {
+        if (!('Notification' in window)) return;
+        if (Notification.permission === 'granted') {
+            try {
+                const n = new Notification('CT-2 finished', { body: 'Your response is ready.', silent: true });
+                setTimeout(() => n.close(), 6000);
+            } catch {}
+        } else if (Notification.permission === 'default') {
+            // First time — request silently. Don't notify retroactively.
+            Notification.requestPermission().catch(() => {});
+        }
+    }
+    $effect(() => {
+        const active = isActive;
+        if (active && !lastIsActive) {
+            genStartedAt = Date.now();
+        } else if (!active && lastIsActive) {
+            const elapsed = Date.now() - genStartedAt;
+            if (elapsed > 15000 && $preferences.notifyOnDone) {
+                playDoneChime();
+                if (typeof document !== 'undefined' && !document.hasFocus()) {
+                    fireDoneNotification();
+                }
+            }
+        }
+        lastIsActive = active;
+    });
 
     function estimateConvTokens(conv: any[]): number {
         return Math.round(conv.reduce((acc, t) => {
@@ -142,7 +372,7 @@
         [...$chat.conversation].reverse().find((turn) => !!turn.isCompacted) ?? null
     );
     let latestCompactionSummary = $derived(latestCompactedTurn?.content ?? '');
-    let canSend   = $derived(!isActive && !$chat.isCompacting && text.trim().length > 0);
+    let canSend   = $derived(!isActive && !$chat.isCompacting && (text.trim().length > 0 || attachments.length > 0));
     let isDesign  = $derived($chat.modeOverride === 'design');
 
     // ── Preview panel ────────────────────────────────────────────
@@ -220,12 +450,19 @@
         window.addEventListener('pointerup', onUp);
     }
 
-    const suggestions = [
+    const generalSuggestions = [
         { label: 'Design a landing page',  hint: 'a landing page for a focus app called FlowState' },
         { label: 'Write a Python script',  hint: 'a Python script that deduplicates CSV rows by email' },
         { label: 'Explain a concept',      hint: 'how self-attention works, for a non-technical reader' },
         { label: 'Debug code',             hint: 'why my React effect fires twice on mount' },
     ] as const;
+    const workspaceSuggestions = [
+        { label: 'Explain this codebase',  hint: 'Walk me through what this project does and how the main pieces fit together.' },
+        { label: 'Find bugs',              hint: 'Review the files in context and point out likely bugs or risky code paths.' },
+        { label: 'Add a feature',          hint: 'I want to add ' },
+        { label: 'Write a test',           hint: 'Write a test for the function I just attached.' },
+    ] as const;
+    let suggestions = $derived(isWorkspace ? workspaceSuggestions : generalSuggestions);
 
     // ── Auto scroll ───────────────────────────────────────────────
     $effect(() => {
@@ -277,8 +514,10 @@
     function send() {
         if (!canSend) return;
         const msg = text.trim();
+        const atts = attachments;
         text = '';
-        sendThink(msg);
+        attachments = [];
+        sendThink(msg || (atts.some(a => a.type === 'image') ? '(image attached)' : '(file attached)'), [...atts]);
     }
 
     function handleKey(e: KeyboardEvent) {
@@ -291,6 +530,8 @@
     }
 
 </script>
+
+<svelte:window onclick={handleOutsideClick} onkeydown={handleGlobalKey} />
 
 <div class="c2-page-frame">
 <div class="c2-chat"
@@ -351,6 +592,25 @@
                                     </div>
                                 </div>
                             {:else}
+                                {#if turn.attachments && turn.attachments.length > 0}
+                                    <div class="c2-user-atts">
+                                        {#each turn.attachments as att}
+                                            <div class="c2-att-island c2-att-island-msg">
+                                                {#if att.type === 'image'}
+                                                    <img src={att.dataUrl} alt={att.name} class="c2-att-thumb" />
+                                                {:else}
+                                                    <div class="c2-att-icon">
+                                                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                                            <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/>
+                                                            <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                                                        </svg>
+                                                    </div>
+                                                {/if}
+                                                <span class="c2-att-name">{att.name.length > 22 ? att.name.slice(0, 19) + '…' : att.name}</span>
+                                            </div>
+                                        {/each}
+                                    </div>
+                                {/if}
                                 <div class="c2-user-bubble">{turn.content}</div>
                                 <div class="c2-user-foot" class:c2-visible={hoveredTurn === i}>
                                     <button class="c2-msg-btn" onclick={() => startEdit(i, turn.content)} title="Edit message">
@@ -767,9 +1027,58 @@
     </div>
 
     <!-- ── Composer ───────────────────────────────────────────── -->
-    <div class="c2-composer-wrap">
+    <div class="c2-composer-wrap"
+        ondrop={onDrop}
+        ondragover={onDragOver}
+        ondragleave={onDragLeave}
+        role="region"
+    >
         <div class="c2-composer-inner">
-            <div class="c2-composer-box">
+            {#if attachments.length > 0}
+                <div class="c2-att-bar">
+                    {#each attachments as att, i}
+                        <div class="c2-att-island">
+                            {#if att.type === 'image'}
+                                <img src={att.dataUrl} alt={att.name} class="c2-att-thumb" />
+                            {:else}
+                                <div class="c2-att-icon">
+                                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                                        <path d="M4 1h5.5L13 4.5V14a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5"/>
+                                        <path d="M9 1v4h4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                                    </svg>
+                                </div>
+                            {/if}
+                            <span class="c2-att-name">{att.name.length > 22 ? att.name.slice(0, 19) + '…' : att.name}</span>
+                            {#if att.type === 'file' && att.textContent}
+                                <span class="c2-att-size">{(att.textContent.length / 1000).toFixed(1)}k</span>
+                            {/if}
+                            <button class="c2-att-remove" onclick={() => removeAttachment(i)} aria-label="Remove {att.name}">
+                                <svg width="9" height="9" viewBox="0 0 10 10" fill="none">
+                                    <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                                </svg>
+                            </button>
+                        </div>
+                    {/each}
+                </div>
+            {/if}
+
+            <div class="c2-composer-box" class:c2-drag-over={dragOver}>
+                {#if dragOver}
+                    <div class="c2-drop-overlay" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        <span>Drop {visionSupported ? 'image or file' : 'file'} to attach</span>
+                    </div>
+                {/if}
+                <input
+                    bind:this={fileInput}
+                    type="file"
+                    accept={attachAccept}
+                    multiple
+                    onchange={onAttachInput}
+                    style="display:none"
+                />
                 <div class="c2-composer-ta-wrap">
                     <textarea
                         bind:this={taEl}
@@ -778,6 +1087,7 @@
                         placeholder="Ask CT-2 anything…"
                         rows={1}
                         onkeydown={handleKey}
+                        onpaste={onPaste}
                         disabled={$chat.isCompacting}
                     ></textarea>
                 </div>
@@ -793,6 +1103,53 @@
                                     disabled={isActive}
                                 >{CHAT_MODE_LABELS[m]}</button>
                             {/each}
+                            <div class="c2-pill-sep"></div>
+                        {:else}
+                            <div class="c2-ctx-anchor">
+                                <button
+                                    class="c2-mode-pill c2-ws-ctx-badge"
+                                    class:c2-mode-active={$chat.contextFiles.length > 0}
+                                    onclick={openWsCtx}
+                                    type="button"
+                                >
+                                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                        <path d="M2 5V3a1 1 0 011-1h4l2 2h4a1 1 0 011 1v7a1 1 0 01-1 1H3a1 1 0 01-1-1V5z" stroke="currentColor" stroke-width="1.5"/>
+                                    </svg>
+                                    {$chat.contextFiles.length > 0
+                                        ? `${$chat.contextFiles.length} file${$chat.contextFiles.length === 1 ? '' : 's'} in context`
+                                        : 'Attach files to context'}
+                                </button>
+                                {#if wsCtxOpen}
+                                    <div class="c2-ctx-popover" role="dialog" aria-modal="true" aria-label="Workspace files">
+                                        <div class="c2-ctx-popover-head">
+                                            <span>Workspace files</span>
+                                            {#if $chat.contextFiles.length > 0}
+                                                <button class="c2-ctx-clear" onclick={clearContextFiles} type="button">Clear all</button>
+                                            {/if}
+                                        </div>
+                                        {#if wsFileLoading}
+                                            <div class="c2-ctx-empty">Loading…</div>
+                                        {:else if wsFileList.length === 0}
+                                            <div class="c2-ctx-empty">No files in workspace</div>
+                                        {:else}
+                                            <ul class="c2-ctx-file-list">
+                                                {#each wsFileList as path}
+                                                    <li>
+                                                        <label class="c2-ctx-file-row">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={$chat.contextFiles.includes(path)}
+                                                                onchange={() => toggleContextFile(path)}
+                                                            />
+                                                            <span class="c2-ctx-file-path">{path}</span>
+                                                        </label>
+                                                    </li>
+                                                {/each}
+                                            </ul>
+                                        {/if}
+                                    </div>
+                                {/if}
+                            </div>
                             <div class="c2-pill-sep"></div>
                         {/if}
 
@@ -844,7 +1201,16 @@
                             </div>
                             <span class="c2-ctx-label" class:c2-ctx-labelwarn={compactionZone}>{ctxLabel} / {ctxMax}</span>
                             {#if $chat.isCompacting}
-                                <span class="c2-ctx-badge compacting">Compacting…</span>
+                                <span class="c2-ctx-badge compacting">
+                                    Compacting…
+                                    <button
+                                        type="button"
+                                        class="c2-ctx-cancel"
+                                        onclick={cancelCompaction}
+                                        title="Cancel and use a quick fallback summary"
+                                        aria-label="Cancel compaction"
+                                    >Cancel</button>
+                                </span>
                             {:else if compactionZone && !isActive}
                                 <span class="c2-ctx-badge near-limit">Near limit</span>
                             {:else if latestCompactionSummary}
@@ -854,20 +1220,50 @@
                     {/if}
 
                     <button
-                        class="c2-send-btn"
-                        class:c2-send-active={canSend}
-                        onclick={send}
-                        disabled={!canSend}
-                        aria-label="Send"
+                        class="c2-attach-btn"
+                        onclick={() => fileInput?.click()}
+                        disabled={isActive || $chat.isCompacting}
+                        aria-label={attachLabel}
+                        title={attachLabel}
+                        type="button"
                     >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                            <path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                        <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
+                            <path d="M15.5 8.5l-6.4 6.4a3.5 3.5 0 01-5-5l6.4-6.4a2.1 2.1 0 013 3L7.2 12.8a.7.7 0 01-1-1l5.3-5.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </button>
+
+                    {#if isActive}
+                        <button
+                            class="c2-send-btn c2-send-stop"
+                            onclick={stopGeneration}
+                            aria-label="Stop generation"
+                            title="Stop"
+                            type="button"
+                        >
+                            <svg width="11" height="11" viewBox="0 0 10 10" fill="currentColor">
+                                <rect width="10" height="10" rx="1.5"/>
+                            </svg>
+                        </button>
+                    {:else}
+                        <button
+                            class="c2-send-btn"
+                            class:c2-send-active={canSend}
+                            onclick={send}
+                            disabled={!canSend}
+                            aria-label="Send"
+                            type="button"
+                        >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                                <path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    {/if}
                 </div>
             </div>
 
             <div class="c2-composer-footer">
+                <span class="c2-send-hint">Enter to send · Shift+Enter for newline</span>
+                <span class="c2-footer-sep">·</span>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
                     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
@@ -1728,6 +2124,284 @@
     .c2-send-btn.c2-send-active:active {
         transform: scale(0.94);
         opacity: 1;
+    }
+
+    .c2-send-btn.c2-send-stop {
+        background: oklch(0.68 0.20 25 / 0.12);
+        color: oklch(0.68 0.20 25);
+        border-color: oklch(0.68 0.20 25 / 0.35);
+        cursor: pointer;
+    }
+    .c2-send-btn.c2-send-stop:hover {
+        background: oklch(0.68 0.20 25 / 0.22);
+        transform: scale(1.06);
+    }
+    .c2-send-btn.c2-send-stop:active {
+        transform: scale(0.94);
+    }
+
+    /* ── Attach button ──────────────────────────────────────── */
+    .c2-attach-btn {
+        width: 30px; height: 30px;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--c2-fg-3);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid transparent;
+        cursor: pointer;
+        transition: background 140ms, color 140ms, border-color 140ms;
+        flex-shrink: 0;
+    }
+    .c2-attach-btn:hover:not(:disabled) {
+        background: var(--c2-bg-2);
+        color: var(--c2-fg-1);
+        border-color: var(--c2-border-1);
+    }
+    .c2-attach-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+
+    /* ── Attachment preview strip ──────────────────────────── */
+    .c2-att-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 8px;
+    }
+    .c2-att-island {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 10px;
+        padding: 4px 8px 4px 4px;
+        font-size: 12px;
+        color: var(--c2-fg-1);
+        animation: c2-att-in 220ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    }
+    @keyframes c2-att-in {
+        from { opacity: 0; transform: scale(0.85) translateY(4px); }
+        to   { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .c2-att-thumb {
+        width: 30px; height: 30px;
+        border-radius: 7px;
+        object-fit: cover;
+        flex-shrink: 0;
+    }
+    .c2-att-icon {
+        width: 30px; height: 30px;
+        border-radius: 7px;
+        background: var(--c2-bg-2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--c2-fg-2);
+        flex-shrink: 0;
+    }
+    .c2-att-name {
+        max-width: 160px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 500;
+    }
+    .c2-att-size {
+        font-size: 10.5px;
+        color: var(--c2-fg-3);
+    }
+    .c2-att-remove {
+        width: 18px; height: 18px;
+        border: none;
+        background: var(--c2-bg-2);
+        color: var(--c2-fg-3);
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: background 120ms, color 120ms;
+    }
+    .c2-att-remove:hover {
+        background: var(--c2-bg-3);
+        color: var(--c2-fg-0);
+    }
+
+    /* On a past user message — slightly lighter, no remove */
+    .c2-user-atts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 6px;
+        justify-content: flex-end;
+    }
+    .c2-att-island-msg {
+        background: var(--c2-bg-2);
+    }
+
+    /* Drag-over state */
+    .c2-composer-box.c2-drag-over {
+        border-color: var(--c2-accent);
+        box-shadow:
+            0 0 0 3px oklch(0.78 0.10 70 / 0.18),
+            var(--c2-shadow-card, 0 10px 28px -12px oklch(0 0 0 / 0.55));
+        position: relative;
+    }
+    .c2-drop-overlay {
+        position: absolute;
+        inset: 0;
+        background: oklch(0.78 0.10 70 / 0.10);
+        backdrop-filter: blur(2px);
+        border-radius: 14px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--c2-accent);
+        letter-spacing: 0.01em;
+        pointer-events: none;
+        z-index: 4;
+        animation: c2-fade-in 140ms ease both;
+    }
+    @keyframes c2-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+    /* Send hint */
+    .c2-send-hint {
+        font-family: 'Geist', ui-sans-serif, sans-serif;
+        font-size: 10.5px;
+        color: var(--c2-fg-3);
+        letter-spacing: 0.02em;
+    }
+    .c2-footer-sep { opacity: 0.4; }
+
+    /* ── Narrow-width composer ──────────────────────────────── */
+    @media (max-width: 720px) {
+        .c2-composer-toolbar {
+            flex-wrap: wrap;
+        }
+        .c2-mode-pills {
+            flex-wrap: wrap;
+            row-gap: 4px;
+        }
+        .c2-ctx-bar {
+            order: 99;
+            width: 100%;
+            margin-top: 4px;
+        }
+    }
+    @media (max-width: 520px) {
+        .c2-ctx-bar { display: none; }
+        .c2-pill-sep { display: none; }
+        .c2-composer-footer {
+            flex-wrap: wrap;
+            justify-content: center;
+            text-align: center;
+        }
+        .c2-att-name { max-width: 100px; }
+    }
+
+    /* ── Cancel-compaction chip ─────────────────────────────── */
+    .c2-ctx-cancel {
+        appearance: none;
+        margin-left: 6px;
+        padding: 0 8px;
+        height: 16px;
+        line-height: 16px;
+        border-radius: 999px;
+        font-size: 9.5px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: inherit;
+        background: transparent;
+        border: 1px solid currentColor;
+        cursor: pointer;
+        opacity: 0.85;
+        transition: opacity 120ms, background 120ms;
+    }
+    .c2-ctx-cancel:hover {
+        opacity: 1;
+        background: oklch(1 0 0 / 0.08);
+    }
+
+    /* ── Workspace context popover ──────────────────────────── */
+    .c2-ctx-anchor {
+        position: relative;
+    }
+    .c2-ws-ctx-badge {
+        max-width: 220px;
+    }
+    .c2-ctx-popover {
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 0;
+        min-width: 260px;
+        max-width: 360px;
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 12px;
+        box-shadow: 0 10px 32px -8px oklch(0 0 0 / 0.45);
+        z-index: 200;
+        overflow: hidden;
+    }
+    .c2-ctx-popover-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 9px 12px;
+        font-size: 10.5px;
+        font-weight: 600;
+        color: var(--c2-fg-2);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        border-bottom: 1px solid var(--c2-border-1);
+    }
+    .c2-ctx-clear {
+        background: none;
+        border: none;
+        color: var(--c2-accent);
+        font-size: 10.5px;
+        cursor: pointer;
+        padding: 0;
+    }
+    .c2-ctx-clear:hover { text-decoration: underline; }
+    .c2-ctx-empty {
+        padding: 14px;
+        font-size: 12px;
+        color: var(--c2-fg-2);
+        text-align: center;
+    }
+    .c2-ctx-file-list {
+        list-style: none;
+        margin: 0;
+        padding: 4px 0;
+        max-height: 240px;
+        overflow-y: auto;
+    }
+    .c2-ctx-file-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--c2-fg-1);
+    }
+    .c2-ctx-file-row:hover { background: var(--c2-bg-2); }
+    .c2-ctx-file-path {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
     }
 
     .c2-composer-footer {

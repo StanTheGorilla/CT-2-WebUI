@@ -15,6 +15,7 @@ interface Preferences {
     designRefinement: boolean;
     webSearchEnabled: boolean;
     requireCommandApproval: boolean;
+    notifyOnDone: boolean;
     // Atlas Mode
     atlasMode: boolean;
     atlasEffortMode: 'auto' | 'manual';
@@ -33,6 +34,7 @@ const defaults: Preferences = {
     designRefinement: true,
     webSearchEnabled: false,
     requireCommandApproval: false,
+    notifyOnDone: true,
     // Atlas defaults
     atlasMode: false,
     atlasEffortMode: 'auto',

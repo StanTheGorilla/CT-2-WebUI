@@ -15,6 +15,7 @@
     import { loadFromHistory } from '$lib/stores/chat';
     import { modelSwitchCount, notifyModelSwitch, modelSwapping } from '$lib/stores/model';
     import { backgroundTasks, setModelSwapping, clearModelSwapping } from '$lib/stores/backgroundTasks';
+    import { toasts, dismissToast, showToast } from '$lib/stores/toasts';
     import { fly } from 'svelte/transition';
 
     let { children } = $props();
@@ -140,7 +141,12 @@
             modelThinking = data.enable_thinking ?? false;
             modelsLoaded = false;
             notifyModelSwitch();
-        } catch {}
+        } catch (err: any) {
+            showToast(err?.message || 'Could not switch model. Try again or check the server.', {
+                variant: 'error',
+                title: 'Model switch failed',
+            });
+        }
         finally {
             modelSwitching = false;
             swapTarget = '';
@@ -150,6 +156,39 @@
 
     function closeModelPicker(e: MouseEvent) {
         if (!(e.target as Element)?.closest?.('.c2-model-pill')) modelPickerOpen = false;
+    }
+
+    // ── Global keyboard shortcuts ─────────────────────────────────
+    let shortcutsOpen = $state(false);
+    function handleGlobalShortcuts(e: KeyboardEvent) {
+        const t = e.target as HTMLElement | null;
+        const inField = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || (t as any).isContentEditable);
+        // Ctrl/Cmd + Shift + N — new chat
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'n' || e.key === 'N')) {
+            e.preventDefault();
+            startNew();
+            return;
+        }
+        // Ctrl/Cmd + K — focus sidebar search (open it first)
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K') && !e.shiftKey) {
+            e.preventDefault();
+            sidebarOpen.set(true);
+            setTimeout(() => {
+                const el = document.querySelector('.c2-sb-input') as HTMLInputElement | null;
+                el?.focus();
+            }, 50);
+            return;
+        }
+        // ? — open shortcut overlay (only when not in a text field)
+        if (!inField && e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            shortcutsOpen = true;
+            return;
+        }
+        if (e.key === 'Escape' && shortcutsOpen) {
+            e.preventDefault();
+            shortcutsOpen = false;
+        }
     }
 
     // ── Phase indicator ───────────────────────────────────────────
@@ -244,7 +283,7 @@
     }
 </script>
 
-<svelte:window onclick={closeModelPicker} />
+<svelte:window onclick={closeModelPicker} onkeydown={handleGlobalShortcuts} />
 
 <!-- Ambient background layers -->
 <div class="c2-shell" aria-hidden="false">
@@ -262,9 +301,20 @@
                 class:c2-icon-btn-active={$sidebarOpen}
                 onclick={() => sidebarOpen.update(v => !v)}
                 aria-label="Conversations"
+                title="Conversations history"
             >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
                     <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+            </button>
+            <button
+                class="c2-icon-btn"
+                onclick={startNew}
+                aria-label="New chat"
+                title="New chat (Ctrl+Shift+N)"
+            >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 </svg>
             </button>
             <a href="/" class="c2-logo">
@@ -601,6 +651,60 @@
     <main class="c2-main">
         {@render children()}
     </main>
+
+    <!-- ── Toast tray (bottom-center) ─────────────────────────── -->
+    {#if $toasts.length > 0}
+        <div class="c2-toast-tray" role="status" aria-live="polite">
+            {#each $toasts as t (t.id)}
+                <div
+                    class="c2-toast c2-toast-{t.variant}"
+                    transition:fly={{ y: 20, duration: 220 }}
+                >
+                    <div class="c2-toast-body">
+                        {#if t.title}
+                            <div class="c2-toast-title">{t.title}</div>
+                        {/if}
+                        <div class="c2-toast-msg">{t.message}</div>
+                    </div>
+                    <button class="c2-toast-x" onclick={() => dismissToast(t.id)} aria-label="Dismiss">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+                            <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+                        </svg>
+                    </button>
+                </div>
+            {/each}
+        </div>
+    {/if}
+
+    <!-- ── Keyboard shortcuts overlay ─────────────────────────── -->
+    {#if shortcutsOpen}
+        <button
+            type="button"
+            class="c2-shortcuts-backdrop"
+            onclick={() => shortcutsOpen = false}
+            aria-label="Close shortcuts"
+        ></button>
+        <div class="c2-shortcuts-panel" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+            <div class="c2-shortcuts-head">
+                <h3>Keyboard shortcuts</h3>
+                <button class="c2-icon-btn" onclick={() => shortcutsOpen = false} aria-label="Close">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="c2-shortcuts-grid">
+                <div class="c2-sc-row"><span>Send message</span><kbd>Enter</kbd></div>
+                <div class="c2-sc-row"><span>New line in message</span><kbd>Shift</kbd> <kbd>Enter</kbd></div>
+                <div class="c2-sc-row"><span>New chat</span><kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>N</kbd></div>
+                <div class="c2-sc-row"><span>Search conversations</span><kbd>Ctrl</kbd> <kbd>K</kbd></div>
+                <div class="c2-sc-row"><span>Open this overlay</span><kbd>?</kbd></div>
+                <div class="c2-sc-row"><span>Close any overlay</span><kbd>Esc</kbd></div>
+                <div class="c2-sc-row"><span>Stop generation</span><span class="c2-sc-hint">Stop button or Esc</span></div>
+                <div class="c2-sc-row"><span>Edit your last message</span><span class="c2-sc-hint">Hover · Edit</span></div>
+            </div>
+        </div>
+    {/if}
 </div>
 
 <style>
@@ -1432,5 +1536,150 @@
         height: 12px;
         border-width: 2px;
         flex-shrink: 0;
+    }
+
+    /* ── Keyboard shortcuts overlay ──────────────────────────── */
+    .c2-shortcuts-backdrop {
+        position: fixed;
+        inset: 0;
+        background: oklch(0 0 0 / 0.45);
+        backdrop-filter: blur(2px);
+        border: none;
+        cursor: default;
+        z-index: 600;
+        animation: c2-fade-in 140ms ease both;
+    }
+    @keyframes c2-fade-in { from { opacity: 0; } to { opacity: 1; } }
+    .c2-shortcuts-panel {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: min(440px, calc(100vw - 32px));
+        max-height: calc(100vh - 60px);
+        overflow-y: auto;
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 14px;
+        box-shadow: 0 24px 60px -12px oklch(0 0 0 / 0.55);
+        z-index: 601;
+        animation: c2-pop-in 200ms cubic-bezier(0.34, 1.4, 0.64, 1) both;
+    }
+    @keyframes c2-pop-in {
+        from { opacity: 0; transform: translate(-50%, -48%) scale(0.96); }
+        to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    }
+    .c2-shortcuts-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 18px 12px;
+        border-bottom: 1px solid var(--c2-border-1);
+    }
+    .c2-shortcuts-head h3 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--c2-fg-0);
+    }
+    .c2-shortcuts-grid {
+        padding: 8px 6px 14px;
+    }
+    .c2-sc-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 8px 14px;
+        border-radius: 8px;
+        font-size: 13px;
+        color: var(--c2-fg-1);
+    }
+    .c2-sc-row:hover { background: var(--c2-bg-2); }
+    .c2-sc-row > span:first-child { color: var(--c2-fg-1); }
+    .c2-sc-hint {
+        font-size: 11.5px;
+        color: var(--c2-fg-3);
+    }
+    .c2-shortcuts-grid kbd {
+        display: inline-block;
+        padding: 1px 7px;
+        margin-left: 3px;
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        background: var(--c2-bg-2);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 5px;
+        color: var(--c2-fg-1);
+        box-shadow: inset 0 -1px 0 var(--c2-border-1);
+    }
+
+    /* ── Toast tray ─────────────────────────────────────────── */
+    .c2-toast-tray {
+        position: fixed;
+        bottom: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        z-index: 700;
+        pointer-events: none;
+    }
+    .c2-toast {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        min-width: 260px;
+        max-width: 420px;
+        padding: 10px 12px 10px 14px;
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-2);
+        border-radius: 10px;
+        box-shadow: 0 12px 32px -8px oklch(0 0 0 / 0.4);
+        font-size: 13px;
+        color: var(--c2-fg-1);
+        pointer-events: auto;
+    }
+    .c2-toast-error {
+        border-color: oklch(0.68 0.20 25 / 0.55);
+        background: oklch(0.68 0.20 25 / 0.08);
+        color: var(--c2-fg-0);
+    }
+    .c2-toast-success {
+        border-color: oklch(0.70 0.18 145 / 0.5);
+    }
+    .c2-toast-body {
+        flex: 1;
+        min-width: 0;
+    }
+    .c2-toast-title {
+        font-weight: 600;
+        font-size: 12.5px;
+        margin-bottom: 2px;
+        color: var(--c2-fg-0);
+    }
+    .c2-toast-msg {
+        font-size: 12.5px;
+        line-height: 1.4;
+        word-wrap: break-word;
+    }
+    .c2-toast-x {
+        flex-shrink: 0;
+        width: 20px;
+        height: 20px;
+        border: none;
+        background: transparent;
+        color: var(--c2-fg-3);
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 120ms, color 120ms;
+    }
+    .c2-toast-x:hover {
+        background: var(--c2-bg-2);
+        color: var(--c2-fg-1);
     }
 </style>

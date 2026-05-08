@@ -2,6 +2,7 @@ import { writable, get } from 'svelte/store';
 import { WS } from '$lib/ws';
 import { preferences } from '$lib/stores/preferences';
 import { updateConversationTitle } from '$lib/stores/conversations';
+import { showToast } from '$lib/stores/toasts';
 
 export interface Attachment {
     type: 'image' | 'file';
@@ -812,6 +813,7 @@ function handleEvent(data: Record<string, any>) {
                 s.compactStartedAt = 0;
                 s.phase = 'done';
                 s.response = `**Error:** ${data.message || 'Unknown error'}`;
+                showToast(data.message || 'The model returned an error.', { variant: 'error', title: 'Generation failed' });
                 break;
         }
         return s;
