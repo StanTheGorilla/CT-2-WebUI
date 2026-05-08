@@ -329,8 +329,19 @@ pre {
     @keyframes c2-slide-up { 0% { opacity: 1; transform: none; } }
 }
 
-/* ── Global focus ring (accessible + consistent across the app) ── */
-:focus-visible {
+/* ── Global focus ring (accessible + consistent across the app) ──
+   Scoped to buttons / links / role=button / tabindex — i.e. things a
+   keyboard user tabs to that don't already style their own focus.
+   Form fields (input/textarea/select) handle focus via parent
+   :focus-within glows, so excluding them avoids a rectangular ring
+   around the inner field on top of the rounded outer container. */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[role="switch"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[tabindex]:focus-visible:not(input):not(textarea):not(select) {
     outline: none;
     box-shadow: var(--c2-focus-ring);
     border-radius: inherit;
