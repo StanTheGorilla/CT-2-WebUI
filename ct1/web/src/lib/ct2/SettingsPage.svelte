@@ -299,6 +299,24 @@
         await fetchRag();
     }
 
+    // After a model load, llama-server reports `offloaded N/M layers`.
+    // If N < M, the model partially fell back to CPU — usually because
+    // VRAM fragmentation from prior restarts left no clean block. The
+    // user sees this as throughput crashing from ~40 to a few tok/s.
+    async function checkLoadHealth() {
+        try {
+            const res = await fetch('/api/system/gpu-status');
+            const d = await res.json();
+            const layers = d?.layers;
+            if (layers && layers.degraded) {
+                showToast(
+                    `Only ${layers.offloaded}/${layers.total} layers loaded on the GPU — the rest will run on CPU and slow generation a lot. Try Hard reset (Settings → Status) to clear VRAM fragmentation.`,
+                    { variant: 'warning', title: 'Degraded model load', duration: 12000 }
+                );
+            }
+        } catch {}
+    }
+
     async function selectModel(name: string) {
         if (name === activeModel) { pickerOpen = false; return; }
         pickerOpen = false; switching = true; switchError = '';
@@ -306,7 +324,7 @@
         try {
             const res = await fetch('/api/model/select', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: name }) });
             const d = await res.json();
-            if (d.error) { switchError = d.error; } else { await loadData(); notifyModelSwitch(); }
+            if (d.error) { switchError = d.error; } else { await loadData(); notifyModelSwitch(); await checkLoadHealth(); }
         } catch (e: any) { switchError = e.message || 'Failed'; }
         finally { switching = false; clearModelSwapping(); }
     }
@@ -318,9 +336,37 @@
         try {
             const res = await fetch('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context_size: contextSize, n_gpu_layers: gpuLayers, flash_attn: flashAttn, cont_batching: contBatching }) });
             const d = await res.json();
-            if (d.error) { switchError = d.error; } else { runningContextSize = contextSize; runningGpuLayers = gpuLayers; runningFlashAttn = flashAttn; runningContBatching = contBatching; await loadData(); }
+            if (d.error) { switchError = d.error; } else { runningContextSize = contextSize; runningGpuLayers = gpuLayers; runningFlashAttn = flashAttn; runningContBatching = contBatching; await loadData(); await checkLoadHealth(); }
         } catch (e: any) { switchError = e.message || 'Failed'; }
         finally { switching = false; }
+    }
+
+    let hardResetting = $state(false);
+    async function hardResetServer() {
+        if (hardResetting) return;
+        hardResetting = true;
+        switching = true; switchError = '';
+        try {
+            const res = await fetch('/api/server/hard-reset', { method: 'POST' });
+            const d = await res.json();
+            if (d.error) { switchError = d.error; }
+            else {
+                await loadData();
+                const layers = d.layers;
+                if (layers && layers.degraded) {
+                    showToast(
+                        `Hard reset complete but ${layers.offloaded}/${layers.total} layers still on GPU — driver may need a full system restart to clear VRAM.`,
+                        { variant: 'warning', title: 'Still degraded', duration: 12000 }
+                    );
+                } else if (layers) {
+                    showToast(
+                        `Hard reset complete — all ${layers.total} layers on GPU.`,
+                        { variant: 'success', duration: 5000 }
+                    );
+                }
+            }
+        } catch (e: any) { switchError = e.message || 'Failed'; }
+        finally { hardResetting = false; switching = false; }
     }
 
     async function switchBackend(backend: 'vulkan' | 'cuda') {
@@ -1702,6 +1748,16 @@
                     <div class="c2-skeleton"></div>
                 {:else}
                     <StatusIndicator label="Model" status={modelStatus} />
+
+                    <div class="c2-row" style="margin-top:18px; flex-direction:column; align-items:stretch; gap:12px;">
+                        <div class="c2-row-label">
+                            <div class="c2-row-name">Hard reset llama-server</div>
+                            <div class="c2-row-desc">If generation has slowed dramatically after a few normal restarts, the AMD Vulkan driver may be holding fragmented VRAM that prevents the model from fully loading on the GPU. Hard reset waits much longer for the driver to release memory before relaunching, then reports how many layers ended up on GPU.</div>
+                        </div>
+                        <button class="c2-btn-outline c2-btn-warn" style="align-self:flex-start;" onclick={hardResetServer} disabled={hardResetting}>
+                            {hardResetting ? 'Hard resetting…' : 'Hard reset'}
+                        </button>
+                    </div>
                 {/if}
             {/if}
 

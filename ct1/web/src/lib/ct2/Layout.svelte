@@ -1685,6 +1685,11 @@
     .c2-toast-success {
         border-color: oklch(0.70 0.18 145 / 0.5);
     }
+    .c2-toast-warning {
+        border-color: oklch(0.78 0.16 75 / 0.55);
+        background: oklch(0.78 0.16 75 / 0.08);
+        color: var(--c2-fg-0);
+    }
     .c2-toast-body {
         flex: 1;
         min-width: 0;
