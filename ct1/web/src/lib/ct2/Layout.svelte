@@ -843,12 +843,16 @@
         background: transparent;
         color: var(--c2-fg-1);
         cursor: pointer;
-        transition: background 120ms, color 120ms, border-color 120ms;
+        transition: background var(--c2-dur-fast), color var(--c2-dur-fast), border-color var(--c2-dur-fast), transform var(--c2-dur-fast);
         flex-shrink: 0;
     }
     .c2-icon-btn:hover {
         background: var(--c2-bg-2);
         color: var(--c2-fg-0);
+    }
+    .c2-icon-btn:active {
+        transform: scale(0.94);
+        background: var(--c2-bg-3);
     }
     .c2-icon-btn-active {
         background: var(--c2-bg-3);
@@ -886,10 +890,11 @@
         font-weight: 500;
         color: var(--c2-fg-1);
         text-decoration: none;
-        transition: background 120ms, color 120ms;
+        transition: background var(--c2-dur-fast), color var(--c2-dur-fast), transform var(--c2-dur-fast);
         white-space: nowrap;
     }
     .c2-nav-btn:hover { background: var(--c2-bg-2); color: var(--c2-fg-0); }
+    .c2-nav-btn:active { background: var(--c2-bg-3); transform: scale(0.97); }
     .c2-nav-btn-active { background: var(--c2-bg-2); color: var(--c2-fg-0); }
 
     /* ── Model switcher ────────────────────────────────────────── */
@@ -908,10 +913,11 @@
         color: var(--c2-fg-0);
         font-size: 13.5px;
         cursor: pointer;
-        transition: background 120ms, border-color 120ms;
+        transition: background var(--c2-dur-fast), border-color var(--c2-dur-fast), transform var(--c2-dur-fast);
         white-space: nowrap;
     }
     .c2-model-btn:hover:not(:disabled) { background: var(--c2-bg-2); }
+    .c2-model-btn:active:not(:disabled) { transform: scale(0.98); }
     .c2-model-btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .c2-model-btn-open { border-color: var(--c2-border-3); }
 
@@ -973,9 +979,10 @@
         padding: 6px;
         box-shadow: var(--c2-shadow-panel);
         z-index: 70;
-        animation: c2-spring-up 200ms var(--c2-spring) both;
+        animation: c2-spring-up var(--c2-dur-base) var(--c2-spring) both;
         scrollbar-width: thin;
         scrollbar-color: var(--c2-border-2) transparent;
+        will-change: transform, opacity;
     }
     .c2-dropdown-empty {
         padding: 14px 10px;
@@ -1078,7 +1085,7 @@
         height: 3px;
         border-radius: 999px;
         background: var(--c2-bg-3);
-        transition: all 320ms var(--c2-spring);
+        transition: width var(--c2-dur-slow) var(--c2-spring), background var(--c2-dur-slow) var(--c2-spring);
     }
     .c2-phase-seg-done {
         background: var(--c2-fg-2);
@@ -1114,7 +1121,9 @@
         display: flex;
         flex-direction: column;
         transform: translateX(-106%);
-        transition: transform 320ms var(--c2-spring);
+        transition: transform var(--c2-dur-slow) var(--c2-spring);
+        will-change: transform;
+        backface-visibility: hidden;
     }
     .c2-sidebar-open {
         transform: translateX(0);
@@ -1333,7 +1342,7 @@
         padding: 2px 6px;
         border-radius: 999px;
         flex-shrink: 0;
-        transition: all 140ms ease;
+        transition: color var(--c2-dur-fast) ease, background var(--c2-dur-fast) ease, border-color var(--c2-dur-fast) ease;
     }
     .c2-ws-item:hover .c2-ws-count {
         color: var(--c2-fg-2);

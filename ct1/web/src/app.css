@@ -144,7 +144,9 @@ body {
     font-family: var(--font-body);
     font-size: 15px;
     line-height: 1.6;
-    /* Let the OS handle subpixel antialiasing (ClearType on Windows). */
+    /* Crisper text against blurred backdrops + on the zoomed body. */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
     overflow: hidden;
     scrollbar-width: none;
@@ -293,7 +295,8 @@ pre {
 
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
-        transition-duration: 200ms !important;
+        transition-duration: 120ms !important;
+        animation-duration: 120ms !important;
     }
     /* Shorten entrance/one-shot animations but leave looping indicators alone */
     @keyframes slideUp { 0% { opacity: 1; transform: none; } }
@@ -303,6 +306,18 @@ pre {
     @keyframes slideOutRight { 0% { opacity: 1; transform: none; } }
     @keyframes fadeIn { 0% { opacity: 1; } }
     @keyframes expandY { 0% { opacity: 1; transform: none; } }
+    /* c2-* entrance animations also collapse to a no-op start frame */
+    @keyframes c2-fade-in { 0% { opacity: 1; } }
+    @keyframes c2-spring-up { 0% { opacity: 1; transform: none; } }
+    @keyframes c2-slide-in-right { 0% { opacity: 1; transform: none; } }
+    @keyframes c2-slide-up { 0% { opacity: 1; transform: none; } }
+}
+
+/* ── Global focus ring (accessible + consistent across the app) ── */
+:focus-visible {
+    outline: none;
+    box-shadow: var(--c2-focus-ring);
+    border-radius: inherit;
 }
 
 /* ================================================================
@@ -341,6 +356,12 @@ pre {
         0 10px 28px -12px oklch(0 0 0 / 0.55);
     --c2-spring: cubic-bezier(0.22, 1.2, 0.36, 1);
     --c2-ease: cubic-bezier(0.3, 0, 0.2, 1);
+    /* Standardized motion timings — pick one, don't roll your own ms values */
+    --c2-dur-fast: 120ms;
+    --c2-dur-base: 180ms;
+    --c2-dur-slow: 320ms;
+    /* Consistent focus ring */
+    --c2-focus-ring: 0 0 0 2px var(--c2-bg-0), 0 0 0 4px var(--c2-accent);
     --c2-feed-max: 860px;
 }
 

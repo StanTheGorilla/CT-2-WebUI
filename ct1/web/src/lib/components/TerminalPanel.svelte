@@ -267,7 +267,7 @@
         justify-content: center;
         color: var(--text-muted, #555);
         border-radius: 6px;
-        transition: all 200ms ease;
+        transition: color 200ms ease, background 200ms ease;
     }
     .term-action:hover {
         background: var(--accent-subtle);

@@ -251,7 +251,7 @@
         justify-content: center;
         color: var(--text-muted);
         border-radius: 8px;
-        transition: all var(--transition);
+        transition: color var(--transition), background var(--transition);
     }
     .tree-refresh:hover {
         background: var(--accent-subtle);
@@ -343,7 +343,7 @@
         font-size: 11.5px;
         color: var(--text);
         text-align: left;
-        transition: all var(--transition);
+        transition: color var(--transition), background var(--transition);
     }
     .tree-file:hover {
         background: var(--accent-subtle);

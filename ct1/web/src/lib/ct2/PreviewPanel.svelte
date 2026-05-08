@@ -252,7 +252,7 @@
         background: transparent;
         border: 1px solid transparent;
         cursor: pointer;
-        transition: all 120ms;
+        transition: color var(--c2-dur-fast), background var(--c2-dur-fast), border-color var(--c2-dur-fast);
     }
     .c2-pv-seg:hover:not(.c2-pv-seg-active) { color: var(--c2-fg-1); }
     .c2-pv-seg-active {
