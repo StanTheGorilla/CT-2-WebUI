@@ -1,11 +1,13 @@
 import asyncio
 import json
+import os
 import re as _re
+import secrets
 import yaml
 import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse as _BaseStreamingResponse
 
 
@@ -39,6 +41,22 @@ from ct1.memory.journal_reader import JournalReader
 from ct1.memory.session_store import SessionStore
 from ct1.memory.conversation_db import ConversationDB
 from ct1.memory.component_cache import ComponentCache
+from ct1.server.auth import (
+    AuthConfig,
+    AuthState,
+    COOKIE_NAME,
+    SESSION_TTL_SECONDS,
+    computed_allowed_origins,
+    ensure_session_secret,
+    hash_password,
+    is_public_path,
+    issue_session,
+    parse_session,
+    require_admin as _auth_require_admin,
+    require_auth as _auth_require_auth,
+    verify_password,
+    ws_origin_allowed,
+)
 from ct1.server.workspace import WorkspaceManager, is_command_safe
 from ct1.server.cache_policy import should_clear_kv_cache
 from ct1.server.backend_detector import detect as _detect_backend, probe_ollama, probe_lm_studio, stop_managed_proc as _stop_ollama
@@ -116,6 +134,24 @@ except Exception as _cfg_err:
     print(f"[api] WARNING: Config not loaded: {_cfg_err}")
     print("[api]    Open Settings in the web UI to assign a model file to your preset.")
     _cfg = {}
+
+# ── Auth config ────────────────────────────────────────────────────────
+# Loaded eagerly so the bind address and CORS allow-list can react to it.
+# Auto-generated session secret is persisted on first start; rotating it
+# (e.g. on password change) invalidates every outstanding session.
+try:
+    _auth_cfg = AuthConfig.from_dict(_raw_cfg.get("auth"))
+except Exception as _auth_err:
+    print(f"[api] FATAL: invalid auth config: {_auth_err}")
+    raise
+if ensure_session_secret(_auth_cfg):
+    _raw_cfg.setdefault("auth", {})["session_secret"] = _auth_cfg.session_secret
+    try:
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as _fh:
+            yaml.safe_dump(_raw_cfg, _fh, sort_keys=False)
+    except Exception as _persist_err:
+        print(f"[api] WARNING: could not persist session_secret: {_persist_err}")
+_auth_state = AuthState(_auth_cfg)
 _orch: Orchestrator | None = None
 _server_procs: list = []
 _db: ConversationDB | None = None
@@ -688,12 +724,39 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="CT-2 API", lifespan=lifespan)
 
+# CORS — the allow-list mirrors the auth posture. In `none` mode the bind
+# is localhost-only, so only same-origin requests can ever reach us anyway.
+# In `password` mode the host can add LAN origins via auth.allowed_origins.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=computed_allowed_origins(_auth_state.cfg, port=8000),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _auth_gate(request, call_next):
+    """Reject unauthed callers before they hit any non-public route.
+
+    In `none` mode this is a no-op (every request is treated as the
+    implicit admin). In `password` mode the cookie is required for
+    everything except the auth endpoints and the static shell.
+    """
+    if _auth_state.cfg.mode == "none":
+        return await call_next(request)
+    if is_public_path(request.url.path):
+        return await call_next(request)
+    token = request.cookies.get(COOKIE_NAME, "")
+    if parse_session(token, _auth_state.cfg.session_secret) is None:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required."},
+            headers={"WWW-Authenticate": "Cookie"},
+        )
+    return await call_next(request)
 
 
 @app.get("/api/status")
@@ -702,6 +765,146 @@ async def get_status():
     model_url = f"http://localhost:{port}"
     model = await check_server_health(model_url)
     return {"model": model, "version": APP_VERSION}
+
+
+# ── Auth endpoints ─────────────────────────────────────────────────────
+
+class _LoginBody(BaseModel):
+    password: str
+
+
+class _PasswordChangeBody(BaseModel):
+    current_password: str | None = None  # required if a hash already exists
+    new_password: str
+    enable: bool = True  # also flip auth.mode → password if currently 'none'
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    """Always public. The frontend hits this on boot to decide whether
+    to render the login screen or the app shell."""
+    cfg = _auth_state.cfg
+    if cfg.mode == "none":
+        return {"mode": "none", "authenticated": True, "needs_setup": False}
+    needs_setup = cfg.needs_password_setup()
+    token = request.cookies.get(COOKIE_NAME, "")
+    authed = parse_session(token, cfg.session_secret) is not None
+    return {
+        "mode": cfg.mode,
+        "authenticated": authed and not needs_setup,
+        "needs_setup": needs_setup,
+    }
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: _LoginBody, response: Response):
+    cfg = _auth_state.cfg
+    if cfg.mode == "none":
+        # Login isn't meaningful without auth — but don't 404 either; the
+        # frontend may briefly hit this during a mode transition.
+        return {"ok": True, "mode": "none"}
+    if cfg.needs_password_setup():
+        raise HTTPException(status_code=409, detail="Password setup required.")
+    if not verify_password(body.password, cfg.password_hash):
+        # Constant-ish delay to soften timing attacks. Bcrypt verify is
+        # already slow enough; this is belt-and-braces.
+        await asyncio.sleep(0.4)
+        raise HTTPException(status_code=401, detail="Wrong password.")
+    token = issue_session(cfg.session_secret)
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=False,  # toggle on once TLS termination is documented
+        path="/",
+    )
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(response: Response):
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+def _persist_auth_cfg() -> None:
+    """Write the live AuthConfig back to model_config.yaml."""
+    _raw_cfg["auth"] = _auth_state.cfg.to_dict()
+    with open(_CONFIG_PATH, "w", encoding="utf-8") as fh:
+        yaml.safe_dump(_raw_cfg, fh, sort_keys=False)
+
+
+@app.post("/api/auth/password")
+async def auth_set_password(body: _PasswordChangeBody, request: Request, response: Response):
+    """Set or change the shared password.
+
+    First-time setup (no current hash): no current_password required, and
+    auth.mode flips to 'password' atomically. Subsequent changes require
+    the current password and rotate the session secret so existing
+    sessions everywhere are invalidated.
+    """
+    cfg = _auth_state.cfg
+    new_pw = (body.new_password or "").strip()
+    if len(new_pw) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+
+    is_first_setup = (cfg.mode == "none") or cfg.needs_password_setup()
+    if not is_first_setup:
+        # Caller must already be authed (middleware already enforced that
+        # for password mode) AND prove they know the current password.
+        if not body.current_password or not verify_password(body.current_password, cfg.password_hash):
+            await asyncio.sleep(0.4)
+            raise HTTPException(status_code=401, detail="Current password is wrong.")
+
+    new_cfg = AuthConfig(
+        mode="password" if (is_first_setup and body.enable) else cfg.mode,
+        password_hash=hash_password(new_pw),
+        # Rotate the secret on every password change → every session everywhere logs out.
+        session_secret=secrets.token_urlsafe(48) if not is_first_setup else cfg.session_secret,
+        allowed_origins=list(cfg.allowed_origins),
+        bind_when_auth=cfg.bind_when_auth,
+    )
+    if is_first_setup:
+        # Ensure a secret exists for the first-time enable case too.
+        ensure_session_secret(new_cfg)
+    _auth_state.replace(new_cfg)
+    _persist_auth_cfg()
+
+    # Issue a fresh session for the caller so they aren't kicked out.
+    token = issue_session(new_cfg.session_secret)
+    response.set_cookie(
+        key=COOKIE_NAME, value=token, max_age=SESSION_TTL_SECONDS,
+        httponly=True, samesite="lax", secure=False, path="/",
+    )
+    return {"ok": True, "mode": new_cfg.mode}
+
+
+@app.post("/api/auth/disable")
+async def auth_disable(body: _LoginBody, request: Request, response: Response):
+    """Switch back to single-user `none` mode. Requires the current password.
+
+    Wipes the password hash and rotates the session secret so any other
+    devices that were logged in lose access immediately.
+    """
+    cfg = _auth_state.cfg
+    if cfg.mode == "none":
+        return {"ok": True, "mode": "none"}
+    if not verify_password(body.password, cfg.password_hash):
+        await asyncio.sleep(0.4)
+        raise HTTPException(status_code=401, detail="Wrong password.")
+    new_cfg = AuthConfig(
+        mode="none",
+        password_hash="",
+        session_secret=secrets.token_urlsafe(48),
+        allowed_origins=list(cfg.allowed_origins),
+        bind_when_auth=cfg.bind_when_auth,
+    )
+    _auth_state.replace(new_cfg)
+    _persist_auth_cfg()
+    response.delete_cookie(COOKIE_NAME, path="/")
+    return {"ok": True, "mode": "none"}
 
 
 @app.get("/api/events")
@@ -2420,6 +2623,18 @@ async def delete_cached_component(comp_id: str):
 
 @app.websocket("/ws/think")
 async def ws_think(websocket: WebSocket):
+    # Reject cross-site WS upgrades. Closes the DNS-rebinding / drive-by
+    # vector against localhost, even when auth.mode = none.
+    origin = websocket.headers.get("origin")
+    if not ws_origin_allowed(origin, _auth_state.cfg, port=8000):
+        await websocket.close(code=4403, reason="Origin not allowed")
+        return
+    # Auth gate (no-op in `none` mode).
+    if _auth_state.cfg.mode != "none":
+        token = websocket.cookies.get(COOKIE_NAME, "")
+        if parse_session(token, _auth_state.cfg.session_secret) is None:
+            await websocket.close(code=4401, reason="Authentication required")
+            return
     if _swapping or _shutting_down:
         await websocket.close(code=1013, reason="Server busy — try again shortly")
         return
@@ -3096,6 +3311,15 @@ async def command_approve(approval_id: str, body: CommandApprovalBody):
 
 @app.websocket("/ws/terminal")
 async def ws_terminal(websocket: WebSocket):
+    origin = websocket.headers.get("origin")
+    if not ws_origin_allowed(origin, _auth_state.cfg, port=8000):
+        await websocket.close(code=4403, reason="Origin not allowed")
+        return
+    if _auth_state.cfg.mode != "none":
+        token = websocket.cookies.get(COOKIE_NAME, "")
+        if parse_session(token, _auth_state.cfg.session_secret) is None:
+            await websocket.close(code=4401, reason="Authentication required")
+            return
     await websocket.accept()
     proc = None
     ws_closed = False
@@ -3227,4 +3451,17 @@ if __name__ == "__main__":
     import uvicorn
     _ensure_frontend_built()   # npm install + npm run build
     _mount_frontend_if_built() # mount now that the build exists
-    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_graceful_shutdown=5)
+    # Bind policy:
+    #   auth.mode = none      → 127.0.0.1 only (single-user default; closes LAN exposure)
+    #   auth.mode = password  → 0.0.0.0 (so the family can reach it on the home network)
+    # CT2_HOST env var overrides regardless — useful when fronting CT-2 with
+    # a reverse proxy (Caddy / Tailscale Funnel) and binding to localhost.
+    _host_override = os.environ.get("CT2_HOST", "").strip()
+    if _host_override:
+        _bind_host = _host_override
+    elif _auth_state.cfg.mode == "none":
+        _bind_host = "127.0.0.1"
+    else:
+        _bind_host = _auth_state.cfg.bind_when_auth or "0.0.0.0"
+    print(f"[api] auth.mode={_auth_state.cfg.mode}  bind={_bind_host}:8000")
+    uvicorn.run(app, host=_bind_host, port=8000, timeout_graceful_shutdown=5)

@@ -13,6 +13,7 @@
     import { sidebarOpen } from '$lib/stores/conversations';
     import { preferences, toggleTheme } from '$lib/stores/preferences';
     import { getPhaseLabel } from '$lib/chatUi';
+    import { authStatus, authReady, refreshAuthStatus, needsLoginScreen } from '$lib/stores/auth';
 
     function startNewChat() {
         newConversation();
@@ -20,8 +21,31 @@
         goto('/');
     }
 
-    onMount(() => connect());
+    onMount(async () => {
+        // Resolve auth state BEFORE opening the chat WS.
+        // In `password` mode an unauthed WS is rejected with 4401, so opening it
+        // pre-login would just churn. In `none` mode this resolves instantly.
+        const s = await refreshAuthStatus();
+        const onLogin = $page.url.pathname === '/login';
+        if (needsLoginScreen(s) && !onLogin) {
+            await goto('/login', { replaceState: true });
+            return;
+        }
+        if (!needsLoginScreen(s) && onLogin) {
+            await goto('/', { replaceState: true });
+        }
+        connect();
+    });
     onDestroy(() => disconnect());
+
+    // 401 from any fetch in the app should bounce us to the login page.
+    // Re-checking auth status is cheap and self-healing if a session expired.
+    $effect(() => {
+        if (!$authReady) return;
+        if (needsLoginScreen($authStatus) && $page.url.pathname !== '/login') {
+            goto('/login', { replaceState: true });
+        }
+    });
 
     let { children } = $props();
 
@@ -126,7 +150,9 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-{#if isCt2}
+{#if $page.url.pathname === '/login'}
+    {@render children()}
+{:else if isCt2}
     <Ct2Layout>
         {@render children()}
     </Ct2Layout>

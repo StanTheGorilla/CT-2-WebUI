@@ -10,5 +10,6 @@ aiosqlite>=0.20.0
 trafilatura>=2.0.0
 ddgs>=9.0.0
 python-multipart>=0.0.9
+bcrypt>=4.0.0
 numpy>=1.26.0
 pymupdf>=1.24.0
