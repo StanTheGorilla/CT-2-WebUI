@@ -294,29 +294,32 @@
 
     <!-- Topbar -->
     <header class="c2-topbar">
-        <!-- Left: burger + logo -->
+        <!-- Left: burger + new chat | logo -->
         <div class="c2-tb-left">
-            <button
-                class="c2-icon-btn"
-                class:c2-icon-btn-active={$sidebarOpen}
-                onclick={() => sidebarOpen.update(v => !v)}
-                aria-label="Conversations"
-                title="Conversations history"
-            >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                    <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                </svg>
-            </button>
-            <button
-                class="c2-icon-btn"
-                onclick={startNew}
-                aria-label="New chat"
-                title="New chat (Ctrl+Shift+N)"
-            >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                    <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-            </button>
+            <div class="c2-tb-group">
+                <button
+                    class="c2-icon-btn"
+                    class:c2-icon-btn-active={$sidebarOpen}
+                    onclick={() => sidebarOpen.update(v => !v)}
+                    aria-label="Conversations"
+                    title="Conversations history"
+                >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                        <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    </svg>
+                </button>
+                <button
+                    class="c2-icon-btn"
+                    onclick={startNew}
+                    aria-label="New chat"
+                    title="New chat (Ctrl+Shift+N)"
+                >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
+            <span class="c2-tb-divider" aria-hidden="true"></span>
             <a href="/" class="c2-logo">
                 <span class="c2-logo-text">ct·2</span>
             </a>
@@ -409,42 +412,45 @@
             {/if}
         </div>
 
-        <!-- Right: theme toggle, journal, settings -->
+        <!-- Right: theme | journal + settings -->
         <div class="c2-tb-right">
-            <button class="c2-icon-btn" onclick={toggleTheme} aria-label="Toggle theme">
+            <button class="c2-icon-btn" onclick={toggleTheme} aria-label="Toggle theme" title="Toggle theme">
                 {#if $preferences.theme === 'dark'}
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                         <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                 {:else}
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                         <circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.6"/>
                         <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M17.36 17.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M17.36 6.64l1.42-1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
                     </svg>
                 {/if}
             </button>
-            <a
-                href="/journal"
-                class="c2-nav-btn"
-                class:c2-nav-btn-active={$page.url.pathname === '/journal'}
-            >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                    <path d="M4 19.5A2.5 2.5 0 016.5 17H20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-                Learn
-            </a>
-            <a
-                href="/settings"
-                class="c2-nav-btn"
-                class:c2-nav-btn-active={$page.url.pathname === '/settings'}
-            >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                    <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" stroke="currentColor" stroke-width="1.5"/>
-                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
-                </svg>
-                Settings
-            </a>
+            <span class="c2-tb-divider" aria-hidden="true"></span>
+            <div class="c2-tb-group">
+                <a
+                    href="/journal"
+                    class="c2-nav-btn"
+                    class:c2-nav-btn-active={$page.url.pathname === '/journal'}
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                        <path d="M4 19.5A2.5 2.5 0 016.5 17H20" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Learn
+                </a>
+                <a
+                    href="/settings"
+                    class="c2-nav-btn"
+                    class:c2-nav-btn-active={$page.url.pathname === '/settings'}
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                        <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" stroke="currentColor" stroke-width="1.5"/>
+                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
+                    </svg>
+                    Settings
+                </a>
+            </div>
         </div>
     </header>
 
@@ -775,10 +781,10 @@
     .c2-topbar {
         position: relative;
         z-index: 50;
-        height: 56px;
+        height: 64px;
         display: flex;
         align-items: center;
-        padding: 0 14px;
+        padding: 0 24px;
         background: oklch(0.155 0.003 260 / 0.88);
         backdrop-filter: blur(20px) saturate(1.2);
         -webkit-backdrop-filter: blur(20px) saturate(1.2);
@@ -791,29 +797,48 @@
     .c2-tb-left {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 14px;
         flex: 1;
+        min-width: 0;
     }
     .c2-tb-center {
         display: flex;
         align-items: center;
+        flex: 0 0 auto;
+        padding: 0 16px;
     }
     .c2-tb-right {
         display: flex;
         align-items: center;
-        gap: 2px;
+        gap: 14px;
         flex: 1;
         justify-content: flex-end;
+        min-width: 0;
+    }
+
+    /* Tight cluster within a zone (e.g. burger+plus or Learn+Settings) */
+    .c2-tb-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    /* Subtle vertical separator between groups */
+    .c2-tb-divider {
+        width: 1px;
+        height: 20px;
+        background: var(--c2-border-2);
+        flex-shrink: 0;
     }
 
     /* ── Icon button ───────────────────────────────────────────── */
     .c2-icon-btn {
-        width: 32px;
-        height: 32px;
+        width: 36px;
+        height: 36px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        border-radius: 8px;
+        border-radius: 10px;
         border: 1px solid transparent;
         background: transparent;
         color: var(--c2-fg-1);
@@ -838,13 +863,14 @@
         gap: 8px;
         text-decoration: none;
         color: inherit;
+        padding: 4px 2px;
     }
-    .c2-logo:hover { opacity: 1; }
+    .c2-logo:hover { opacity: 0.85; }
     .c2-logo-text {
-        font-size: 15px;
-        font-weight: 500;
+        font-size: 17px;
+        font-weight: 600;
         color: var(--c2-fg-0);
-        letter-spacing: -0.1px;
+        letter-spacing: -0.2px;
         line-height: 1;
     }
 
@@ -852,14 +878,15 @@
     .c2-nav-btn {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        height: 30px;
-        padding: 0 10px;
-        border-radius: 8px;
-        font-size: 13px;
+        gap: 8px;
+        height: 36px;
+        padding: 0 14px;
+        border-radius: 10px;
+        font-size: 13.5px;
+        font-weight: 500;
         color: var(--c2-fg-1);
         text-decoration: none;
-        transition: background 120ms;
+        transition: background 120ms, color 120ms;
         white-space: nowrap;
     }
     .c2-nav-btn:hover { background: var(--c2-bg-2); color: var(--c2-fg-0); }
@@ -872,14 +899,14 @@
     .c2-model-btn {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        height: 32px;
-        padding: 0 12px;
+        gap: 8px;
+        height: 36px;
+        padding: 0 16px;
         border-radius: 999px;
         background: var(--c2-bg-1);
         border: 1px solid var(--c2-border-2);
         color: var(--c2-fg-0);
-        font-size: 13px;
+        font-size: 13.5px;
         cursor: pointer;
         transition: background 120ms, border-color 120ms;
         white-space: nowrap;
@@ -1022,8 +1049,8 @@
         display: inline-flex;
         align-items: center;
         gap: 12px;
-        height: 32px;
-        padding: 0 14px;
+        height: 36px;
+        padding: 0 16px;
         border-radius: 999px;
         background: var(--c2-bg-1);
         border: 1px solid var(--c2-border-2);
