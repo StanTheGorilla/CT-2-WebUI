@@ -264,11 +264,13 @@ export function setContextSize(n: number) { _contextSize = n; }
 // In-flight compaction abort handle. Only one compaction can be running at a
 // time (sendThink is the only caller and it awaits before sending).
 let _compactAbort: AbortController | null = null;
+let _userCancelledCompact = false;
 
-/** User-initiated cancel from the UI. Aborts the in-flight /api/compact fetch.
- *  The catch-block in sendThink will fall back to mechanical compaction so the
- *  user still gets a sane conversation state. */
+/** User-initiated cancel from the UI. Aborts the in-flight /api/compact fetch
+ *  and tells sendThink to skip the mechanical fallback — the original
+ *  conversation is sent through unchanged. */
 export function cancelCompaction() {
+    _userCancelledCompact = true;
     _compactAbort?.abort();
 }
 
@@ -1245,9 +1247,9 @@ export async function sendThink(goal: string, attachments: Attachment[] = []) {
         return { role: t.role, content: t.content };
     });
 
-    // Auto-compact before the model context fills up.
-    // Reserve room for the new user message and for the next reply, otherwise small
-    // contexts like 2K can still start a turn that gets clipped mid-generation.
+    // Auto-compact only when the prompt is genuinely about to overflow the
+    // model's context. Earlier thresholds tripped at ~50–70% utilization which
+    // surprised users; now we only fire close to the real ceiling.
     if (_contextSize > 0 && conv.length >= 2) {
         const historyTokens = backendConv.reduce(
             (acc: number, t: any) => acc + estimateContentTokens(t.content),
@@ -1256,16 +1258,19 @@ export async function sendThink(goal: string, attachments: Attachment[] = []) {
         const pendingUserTokens = estimateContentTokens(goalContent);
         const overhead = Math.min(800, Math.round(_contextSize * 0.4));
         const effectiveCtx = Math.max(512, _contextSize - overhead);
+        // Smaller cushion for the upcoming reply: 256–512 tokens. The model and
+        // server can still auto-continue if a response runs long.
         const replyReserve = Math.min(
-            1024,
-            Math.max(256, Math.round(effectiveCtx * 0.45))
+            512,
+            Math.max(256, Math.round(effectiveCtx * 0.05))
         );
         const projectedPrompt = historyTokens + pendingUserTokens;
-        if (projectedPrompt > effectiveCtx - replyReserve || historyTokens / effectiveCtx >= 0.75) {
+        if (projectedPrompt > effectiveCtx - replyReserve || historyTokens / effectiveCtx >= 0.90) {
             // 180s ceiling — long enough for a small local model to summarize a
             // full context, short enough that a wedged backend can't trap the UI.
             const COMPACT_TIMEOUT_MS = 180_000;
             _compactAbort = new AbortController();
+            _userCancelledCompact = false;
             const timeoutId = setTimeout(() => _compactAbort?.abort(), COMPACT_TIMEOUT_MS);
             chat.update(s => {
                 s.isCompacting = true;
@@ -1288,38 +1293,53 @@ export async function sendThink(goal: string, attachments: Attachment[] = []) {
                 }
             } catch (e) {
                 // Aborted (user-cancel or timeout) or network error — fall through.
-                console.warn('[compact] fetch failed, using mechanical fallback', e);
+                console.warn('[compact] fetch failed', e);
             } finally {
                 clearTimeout(timeoutId);
                 _compactAbort = null;
             }
 
-            if (!compacted) {
+            // If the LLM compaction didn't return a result, fall back to a
+            // mechanical summary — UNLESS the user explicitly cancelled, in
+            // which case we proceed with the conversation untouched and let the
+            // backend handle any overflow.
+            if (!compacted && !_userCancelledCompact) {
                 compacted = mechanicalCompactClient(backendConv);
                 usedFallback = true;
             }
 
-            backendConv = compacted;
-            chat.update(s => {
-                const summaryTurn: Turn = {
-                    role: 'assistant',
-                    content: compacted![0].content,
-                    isCompacted: true,
-                };
-                const codeTurn = compacted!.length > 1
-                    ? compacted![compacted!.length - 1]
-                    : null;
-                s.conversation = codeTurn
-                    ? [summaryTurn, { role: 'assistant', content: codeTurn.content, isCode: true }]
-                    : [summaryTurn];
-                s.isCompacting = false;
-                s.compactStartedAt = 0;
-                if (usedFallback) {
-                    s.warning = 'Used quick fallback compaction — earlier turns trimmed without an LLM summary.';
-                }
-                return s;
-            });
-            conv = get(chat).conversation;
+            if (compacted) {
+                backendConv = compacted;
+                chat.update(s => {
+                    const summaryTurn: Turn = {
+                        role: 'assistant',
+                        content: compacted![0].content,
+                        isCompacted: true,
+                    };
+                    const codeTurn = compacted!.length > 1
+                        ? compacted![compacted!.length - 1]
+                        : null;
+                    s.conversation = codeTurn
+                        ? [summaryTurn, { role: 'assistant', content: codeTurn.content, isCode: true }]
+                        : [summaryTurn];
+                    s.isCompacting = false;
+                    s.compactStartedAt = 0;
+                    if (usedFallback) {
+                        s.warning = 'Used quick fallback compaction — earlier turns trimmed without an LLM summary.';
+                    }
+                    return s;
+                });
+                conv = get(chat).conversation;
+            } else {
+                // User-cancelled — keep the conversation intact.
+                chat.update(s => {
+                    s.isCompacting = false;
+                    s.compactStartedAt = 0;
+                    s.warning = 'Skipped compaction — sending the full conversation as-is.';
+                    return s;
+                });
+            }
+            _userCancelledCompact = false;
         }
     }
 

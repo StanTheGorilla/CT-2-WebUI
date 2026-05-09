@@ -362,7 +362,7 @@
     let ctxPct   = $derived(effectiveCtx > 0 ? Math.min(100, Math.round(usedTokens / effectiveCtx * 100)) : 0);
     let ctxLabel = $derived(usedTokens >= 1000 ? `${(usedTokens / 1000).toFixed(1)}K` : `${usedTokens}`);
     let ctxMax   = $derived(contextSize >= 1000 ? `${Math.round(contextSize / 1000)}K` : `${contextSize}`);
-    let compactionZone = $derived(ctxPct >= 75);  // matches the 0.75 threshold in sendThink
+    let compactionZone = $derived(ctxPct >= 90);  // matches the 0.90 threshold in sendThink
     let showCtxBar = $derived(contextSize > 0 && $chat.conversation.length > 0);
     let ctxTooltip = $derived(
         `${usedTokens} est. tokens used / ${effectiveCtx} effective\n` +
@@ -1207,9 +1207,9 @@
                                         type="button"
                                         class="c2-ctx-cancel"
                                         onclick={cancelCompaction}
-                                        title="Cancel and use a quick fallback summary"
-                                        aria-label="Cancel compaction"
-                                    >Cancel</button>
+                                        title="Skip compaction and send the conversation as-is"
+                                        aria-label="Skip compaction"
+                                    >Skip</button>
                                 </span>
                             {:else if compactionZone && !isActive}
                                 <span class="c2-ctx-badge near-limit">Near limit</span>
@@ -2316,25 +2316,27 @@
     /* ── Cancel-compaction chip ─────────────────────────────── */
     .c2-ctx-cancel {
         appearance: none;
-        margin-left: 6px;
-        padding: 0 8px;
-        height: 16px;
-        line-height: 16px;
+        margin-left: 8px;
+        padding: 0 10px;
+        height: 22px;
+        line-height: 22px;
         border-radius: 999px;
-        font-size: 9.5px;
+        font-size: 10.5px;
         font-weight: 600;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color: inherit;
-        background: transparent;
-        border: 1px solid currentColor;
+        letter-spacing: 0.03em;
+        color: var(--c2-fg-1);
+        background: var(--c2-bg-1);
+        border: 1px solid var(--c2-border-1);
         cursor: pointer;
-        opacity: 0.85;
-        transition: opacity 120ms, background 120ms;
+        transition: background 120ms, border-color 120ms, color 120ms;
     }
     .c2-ctx-cancel:hover {
-        opacity: 1;
-        background: oklch(1 0 0 / 0.08);
+        background: var(--c2-bg-2);
+        border-color: var(--c2-border-2);
+        color: var(--c2-fg-0);
+    }
+    .c2-ctx-cancel:active {
+        transform: translateY(0.5px);
     }
 
     /* ── Workspace context popover ──────────────────────────── */
@@ -2487,6 +2489,9 @@
         color: var(--c2-warn);
         background: color-mix(in srgb, var(--c2-warn) 12%, transparent);
         border-color: color-mix(in srgb, var(--c2-warn) 24%, transparent);
+        height: 26px;
+        padding: 0 6px 0 10px;
+        gap: 2px;
     }
     .c2-ctx-badge.near-limit {
         color: var(--c2-warn);
