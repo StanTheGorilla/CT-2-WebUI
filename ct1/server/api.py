@@ -3157,6 +3157,27 @@ async def ws_think(websocket: WebSocket):
                                             pass
                                     break
 
+                    # Create conversation row + send conversation_id BEFORE the
+                    # 'done' event reaches the client. Otherwise the user can click
+                    # edit/regenerate on the rendered response before the id arrives,
+                    # the next 'think' goes out with conversation_id=null, and the
+                    # backend creates a second conversation.
+                    _is_new_conv = False
+                    conv_id = msg.get("conversation_id")
+                    if _db and getattr(_db, '_conn', None) and not conv_id:
+                        try:
+                            title_text = goal if isinstance(goal, str) else (goal[0].get("text", "") if isinstance(goal, list) else str(goal))
+                            title = _heuristic_title(title_text)
+                            conv_id = await _db.create_conversation(title, _raw_cfg.get("active_preset", ""), ws_id or None)
+                            try:
+                                queue.put_nowait({"event": "conversation_id", "id": conv_id})
+                            except asyncio.QueueFull:
+                                pass
+                            _is_new_conv = True
+                        except Exception as db_err:
+                            print(f"[api] conversation create error: {db_err}")  # non-fatal
+                            conv_id = None
+
                     await queue.put({
                         "event": "done",
                         "response": result["response"],
@@ -3174,19 +3195,18 @@ async def ws_think(websocket: WebSocket):
                         "explanation": result.get("explanation"),
                     })
 
-                    # Auto-persist conversation
-                    _is_new_conv = False
-                    if _db and getattr(_db, '_conn', None):
+                    # Auto-persist messages (after 'done' is queued so the user sees
+                    # the response immediately even if DB writes are slow).
+                    if _db and getattr(_db, '_conn', None) and conv_id:
                         try:
-                            conv_id = msg.get("conversation_id")
-                            if not conv_id:
-                                title_text = goal if isinstance(goal, str) else (goal[0].get("text", "") if isinstance(goal, list) else str(goal))
-                                title = _heuristic_title(title_text)
-                                conv_id = await _db.create_conversation(title, _raw_cfg.get("active_preset", ""), ws_id or None)
-                                await websocket.send_json({"event": "conversation_id", "id": conv_id})
-                                _is_new_conv = True
-
                             position = msg.get("position", 0)
+                            # Regen/edit/revert: the frontend has rolled the visible
+                            # conversation back to `position`, so drop the stale tail
+                            # before appending — otherwise the DB ends up with two
+                            # rows at the same position and the conversation looks
+                            # doubled when reloaded.
+                            if not _is_new_conv:
+                                await _db.truncate_messages_from(conv_id, position)
                             user_content = goal if isinstance(goal, str) else json.dumps(goal)
                             await _db.add_message(conv_id, "user", user_content, position)
 

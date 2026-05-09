@@ -255,3 +255,27 @@ async def test_fork_conversation_from_messages_uses_visible_history(db):
     assert forked_conv["messages"][2]["thinking"] == "kept-thinking"
     assert forked_conv["messages"][2]["reflection"] == '{"score": 0.95}'
     assert forked_conv["messages"][2]["detected_lang"] == "html"
+
+
+@pytest.mark.asyncio
+async def test_truncate_messages_from_drops_tail(db):
+    """Regen/edit/revert: truncating from a position must remove that turn and
+    everything after it, leaving earlier turns intact."""
+    conv_id = await db.create_conversation("Regen Test", preset="default")
+    await db.add_message(conv_id, "user", "First", position=0)
+    await db.add_message(conv_id, "assistant", "First reply", position=1)
+    await db.add_message(conv_id, "user", "Second", position=2)
+    await db.add_message(conv_id, "assistant", "Second reply", position=3)
+
+    await db.truncate_messages_from(conv_id, position=2)
+
+    conv = await db.get_conversation(conv_id)
+    assert [m["content"] for m in conv["messages"]] == ["First", "First reply"]
+
+    # Re-inserting at the truncated position must not collide with stale rows.
+    await db.add_message(conv_id, "user", "Second-edited", position=2)
+    await db.add_message(conv_id, "assistant", "Second reply v2", position=3)
+    conv = await db.get_conversation(conv_id)
+    assert [m["content"] for m in conv["messages"]] == [
+        "First", "First reply", "Second-edited", "Second reply v2",
+    ]

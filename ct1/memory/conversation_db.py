@@ -376,6 +376,17 @@ class ConversationDB:
         await self._conn.commit()
         return msg_id
 
+    async def truncate_messages_from(self, conv_id: str, position: int) -> None:
+        """Delete all messages at position >= the given index for this conversation.
+        Used by regen/edit/revert: the frontend has rolled the visible conversation back
+        to `position`, so the DB tail is now stale and must be dropped before the new
+        user/assistant pair is appended."""
+        await self._conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ? AND position >= ?",
+            (conv_id, position),
+        )
+        await self._conn.commit()
+
     async def search(self, query: str, limit: int = 20) -> list[dict]:
         cursor = await self._conn.execute(
             """SELECT m.id, m.conversation_id, m.role, m.content,
