@@ -74,6 +74,10 @@
     let switchingBackend = $state(false);
     let backendError = $state('');
 
+    let inferenceBackend = $state<'local' | 'ollama' | 'lm_studio'>('local');
+    let switchingInference = $state(false);
+    let inferenceMsg = $state('');
+
     let gpuLayers = $state(99);
     let runningGpuLayers = $state(99);
     let flashAttn = $state(false);
@@ -133,6 +137,7 @@
             modelStatus = (await statusRes.json()).model ?? {};
             config = await configRes.json();
             activeBackend = (config.backend as 'vulkan' | 'cuda') ?? 'vulkan';
+            inferenceBackend = (config.inference_backend_preference as 'local' | 'ollama' | 'lm_studio') ?? 'local';
             flashAttn = config.flash_attn ?? false;
             contBatching = config.cont_batching ?? false;
             gpuLayers = config.gpu_layers ?? 99;
@@ -379,6 +384,25 @@
             activeBackend = backend; await loadData();
         } catch (e: any) { backendError = e.message || 'Failed'; }
         finally { switchingBackend = false; }
+    }
+
+    async function switchInferenceBackend(pref: 'local' | 'ollama' | 'lm_studio') {
+        if (pref === inferenceBackend || switchingInference) return;
+        switchingInference = true; inferenceMsg = '';
+        try {
+            const res = await fetch('/api/backend/preference', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preference: pref }),
+            });
+            const d = await res.json();
+            if (d.warning) inferenceMsg = d.warning;
+            await loadData();
+        } catch (e: any) {
+            inferenceMsg = e.message || 'Failed to switch';
+        } finally {
+            switchingInference = false;
+        }
     }
 
     // ── Generation params ──────────────────────────────────────────
@@ -672,7 +696,38 @@
             {#if activeSection === 'model'}
                 <div class="c2-sh">
                     <h1 class="c2-sh-title">Model</h1>
-                    <p class="c2-sh-sub">Local models available on this machine. Switching unloads the current model.</p>
+                    <p class="c2-sh-sub">Choose where models come from, then pick which one to load.</p>
+                </div>
+
+                <!-- Inference source / provider -->
+                <div class="c2-row">
+                    <div class="c2-row-label">
+                        <div class="c2-row-name">Model provider <span class="c2-param">/ inference_backend</span></div>
+                        <div class="c2-row-desc">Local runs GGUF files from your <code>models</code> folder using llama.cpp (built in). Ollama and LM Studio connect to those apps if they're running on this computer — install and start them first.</div>
+                    </div>
+                    <div class="c2-row-control">
+                        <div class="c2-seg">
+                            <button
+                                class="c2-seg-btn"
+                                class:c2-seg-active={inferenceBackend === 'local'}
+                                onclick={() => switchInferenceBackend('local')}
+                                disabled={switchingInference}
+                            >Local llama.cpp</button>
+                            <button
+                                class="c2-seg-btn"
+                                class:c2-seg-active={inferenceBackend === 'ollama'}
+                                onclick={() => switchInferenceBackend('ollama')}
+                                disabled={switchingInference}
+                            >Ollama</button>
+                            <button
+                                class="c2-seg-btn"
+                                class:c2-seg-active={inferenceBackend === 'lm_studio'}
+                                onclick={() => switchInferenceBackend('lm_studio')}
+                                disabled={switchingInference}
+                            >LM Studio</button>
+                        </div>
+                        {#if inferenceMsg}<span class="c2-inline-err">{inferenceMsg}</span>{/if}
+                    </div>
                 </div>
 
                 <div class="c2-model-toolbar">
