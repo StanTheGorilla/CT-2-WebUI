@@ -1,6 +1,5 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { preferences, toggleTheme, setCt2Bg } from '$lib/stores/preferences';
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
     import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
     import { setModelSwapping, clearModelSwapping } from '$lib/stores/backgroundTasks';
@@ -14,6 +13,11 @@
     import PlanCacheSection from './settings/PlanCacheSection.svelte';
     import WorkspacesSection from './settings/WorkspacesSection.svelte';
     import PromptsSection from './settings/PromptsSection.svelte';
+    import GenerationSection from './settings/GenerationSection.svelte';
+    import TuningSection from './settings/TuningSection.svelte';
+    import DesignSection from './settings/DesignSection.svelte';
+    import AtlasSection from './settings/AtlasSection.svelte';
+    import InterfaceSection from './settings/InterfaceSection.svelte';
 
     const CONTEXT_MIN_FLOOR = 2048;
 
@@ -216,23 +220,6 @@
         }
     }
 
-    // ── Generation params ──────────────────────────────────────────
-    let temperature = $state(0.7);
-    let topP = $state(0.9);
-    let topK = $state(40);
-    let presencePenalty = $state(0.2);
-    let repeatPenalty = $state(1.10);
-
-    $effect(() => {
-        if (!loading && config.temperature !== undefined) {
-            temperature = config.temperature ?? 0.7;
-            topP = config.top_p ?? 0.9;
-            topK = config.top_k ?? 40;
-            presencePenalty = config.presence_penalty ?? 0.2;
-            repeatPenalty = config.repeat_penalty ?? 1.10;
-        }
-    });
-
     async function saveParam(key: string, value: number | boolean) {
         try {
             await fetch('/api/config', {
@@ -243,63 +230,10 @@
         } catch {}
     }
 
-    // ── Response tuning (per-mode) ────────────────────────────────
-    interface ModeConfig { name: string; description: string; task_overrides: Record<string, number>; }
-    let modes = $state<ModeConfig[]>([]);
-    let modeEdits = $state<Record<string, Record<string, number>>>({});
-    let modesDirty = $state<Record<string, boolean>>({});
-    let modesSaving = $state<Record<string, boolean>>({});
-    let modesSaveError = $state<Record<string, string>>({});
-
-    const MODE_DEFAULTS: Record<string, Record<string, number>> = {
-        computer: { temperature: 0.25, top_p: 0.8,  presence_penalty: 1.3 },
-        design:   { temperature: 0.1,  top_p: 0.9,  presence_penalty: 0.0 },
-        code:     { temperature: 0,    top_p: 1.0,  presence_penalty: 1.3 },
-        direct:   { temperature: 0.5,  top_p: 0.9,  presence_penalty: 0.6 },
-    };
-
-    async function loadModes() {
-        try {
-            const res = await fetch('/api/modes');
-            modes = (await res.json()).modes ?? [];
-        } catch {}
-    }
-
-    async function saveMode(name: string) {
-        modesSaving[name] = true; modesSaveError[name] = '';
-        try {
-            const res = await fetch(`/api/modes/${name}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ task_overrides: modeEdits[name] }),
-            });
-            const d = await res.json();
-            if (d.error) throw new Error(d.error);
-            modesDirty[name] = false;
-        } catch (e: any) { modesSaveError[name] = e.message || 'Failed to save'; }
-        finally { modesSaving[name] = false; }
-    }
-
-    function updateModeOverride(name: string, key: string, value: number) {
-        if (!modeEdits[name]) modeEdits[name] = {};
-        modeEdits[name][key] = value;
-        modesDirty[name] = true;
-    }
-
-    function resetModeToDefault(name: string) {
-        const d = MODE_DEFAULTS[name];
-        if (!d) return;
-        modeEdits[name] = { ...d };
-        modesDirty[name] = true;
-    }
-
-    // ── Confirm reset ─────────────────────────────────────────────
-    let confirmReset = $state(false);
-
     let _mounted = $state(false);
 
     onMount(async () => {
-        await Promise.all([loadData(), loadModes(), refreshAuthStatus()]);
+        await Promise.all([loadData(), refreshAuthStatus()]);
         _mounted = true;
     });
 
@@ -577,293 +511,19 @@
 
             <!-- ── GENERATION ── -->
             {:else if activeSection === 'generation'}
-                <div class="c2-sh">
-                    <h1 class="c2-sh-title">Generation parameters</h1>
-                    <p class="c2-sh-sub">Control how the model samples tokens. Friendly labels shown alongside their technical names.</p>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Creativity <span class="c2-param">/ temperature</span></div>
-                        <div class="c2-row-desc">Higher values produce more varied output. 0.7 is a balanced default.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <div class="c2-slider-wrap">
-                            <input type="range" min="0" max="2" step="0.01" bind:value={temperature} onchange={() => saveParam('temperature', temperature)} class="c2-slider" />
-                            <div class="c2-slider-val">{temperature.toFixed(2)}</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Nucleus sampling <span class="c2-param">/ top_p</span></div>
-                        <div class="c2-row-desc">Keep the smallest set of tokens whose cumulative probability meets this threshold.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <div class="c2-slider-wrap">
-                            <input type="range" min="0" max="1" step="0.01" bind:value={topP} onchange={() => saveParam('top_p', topP)} class="c2-slider" />
-                            <div class="c2-slider-val">{topP.toFixed(2)}</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Top-K <span class="c2-param">/ top_k</span></div>
-                        <div class="c2-row-desc">Restrict sampling to the K most likely tokens at each step.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <div class="c2-slider-wrap">
-                            <input type="range" min="0" max="200" step="1" bind:value={topK} onchange={() => saveParam('top_k', topK)} class="c2-slider" />
-                            <div class="c2-slider-val">{topK}</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Presence penalty <span class="c2-param">/ presence_penalty</span></div>
-                        <div class="c2-row-desc">Discourages the model from repeating tokens that already appear in the context.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <div class="c2-slider-wrap">
-                            <input type="range" min="0" max="2" step="0.01" bind:value={presencePenalty} onchange={() => saveParam('presence_penalty', presencePenalty)} class="c2-slider" />
-                            <div class="c2-slider-val">{presencePenalty.toFixed(2)}</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Repeat penalty <span class="c2-param">/ repeat_penalty</span></div>
-                        <div class="c2-row-desc">Penalizes tokens that appear repeatedly in the output. Higher values reduce looping and repetition.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <div class="c2-slider-wrap">
-                            <input type="range" min="1.0" max="1.5" step="0.01" bind:value={repeatPenalty} onchange={() => saveParam('repeat_penalty', repeatPenalty)} class="c2-slider" />
-                            <div class="c2-slider-val">{repeatPenalty.toFixed(2)}</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Context size</div>
-                        <div class="c2-row-desc">Set by the loaded model. Read-only.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <span class="c2-readonly-val">{formatCtx(runningContextSize)} tokens</span>
-                    </div>
-                </div>
+                <GenerationSection {config} {saveParam} />
 
             <!-- ── RESPONSE TUNING ── -->
             {:else if activeSection === 'tuning'}
-                <div class="c2-sh">
-                    <h1 class="c2-sh-title">Response tuning</h1>
-                    <p class="c2-sh-sub">Per-mode overrides for temperature, sampling, and repetition. Each mode has independent defaults.</p>
-                </div>
-
-                {#if modes.length === 0}
-                    <div class="c2-skeleton"></div>
-                {:else}
-                    {#each modes as mode}
-                        <div class="c2-mode-card">
-                            <div class="c2-mode-header">
-                                <span class="c2-mode-name">{mode.name.charAt(0).toUpperCase() + mode.name.slice(1)}</span>
-                                {#if mode.description}
-                                    <span class="c2-mode-desc">{mode.description}</span>
-                                {/if}
-                                {#if MODE_DEFAULTS[mode.name]}
-                                    <button
-                                        class="c2-mode-reset"
-                                        class:c2-mode-reset-active={modesDirty[mode.name]}
-                                        onclick={() => resetModeToDefault(mode.name)}
-                                        title="Reset to defaults"
-                                    >
-                                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                            <path d="M2.5 8a5.5 5.5 0 1 0 1.1-3.3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                                            <path d="M2.5 4v4h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                                        </svg>
-                                        Reset
-                                    </button>
-                                {/if}
-                            </div>
-
-                            {#each [
-                                { key: 'temperature',       min: 0, max: 2,  step: 0.05, label: 'Creativity',       param: 'temperature'       },
-                                { key: 'top_p',             min: 0, max: 1,  step: 0.05, label: 'Nucleus sampling', param: 'top_p'             },
-                                { key: 'presence_penalty',  min: -2, max: 2, step: 0.05, label: 'Presence penalty', param: 'presence_penalty'  },
-                            ] as param}
-                                {@const val = modeEdits[mode.name]?.[param.key] ?? mode.task_overrides[param.key] ?? MODE_DEFAULTS[mode.name]?.[param.key]}
-                                {#if val !== undefined}
-                                    <div class="c2-mode-param">
-                                        <div class="c2-mode-param-header">
-                                            <span class="c2-mode-param-label">{param.label}</span>
-                                            <span class="c2-param">{param.param}</span>
-                                            <span class="c2-slider-val" style="min-width:44px;">{(modeEdits[mode.name]?.[param.key] ?? val).toFixed(2)}</span>
-                                        </div>
-                                        <input
-                                            type="range"
-                                            min={param.min}
-                                            max={param.max}
-                                            step={param.step}
-                                            value={modeEdits[mode.name]?.[param.key] ?? val}
-                                            oninput={(e) => updateModeOverride(mode.name, param.key, Number((e.target as HTMLInputElement).value))}
-                                            class="c2-slider"
-                                            style="width:100%"
-                                        />
-                                    </div>
-                                {/if}
-                            {/each}
-
-                            {#if modesDirty[mode.name] || modesSaveError[mode.name]}
-                                <div class="c2-mode-footer">
-                                    {#if modesSaveError[mode.name]}
-                                        <span class="c2-inline-err">{modesSaveError[mode.name]}</span>
-                                    {/if}
-                                    <button
-                                        class="c2-btn-primary"
-                                        onclick={() => saveMode(mode.name)}
-                                        disabled={modesSaving[mode.name]}
-                                    >{modesSaving[mode.name] ? 'Saving…' : 'Save changes'}</button>
-                                </div>
-                            {/if}
-                        </div>
-                    {/each}
-                {/if}
+                <TuningSection />
 
             <!-- ── DESIGN MODE ── -->
             {:else if activeSection === 'design'}
-                <div class="c2-sh">
-                    <h1 class="c2-sh-title">Design mode</h1>
-                    <p class="c2-sh-sub">A second pass that re-reads generated HTML and refines CSS, spacing, and visual hierarchy before finalizing.</p>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">CSS refinement pass</div>
-                        <div class="c2-row-desc">Adds 4–12s to design-mode responses, and meaningfully improves visual quality.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <button
-                            class="c2-switch"
-                            class:c2-switch-on={$preferences.designRefinement}
-                            onclick={() => preferences.update(p => ({ ...p, designRefinement: !p.designRefinement }))}
-                            role="switch"
-                            aria-checked={$preferences.designRefinement}
-                            aria-label="Toggle CSS refinement pass"
-                        >
-                            <span class="c2-switch-knob"></span>
-                        </button>
-                    </div>
-                </div>
+                <DesignSection />
 
             <!-- ── ATLAS MODE ── -->
             {:else if activeSection === 'atlas'}
-                <div class="c2-sh">
-                    <h1 class="c2-sh-title">Atlas mode</h1>
-                    <p class="c2-sh-sub">An extended reasoning layer that runs additional exploration, verification, and perspective-taking passes.</p>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Enable Atlas</div>
-                        <div class="c2-row-desc">Master toggle. When off, all sub-options are disabled.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <button
-                            class="c2-switch"
-                            class:c2-switch-on={$preferences.atlasMode}
-                            onclick={() => preferences.update(p => ({ ...p, atlasMode: !p.atlasMode }))}
-                            role="switch"
-                            aria-checked={$preferences.atlasMode}
-                            aria-label="Toggle Atlas mode"
-                        >
-                            <span class="c2-switch-knob"></span>
-                        </button>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Effort mode</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <div class="c2-seg">
-                            {#each (['auto', 'manual'] as const) as v}
-                                <button
-                                    class="c2-seg-btn"
-                                    class:c2-seg-active={$preferences.atlasEffortMode === v}
-                                    onclick={() => preferences.update(p => ({ ...p, atlasEffortMode: v }))}
-                                    disabled={!$preferences.atlasMode}
-                                >{v.charAt(0).toUpperCase() + v.slice(1)}</button>
-                            {/each}
-                        </div>
-                    </div>
-                </div>
-
-                {#if $preferences.atlasEffortMode === 'manual'}
-                    <div class="c2-row">
-                        <div class="c2-row-label">
-                            <div class="c2-row-name">Effort level <span class="c2-param">/ atlas_effort</span></div>
-                            <div class="c2-row-desc">How aggressively Atlas explores alternatives before committing.</div>
-                        </div>
-                        <div class="c2-row-control">
-                            <div class="c2-slider-wrap">
-                                <input type="range" min="1" max="5" step="1"
-                                    value={$preferences.atlasEffortLevel}
-                                    onchange={(e) => preferences.update(p => ({ ...p, atlasEffortLevel: Number((e.target as HTMLInputElement).value) }))}
-                                    class="c2-slider"
-                                    disabled={!$preferences.atlasMode}
-                                />
-                                <div class="c2-slider-val">{$preferences.atlasEffortLevel}</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="c2-row">
-                        <div class="c2-row-label">
-                            <div class="c2-row-name">Self-verification</div>
-                            <div class="c2-row-desc">Re-read the output and flag contradictions.</div>
-                        </div>
-                        <div class="c2-row-control">
-                            <button class="c2-switch" class:c2-switch-on={$preferences.atlasSelfVerification}
-                                onclick={() => preferences.update(p => ({ ...p, atlasSelfVerification: !p.atlasSelfVerification }))}
-                                disabled={!$preferences.atlasMode} role="switch" aria-checked={$preferences.atlasSelfVerification}
-                                aria-label="Toggle Atlas self-verification">
-                                <span class="c2-switch-knob"></span>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="c2-row">
-                        <div class="c2-row-label">
-                            <div class="c2-row-name">Multi-perspective</div>
-                            <div class="c2-row-desc">Consider the problem from 3 distinct viewpoints before answering.</div>
-                        </div>
-                        <div class="c2-row-control">
-                            <button class="c2-switch" class:c2-switch-on={$preferences.atlasMultiPerspective}
-                                onclick={() => preferences.update(p => ({ ...p, atlasMultiPerspective: !p.atlasMultiPerspective }))}
-                                disabled={!$preferences.atlasMode} role="switch" aria-checked={$preferences.atlasMultiPerspective}
-                                aria-label="Toggle Atlas multi-perspective mode">
-                                <span class="c2-switch-knob"></span>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="c2-row">
-                        <div class="c2-row-label">
-                            <div class="c2-row-name">Iterative refinement</div>
-                            <div class="c2-row-desc">Run additional polishing passes until no more changes are proposed.</div>
-                        </div>
-                        <div class="c2-row-control">
-                            <button class="c2-switch" class:c2-switch-on={$preferences.atlasIterativeRefinement}
-                                onclick={() => preferences.update(p => ({ ...p, atlasIterativeRefinement: !p.atlasIterativeRefinement }))}
-                                disabled={!$preferences.atlasMode} role="switch" aria-checked={$preferences.atlasIterativeRefinement}
-                                aria-label="Toggle Atlas iterative refinement">
-                                <span class="c2-switch-knob"></span>
-                            </button>
-                        </div>
-                    </div>
-                {/if}
+                <AtlasSection />
 
             <!-- ── SYSTEM PROMPTS ── -->
             {:else if activeSection === 'prompts'}
@@ -871,84 +531,7 @@
 
             <!-- ── INTERFACE ── -->
             {:else if activeSection === 'interface'}
-                <div class="c2-sh">
-                    <h1 class="c2-sh-title">Interface</h1>
-                    <p class="c2-sh-sub">Appearance and app-level preferences.</p>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Theme</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <div class="c2-seg">
-                            {#each (['dark', 'light'] as const) as v}
-                                <button
-                                    class="c2-seg-btn"
-                                    class:c2-seg-active={$preferences.theme === v}
-                                    onclick={toggleTheme}
-                                >{v.charAt(0).toUpperCase() + v.slice(1)}</button>
-                            {/each}
-                        </div>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Background <span class="c2-param">/ ct2Bg</span></div>
-                        <div class="c2-row-desc">The ambient art image behind the interface. Flat gives a cleaner, fully dark surface.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <div class="c2-seg">
-                            <button
-                                class="c2-seg-btn"
-                                class:c2-seg-active={($preferences.ct2Bg ?? 'image') !== 'none'}
-                                onclick={() => setCt2Bg('image')}
-                            >Nature</button>
-                            <button
-                                class="c2-seg-btn"
-                                class:c2-seg-active={($preferences.ct2Bg ?? 'image') === 'none'}
-                                onclick={() => setCt2Bg('none')}
-                            >Flat</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Web search</div>
-                        <div class="c2-row-desc">Allow the model to query the web when the search pill is active.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <button
-                            class="c2-switch"
-                            class:c2-switch-on={$preferences.webSearchEnabled}
-                            onclick={() => preferences.update(p => ({ ...p, webSearchEnabled: !p.webSearchEnabled }))}
-                            role="switch"
-                            aria-checked={$preferences.webSearchEnabled}
-                            aria-label="Toggle web search"
-                        >
-                            <span class="c2-switch-knob"></span>
-                        </button>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Reset all settings</div>
-                        <div class="c2-row-desc">Restores all generation, Atlas, and interface preferences to their defaults.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        {#if confirmReset}
-                            <div style="display:inline-flex;gap:8px;">
-                                <button class="c2-btn-ghost" onclick={() => confirmReset = false}>Cancel</button>
-                                <button class="c2-btn-danger" onclick={() => { preferences.set({ theme: 'light', ct2Bg: 'image', showThinking: false, designRefinement: true, webSearchEnabled: false, requireCommandApproval: false, notifyOnDone: true, atlasMode: false, atlasEffortMode: 'auto', atlasEffortLevel: 3, atlasSelfVerification: true, atlasMultiPerspective: true, atlasIterativeRefinement: true }); confirmReset = false; }}>Yes, reset</button>
-                            </div>
-                        {:else}
-                            <button class="c2-btn-outline c2-btn-err" onclick={() => confirmReset = true}>Reset…</button>
-                        {/if}
-                    </div>
-                </div>
+                <InterfaceSection />
 
             <!-- ── Security ── -->
             {:else if activeSection === 'security'}
