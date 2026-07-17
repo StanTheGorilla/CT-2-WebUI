@@ -38,7 +38,6 @@ from ct1.server.launcher import (
     get_layer_status, probe_used_vram_mb,
     _detect_vision_support, _find_mmproj_path,
 )
-from ct1.memory.journal_reader import JournalReader
 from ct1.memory.session_store import SessionStore
 from ct1.memory.conversation_db import ConversationDB
 from ct1.memory.component_cache import ComponentCache

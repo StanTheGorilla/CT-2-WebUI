@@ -1990,52 +1990,6 @@ class Orchestrator:
         except Exception:
             return False  # default: treat as action, never silently break generation
 
-    async def _deliberate(self, goal: str) -> dict:
-        """Compatibility path for the older three-phase deliberation tests.
-
-        The current production pipeline no longer uses the retired Brain/Mind
-        orchestration shape directly, but the tests still exercise this surface.
-        """
-        if hasattr(self, "bus") and hasattr(self.bus, "clear"):
-            self.bus.clear()
-
-        intent = await self.brain.extract_intent(goal)
-        brief = self.brain.write_deliberation_brief(intent)
-        dialogue: list[dict] = []
-        rounds = 0
-        max_rounds = getattr(self, "max_rounds", 3)
-
-        for round_idx in range(1, max_rounds + 1):
-            rounds = round_idx
-            for name, mind in self.minds.items():
-                text = await mind.converse(brief, dialogue=dialogue)
-                entry = {"mind": name, "round": round_idx, "text": text}
-                dialogue.append(entry)
-                if hasattr(self, "bus") and hasattr(self.bus, "post"):
-                    self.bus.post(entry)
-
-            convergence = await self.brain.check_convergence(goal, dialogue)
-            if convergence.get("ready_to_execute"):
-                break
-
-        response = await self.brain.synthesize(goal, intent, dialogue)
-
-        if hasattr(self.brain, "reflect"):
-            try:
-                await self.brain.reflect(goal, response)
-            except TypeError:
-                try:
-                    await self.brain.reflect(goal, intent.get("complexity", "moderate"), response)
-                except Exception:
-                    pass
-
-        return {
-            "response": response,
-            "rounds": rounds,
-            "intent": intent,
-            "brief": brief,
-            "dialogue": dialogue,
-        }
 
     async def think(self, goal, on_event=None,
                     conversation: list[dict] = None,
