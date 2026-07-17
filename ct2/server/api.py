@@ -2813,8 +2813,14 @@ _mount_frontend_if_built()
 
 if __name__ == "__main__":
     import uvicorn
-    _ensure_frontend_built()   # npm install + npm run build
-    _mount_frontend_if_built() # mount now that the build exists
+    # `python -m ct2.server.api` executes this file as `__main__`, but the
+    # routers import `ct2.server.api` — a second module instance whose
+    # globals the lifespan would never initialize. Serve the canonical
+    # imported instance instead so there is exactly one set of globals.
+    from ct2.server import api as _canonical
+
+    _canonical._ensure_frontend_built()   # npm install + npm run build
+    _canonical._mount_frontend_if_built() # mount now that the build exists
     # Bind policy:
     #   auth.mode = none      → 127.0.0.1 only (single-user default; closes LAN exposure)
     #   auth.mode = password  → 0.0.0.0 (so the family can reach it on the home network)
@@ -2823,9 +2829,9 @@ if __name__ == "__main__":
     _host_override = os.environ.get("CT2_HOST", "").strip()
     if _host_override:
         _bind_host = _host_override
-    elif _auth_state.cfg.mode == "none":
+    elif _canonical._auth_state.cfg.mode == "none":
         _bind_host = "127.0.0.1"
     else:
-        _bind_host = _auth_state.cfg.bind_when_auth or "0.0.0.0"
-    print(f"[api] auth.mode={_auth_state.cfg.mode}  bind={_bind_host}:8000")
-    uvicorn.run(app, host=_bind_host, port=8000, timeout_graceful_shutdown=5)
+        _bind_host = _canonical._auth_state.cfg.bind_when_auth or "0.0.0.0"
+    print(f"[api] auth.mode={_canonical._auth_state.cfg.mode}  bind={_bind_host}:8000")
+    uvicorn.run(_canonical.app, host=_bind_host, port=8000, timeout_graceful_shutdown=5)
