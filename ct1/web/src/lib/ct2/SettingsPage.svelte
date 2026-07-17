@@ -84,6 +84,8 @@
     let runningFlashAttn = $state(false);
     let contBatching = $state(false);
     let runningContBatching = $state(false);
+    let mtpNDraft = $state(0);
+    let runningMtpNDraft = $state(0);
 
     const updateStatus = $derived($serverUpdate);
 
@@ -95,6 +97,7 @@
         || gpuLayers !== runningGpuLayers
         || flashAttn !== runningFlashAttn
         || contBatching !== runningContBatching
+        || mtpNDraft !== runningMtpNDraft
     );
 
     let planCacheStats = $state<{entries:number;avg_score:number;recent:Array<{sig:string;task_type:string;complexity:string;count:number;score:number}>}>({entries:0,avg_score:0,recent:[]});
@@ -140,9 +143,11 @@
             inferenceBackend = (config.inference_backend_preference as 'local' | 'ollama' | 'lm_studio') ?? 'local';
             flashAttn = config.flash_attn ?? false;
             contBatching = config.cont_batching ?? false;
+            mtpNDraft = config.mtp_n_draft ?? 0;
             gpuLayers = config.gpu_layers ?? 99;
             runningFlashAttn = flashAttn;
             runningContBatching = contBatching;
+            runningMtpNDraft = mtpNDraft;
             runningGpuLayers = gpuLayers;
             const md = await modelRes.json();
             activeModel = md.active_model || '';
@@ -339,9 +344,9 @@
         serverUpdate.set({});
         promptsSaved = {};
         try {
-            const res = await fetch('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context_size: contextSize, n_gpu_layers: gpuLayers, flash_attn: flashAttn, cont_batching: contBatching }) });
+            const res = await fetch('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context_size: contextSize, n_gpu_layers: gpuLayers, flash_attn: flashAttn, cont_batching: contBatching, mtp_n_draft: mtpNDraft }) });
             const d = await res.json();
-            if (d.error) { switchError = d.error; } else { runningContextSize = contextSize; runningGpuLayers = gpuLayers; runningFlashAttn = flashAttn; runningContBatching = contBatching; await loadData(); await checkLoadHealth(); }
+            if (d.error) { switchError = d.error; } else { runningContextSize = contextSize; runningGpuLayers = gpuLayers; runningFlashAttn = flashAttn; runningContBatching = contBatching; runningMtpNDraft = mtpNDraft; await loadData(); await checkLoadHealth(); }
         } catch (e: any) { switchError = e.message || 'Failed'; }
         finally { switching = false; }
     }
@@ -834,6 +839,24 @@
                             <button class="c2-switch" class:c2-switch-on={contBatching} onclick={() => contBatching = !contBatching} role="switch" aria-checked={contBatching} aria-label="Toggle continuous batching">
                                 <span class="c2-switch-knob"></span>
                             </button>
+                        </div>
+                    </div>
+
+                    <div class="c2-row">
+                        <div class="c2-row-label">
+                            <div class="c2-row-name">Multi-token prediction <span class="c2-param">/ --spec-type draft-mtp</span></div>
+                            <div class="c2-row-desc">Predict 1–3 extra tokens per step using draft heads baked into the model. Speeds up generation by ~1.5–2×. Only works with MTP-variant GGUFs (e.g. Qwen3-MTP). Set to Off for standard models.</div>
+                        </div>
+                        <div class="c2-row-control">
+                            <div class="c2-seg">
+                                {#each ([0, 1, 2, 3] as const) as n}
+                                    <button
+                                        class="c2-seg-btn"
+                                        class:c2-seg-active={mtpNDraft === n}
+                                        onclick={() => mtpNDraft = n}
+                                    >{n === 0 ? 'Off' : `${n}`}</button>
+                                {/each}
+                            </div>
                         </div>
                     </div>
 

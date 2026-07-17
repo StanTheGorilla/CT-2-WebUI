@@ -1230,6 +1230,7 @@ async def get_config():
         "backend": _raw_cfg.get("backend", "vulkan"),
         "flash_attn": server.get("flash_attn", False),
         "cont_batching": server.get("cont_batching", False),
+        "mtp_n_draft": server.get("mtp_n_draft", 0),
         "plan_cache_fast": _raw_cfg.get("plan_cache", {}).get("enable_fast_path", False),
         "inference_backend": _raw_cfg.get("inference_backend", "local"),
         "inference_backend_preference": _raw_cfg.get("inference_backend", "local"),
@@ -1247,6 +1248,7 @@ class PatchConfig(BaseModel):
     n_gpu_layers: int | None = None
     flash_attn: bool | None = None
     cont_batching: bool | None = None
+    mtp_n_draft: int | None = None
     plan_cache_fast: bool | None = None
     rag_enabled: bool | None = None
 
@@ -1286,6 +1288,9 @@ async def patch_config(body: PatchConfig):
     if body.cont_batching is not None:
         _raw_cfg["cont_batching"] = body.cont_batching
         changed = True
+    if body.mtp_n_draft is not None:
+        _raw_cfg["mtp_n_draft"] = body.mtp_n_draft
+        changed = True
     if body.plan_cache_fast is not None:
         _raw_cfg.setdefault("plan_cache", {})["enable_fast_path"] = body.plan_cache_fast
         changed = True
@@ -1301,6 +1306,7 @@ async def patch_config(body: PatchConfig):
         needs_restart = (
             body.n_gpu_layers is not None or body.flash_attn is not None
             or body.cont_batching is not None or body.rag_enabled is not None
+            or body.mtp_n_draft is not None
         )
         return {"ok": True, "needs_restart": needs_restart}
     return {"ok": True, "needs_restart": False}
@@ -2429,6 +2435,7 @@ class RestartBody(BaseModel):
     n_gpu_layers: int | None = None
     flash_attn: bool | None = None
     cont_batching: bool | None = None
+    mtp_n_draft: int | None = None
 
 
 @app.post("/api/restart")
@@ -2461,6 +2468,8 @@ async def restart_model(body: RestartBody):
             _raw_cfg["flash_attn"] = body.flash_attn
         if body.cont_batching is not None:
             _raw_cfg["cont_batching"] = body.cont_batching
+        if body.mtp_n_draft is not None:
+            _raw_cfg["mtp_n_draft"] = body.mtp_n_draft
 
         _CONFIG_PATH.write_text(
             yaml.dump(_raw_cfg, default_flow_style=False, sort_keys=False, allow_unicode=True),

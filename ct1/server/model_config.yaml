@@ -2,11 +2,11 @@ executable: auto
 backend: vulkan
 inference_backend: local
 models_dir: models
-active_model: gemma-4-E4B-it-Q4_0.gguf
+active_model: VA8IDDA3AF_MXFP4_MOE_gemma-4-E4B-5b-it-ultra-uncensored-heretic.gguf
 port: 8080
 n_gpu_layers: 99
 parallel_slots: 1
-context_size: 46080
+context_size: 37888
 temperature: 0.6
 top_p: 0.9
 top_k: 40
@@ -47,3 +47,10 @@ rag:
   chunk_size: 800
   chunk_overlap: 200
   max_file_mb: 25
+auth:
+  mode: password
+  password_hash: ''
+  session_secret: ''
+  allowed_origins: []
+  bind_when_auth: 0.0.0.0
+mtp_n_draft: 2

@@ -315,6 +315,11 @@ def load_raw_config(config_path: str = "ct1/server/model_config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+def _detect_mtp_support(model_filename: str) -> bool:
+    """Return True if the model filename contains 'mtp', indicating MTP draft heads are baked in."""
+    return "mtp" in model_filename.lower()
+
+
 def _detect_thinking_support(model_filename: str) -> bool:
     """Auto-detect whether a model supports thinking from its filename.
 
@@ -504,6 +509,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
         else:
             effective_context = gguf_context
 
+        mtp_default = 2 if _detect_mtp_support(model_name) else 0
         result = {
             "llama_server": {
                 "executable": executable,
@@ -515,6 +521,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
                 "cont_batching": raw_cfg.get("cont_batching", False),
                 "flash_attn": raw_cfg.get("flash_attn", False),
                 "embeddings": raw_cfg.get("rag", {}).get("enabled", False),
+                "mtp_n_draft": raw_cfg.get("mtp_n_draft", mtp_default),
             },
             "_gguf_context_length": gguf_context,
             "models": {
@@ -590,6 +597,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
     else:
         effective_context = gguf_context
 
+    mtp_default = 2 if _detect_mtp_support(model_name) else 0
     result = {
         "llama_server": {
             "executable": executable,
@@ -600,6 +608,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
             "context_size": effective_context,
             "cont_batching": director.get("cont_batching", False),
             "flash_attn": director.get("flash_attn", False),
+            "mtp_n_draft": director.get("mtp_n_draft", raw_cfg.get("mtp_n_draft", mtp_default)),
         },
         "_gguf_context_length": gguf_context,
         "models": {
@@ -662,12 +671,15 @@ def load_config(config_path: str = "ct1/server/model_config.yaml",
 
 
 def build_server_command(s: dict) -> list:
+    mtp = s.get("mtp_n_draft", 0)
+    # MTP requires single parallel slot
+    parallel = 1 if mtp > 0 else s["parallel_slots"]
     cmd = [
         s["executable"],
         "-m", s["model"],
         "--port", str(s["port"]),
         "--n-gpu-layers", str(s["n_gpu_layers"]),
-        "--parallel", str(s["parallel_slots"]),
+        "--parallel", str(parallel),
         "-c", str(s["context_size"]),
     ]
     if s.get("mmproj"):
@@ -676,8 +688,16 @@ def build_server_command(s: dict) -> list:
         cmd.append("--cont-batching")
     if s.get("flash_attn"):
         cmd += ["--flash-attn", "on"]
-    if s.get("embeddings"):
+    if s.get("embeddings") and mtp == 0:
         cmd += ["--embeddings", "--pooling", "last"]
+    if mtp > 0:
+        model_name = Path(s["model"]).name
+        if _detect_mtp_support(model_name):
+            cmd += ["--spec-type", "draft-mtp", "--spec-draft-n-max", str(mtp)]
+            if s.get("embeddings"):
+                print("[launcher] INFO: MTP active — --embeddings skipped (incompatible graph configurations)")
+        else:
+            print(f"[launcher] WARNING: mtp_n_draft={mtp} requested but '{model_name}' has no MTP layers — skipping MTP flags")
     return cmd
 
 def _drain_stderr(proc: subprocess.Popen, label: str = "llama"):
