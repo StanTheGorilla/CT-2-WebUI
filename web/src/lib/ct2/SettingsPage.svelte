@@ -6,12 +6,14 @@
     import { serverUpdate, startUpdate, isUpdating } from '$lib/stores/serverUpdate';
     import { modelSwitchCount, notifyModelSwitch } from '$lib/stores/model';
     import { setModelSwapping, clearModelSwapping } from '$lib/stores/backgroundTasks';
-    import { authStatus, refreshAuthStatus, setPassword, disableAuth, logout } from '$lib/stores/auth';
+    import { refreshAuthStatus } from '$lib/stores/auth';
     import { showToast } from '$lib/stores/toasts';
     import StatusIndicator from '$lib/components/StatusIndicator.svelte';
     import ModelDownloader from '$lib/components/ModelDownloader.svelte';
     import './settings.css';
     import RagSection from './settings/RagSection.svelte';
+    import SecuritySection from './settings/SecuritySection.svelte';
+    import PlanCacheSection from './settings/PlanCacheSection.svelte';
 
     const CONTEXT_MIN_FLOOR = 2048;
 
@@ -19,46 +21,6 @@
     let config = $state<Record<string, any>>({});
     let loading = $state(false);
     let activeSection = $state('model');
-
-    // ── Security tab state ────────────────────────────────────────────
-    let secCurrentPw = $state('');
-    let secNewPw = $state('');
-    let secConfirmPw = $state('');
-    let secDisablePw = $state('');
-    let secBusy = $state(false);
-    let secShowDisable = $state(false);
-
-    async function secEnableOrChangePassword() {
-        if (secBusy) return;
-        if (secNewPw.length < 6) { showToast('Password must be at least 6 characters.', { variant: 'error' }); return; }
-        if (secNewPw !== secConfirmPw) { showToast('Passwords do not match.', { variant: 'error' }); return; }
-        const isFirstTime = $authStatus.mode === 'none';
-        if (!isFirstTime && !secCurrentPw) { showToast('Enter your current password.', { variant: 'error' }); return; }
-        secBusy = true;
-        const r = await setPassword({
-            new_password: secNewPw,
-            current_password: isFirstTime ? undefined : secCurrentPw,
-            enable: true,
-        });
-        secBusy = false;
-        if (!r.ok) { showToast(r.error || 'Could not save.', { variant: 'error', title: 'Password change failed' }); return; }
-        secCurrentPw = ''; secNewPw = ''; secConfirmPw = '';
-        showToast(isFirstTime ? 'Password set. Other devices need to sign in.' : 'Password changed. Other sessions are signed out.', {
-            variant: 'success',
-            title: isFirstTime ? 'Multi-user mode enabled' : 'Password updated',
-        });
-    }
-
-    async function secDisablePassword() {
-        if (secBusy) return;
-        if (!secDisablePw) { showToast('Enter your current password to disable.', { variant: 'error' }); return; }
-        secBusy = true;
-        const r = await disableAuth(secDisablePw);
-        secBusy = false;
-        if (!r.ok) { showToast(r.error || 'Could not disable.', { variant: 'error' }); return; }
-        secDisablePw = ''; secShowDisable = false;
-        showToast('Multi-user mode disabled. Bind reverts to localhost on next start.', { variant: 'info' });
-    }
 
     interface ModelFile { name: string; size_gb: number; thinking: boolean; vision: boolean; context_length: number | null; }
     let availableModels = $state<ModelFile[]>([]);
@@ -101,11 +63,6 @@
         || contBatching !== runningContBatching
         || mtpNDraft !== runningMtpNDraft
     );
-
-    let planCacheStats = $state<{entries:number;avg_score:number;recent:Array<{sig:string;task_type:string;complexity:string;count:number;score:number}>}>({entries:0,avg_score:0,recent:[]});
-    let planCacheClearing = $state(false);
-    let planCacheMsg = $state('');
-    let planCacheFast = $state(false);
 
     function shortName(name: string) {
         return name.replace(/\.gguf$/i, '').replace(/[._-][Qq]\d+[_A-Za-z0-9]*$/, '');
@@ -159,24 +116,6 @@
         finally { scanning = false; modelsLoading = false; }
     }
 
-    async function fetchPlanCache() {
-        try {
-            planCacheStats = await (await fetch('/api/plan-cache/stats')).json();
-        } catch {}
-    }
-
-    async function clearPlanCache() {
-        planCacheClearing = true; planCacheMsg = '';
-        try {
-            const d = await (await fetch('/api/plan-cache', { method: 'DELETE' })).json();
-            planCacheMsg = d.ok ? `Cleared ${d.removed} cached plan(s).` : (d.error || 'Failed');
-            await fetchPlanCache();
-        } catch (e: any) {
-            planCacheMsg = e.message || 'Failed';
-        } finally { planCacheClearing = false; }
-    }
-
-    // ── RAG functions ─────────────────────────────────────────────
     // After a model load, llama-server reports `offloaded N/M layers`.
     // If N < M, the model partially fell back to CPU — usually because
     // VRAM fragmentation from prior restarts left no clean block. The
@@ -521,14 +460,14 @@
     let _mounted = $state(false);
 
     onMount(async () => {
-        await Promise.all([loadData(), loadModes(), loadWorkspaces(), loadPrompts(), fetchPlanCache(), refreshAuthStatus()]);
+        await Promise.all([loadData(), loadModes(), loadWorkspaces(), loadPrompts(), refreshAuthStatus()]);
         _mounted = true;
     });
 
     // Keep in-sync when model is switched from the topbar quick-pick
     $effect(() => {
         $modelSwitchCount; // reactive dependency — re-fetches on every switch
-        if (_mounted) { loadData(); fetchPlanCache(); }
+        if (_mounted) loadData();
     });
 
     const SECTIONS = [
@@ -1287,92 +1226,7 @@
 
             <!-- ── Security ── -->
             {:else if activeSection === 'security'}
-                <div class="c2-sh">
-                    <h1 class="c2-sh-title">Security</h1>
-                    <p class="c2-sh-sub">By default CT-2 WebUI runs single-user and binds to <code>localhost</code> only. Enable a shared password to let other devices on your home network reach it — they'll all use the same password.</p>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Current mode</div>
-                        <div class="c2-row-desc">
-                            {#if $authStatus.mode === 'none'}
-                                <span class="c2-tag">Single-user (none)</span> &nbsp; Bind: <code>127.0.0.1:8000</code>. Only your machine can connect. Web search and RAG still work.
-                            {:else if $authStatus.mode === 'password'}
-                                <span class="c2-tag c2-tag-active">Shared password</span> &nbsp; Bind: <code>0.0.0.0:8000</code>. Devices on your network can sign in with the password below. Sessions last 30 days.
-                            {:else}
-                                <span class="c2-tag">{$authStatus.mode}</span>
-                            {/if}
-                        </div>
-                    </div>
-                </div>
-
-                {#if $authStatus.mode === 'none'}
-                    <div class="c2-row" style="flex-direction:column;align-items:stretch;gap:12px;">
-                        <div class="c2-row-label">
-                            <div class="c2-row-name">Enable shared password</div>
-                            <div class="c2-row-desc">Pick a password and turn on multi-user mode. After saving, restart CT-2 — the bind will widen to <code>0.0.0.0</code> so other devices can reach it. Pair this with a reverse proxy (Caddy, Tailscale) if you expose it beyond the home network.</div>
-                        </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-                            <input type="password" class="c2-input" placeholder="New password" bind:value={secNewPw} autocomplete="new-password" disabled={secBusy} />
-                            <input type="password" class="c2-input" placeholder="Confirm" bind:value={secConfirmPw} autocomplete="new-password" disabled={secBusy} />
-                        </div>
-                        <button class="c2-btn-primary" style="align-self:flex-start;" onclick={secEnableOrChangePassword} disabled={secBusy || !secNewPw}>
-                            {secBusy ? 'Saving…' : 'Enable password'}
-                        </button>
-                    </div>
-                {:else if $authStatus.mode === 'password'}
-                    <div class="c2-row" style="flex-direction:column;align-items:stretch;gap:12px;">
-                        <div class="c2-row-label">
-                            <div class="c2-row-name">Change password</div>
-                            <div class="c2-row-desc">All other devices will be signed out — they'll need to enter the new password.</div>
-                        </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
-                            <input type="password" class="c2-input" placeholder="Current password" bind:value={secCurrentPw} autocomplete="current-password" disabled={secBusy} />
-                            <input type="password" class="c2-input" placeholder="New password" bind:value={secNewPw} autocomplete="new-password" disabled={secBusy} />
-                            <input type="password" class="c2-input" placeholder="Confirm" bind:value={secConfirmPw} autocomplete="new-password" disabled={secBusy} />
-                        </div>
-                        <button class="c2-btn-primary" style="align-self:flex-start;" onclick={secEnableOrChangePassword} disabled={secBusy || !secCurrentPw || !secNewPw}>
-                            {secBusy ? 'Saving…' : 'Change password'}
-                        </button>
-                    </div>
-
-                    <div class="c2-row" style="flex-direction:column;align-items:stretch;gap:12px;">
-                        <div class="c2-row-label">
-                            <div class="c2-row-name">Sign out this device</div>
-                            <div class="c2-row-desc">Clears the session cookie on this browser. You'll be sent to the login screen.</div>
-                        </div>
-                        <button class="c2-btn-outline" style="align-self:flex-start;" onclick={() => logout()}>Sign out</button>
-                    </div>
-
-                    <div class="c2-row" style="flex-direction:column;align-items:stretch;gap:12px;">
-                        <div class="c2-row-label">
-                            <div class="c2-row-name">Disable multi-user mode</div>
-                            <div class="c2-row-desc">Switch back to single-user. The bind reverts to <code>localhost</code> on next start; everyone else loses access.</div>
-                        </div>
-                        {#if !secShowDisable}
-                            <button class="c2-btn-outline c2-btn-err" style="align-self:flex-start;" onclick={() => secShowDisable = true}>Disable…</button>
-                        {:else}
-                            <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;">
-                                <input type="password" class="c2-input" placeholder="Current password to confirm" bind:value={secDisablePw} autocomplete="current-password" disabled={secBusy} />
-                                <button class="c2-btn-ghost" onclick={() => { secShowDisable = false; secDisablePw = ''; }}>Cancel</button>
-                                <button class="c2-btn-danger" onclick={secDisablePassword} disabled={secBusy || !secDisablePw}>
-                                    {secBusy ? 'Disabling…' : 'Yes, disable'}
-                                </button>
-                            </div>
-                        {/if}
-                    </div>
-                {/if}
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Per-user accounts</div>
-                        <div class="c2-row-desc">Coming in a future release: each family member gets their own login and isolated chat history. Today everyone shares one account in password mode.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <span class="c2-tag">Roadmap</span>
-                    </div>
-                </div>
+                <SecuritySection />
 
             <!-- ── RAG ── -->
             {:else if activeSection === 'rag'}
@@ -1381,56 +1235,7 @@
             <!-- ── WORKSPACES ── -->
             <!-- ── PLAN CACHE ── -->
             {:else if activeSection === 'plancache'}
-                <div class="c2-sh">
-                    <h1 class="c2-sh-title">Plan cache</h1>
-                    <p class="c2-sh-sub">Learned task signatures let the AI skip deliberation and respond faster over time.</p>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Cached entries</div>
-                        <div class="c2-row-desc">Each entry maps a task pattern to a fast execution path. Grows automatically as you use the AI.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <span class="c2-badge-big">{planCacheStats.entries ?? '—'}</span>
-                    </div>
-                </div>
-
-                <div class="c2-row">
-                    <div class="c2-row-label">
-                        <div class="c2-row-name">Fast-path acceleration</div>
-                        <div class="c2-row-desc">When enabled, reusing a cached pattern skips the AI routing and planning steps. Off by default — enable after the cache has entries for your common tasks.</div>
-                    </div>
-                    <div class="c2-row-control">
-                        <button class="c2-toggle" class:c2-toggle-on={planCacheFast} onclick={() => { planCacheFast = !planCacheFast; saveParam('plan_cache_fast', planCacheFast); }} type="button">
-                            <span class="c2-toggle-knob"></span>
-                        </button>
-                    </div>
-                </div>
-
-                {#if planCacheStats.recent?.length}
-                    <div class="c2-subsection-label" style="margin-top:8px;">Recent entries</div>
-                    <div class="c2-pc-list">
-                        {#each planCacheStats.recent as p}
-                            <div class="c2-pc-item">
-                                <div class="c2-pc-item-left">
-                                    <span class="c2-pc-sig" title={p.sig}>{p.sig.length > 40 ? p.sig.slice(0, 38) + '…' : p.sig}</span>
-                                    <span class="c2-pc-meta">{p.task_type} · {p.complexity} · ×{p.count}</span>
-                                </div>
-                                <div class="c2-pc-score" style="--score:{p.score}">{p.score.toFixed(1)}</div>
-                            </div>
-                        {/each}
-                    </div>
-                {:else if planCacheStats.entries === 0}
-                    <p class="c2-row-desc" style="padding-top:8px;">No cached plans yet. Each new task type the AI learns will appear here.</p>
-                {/if}
-
-                <div style="margin-top:20px;display:flex;align-items:center;gap:12px;">
-                    <button class="c2-btn-outline c2-btn-err" onclick={clearPlanCache} disabled={planCacheClearing}>
-                        {planCacheClearing ? 'Clearing…' : 'Clear cache'}
-                    </button>
-                    {#if planCacheMsg}<span class="c2-row-desc">{planCacheMsg}</span>{/if}
-                </div>
+                <PlanCacheSection {config} {saveParam} />
 
             <!-- ── WORKSPACES ── -->
             {:else if activeSection === 'workspaces'}
