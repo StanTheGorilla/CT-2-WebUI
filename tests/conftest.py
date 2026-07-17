@@ -3,10 +3,12 @@ import tempfile
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 
 def _configure_local_temp() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    tmp_root = repo_root / "_local" / "pytest-tmp"
+    tmp_root = repo_root / "_local" / "tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
 
     temp_path = str(tmp_root)
@@ -35,3 +37,16 @@ def _sandbox_safe_mkdtemp(suffix=None, prefix=None, dir=None):
 
 
 tempfile.mkdtemp = _sandbox_safe_mkdtemp
+
+
+@pytest.fixture(autouse=True)
+def _force_auth_off():
+    """Tests must not depend on the auth mode in the user's live
+    model_config.yaml — force mode=none and restore afterwards."""
+    from ct1.server import api as api_mod
+    from ct1.server.auth import AuthConfig
+
+    prev = api_mod._auth_state.cfg
+    api_mod._auth_state.replace(AuthConfig(mode="none"))
+    yield
+    api_mod._auth_state.replace(prev)

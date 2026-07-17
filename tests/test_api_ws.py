@@ -1,28 +1,25 @@
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 import ct1.server.api as api_mod
 
 
 @pytest.fixture(autouse=True)
 def mock_orchestrator(monkeypatch):
     """Mock the orchestrator so we don't need llama-server running."""
-    async def fake_think(goal, on_event=None, conversation=None):
+    async def fake_think(goal, on_event=None, conversation=None, **kwargs):
         if on_event:
             on_event("framing")
             on_event("framed", text="test output", complexity="brief")
             on_event("synthesizing")
         return {
             "response": "test response",
-            "rounds": 1,
-            "complexity": "brief",
-            "tension_detected": False,
+            "route": "ROUTE_TEXT",
             "reflection": {"self_score": 0.8, "lesson": "test"},
-            "dialogue": [],
-            "bus_history": [],
         }
 
     mock_orch = MagicMock()
     mock_orch.think = fake_think
+    mock_orch.clear_kv_cache = AsyncMock()
     monkeypatch.setattr(api_mod, "_orch", mock_orch)
 
 
