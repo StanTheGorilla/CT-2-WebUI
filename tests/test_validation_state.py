@@ -2,7 +2,7 @@
 import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from ct1.core.formatter import validate_python
+from ct2.core.formatter import validate_python
 
 
 def test_validate_python_flags_syntax_error():

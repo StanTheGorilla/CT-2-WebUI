@@ -1,8 +1,8 @@
-"""Tests for ct1.core.web_fetcher."""
+"""Tests for ct2.core.web_fetcher."""
 
 import pytest
 
-from ct1.core.web_fetcher import (
+from ct2.core.web_fetcher import (
     FetchResult,
     _extract_domain,
     _truncate_content,

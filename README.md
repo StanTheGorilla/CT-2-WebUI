@@ -52,16 +52,16 @@ git clone https://github.com/StanTheGorilla/CT-2-WebUI.git
 cd CT-2-WebUI
 
 # Python backend
-pip install -r ct1/requirements.txt
+pip install -r ct2/requirements.txt
 
 # Web frontend (auto-builds on first start; pre-build is optional)
-cd ct1/web && npm install && cd ../..
+cd web && npm install && cd ..
 
 # Add a model (skip if using Ollama or LM Studio)
 huggingface-cli download Qwen/Qwen3-4B-GGUF --local-dir models/
 
 # Start
-python -m ct1.server.api
+python -m ct2.server.api
 ```
 
 Open **http://localhost:8000** and pick a model in **Settings**.
@@ -118,7 +118,7 @@ Full feature lists for each area are in the collapsed sections below.
 
 ## Configuration
 
-`ct1/server/model_config.yaml` — edit by hand or via Settings:
+`ct2/server/model_config.yaml` — edit by hand or via Settings:
 
 ```yaml
 executable: auto          # auto-discovers llama-server in bin/ or PATH
@@ -150,7 +150,7 @@ task_overrides:
     presence_penalty: 0.6
 
 journal:
-  path: ct1/data/journals
+  path: ct2/data/journals
   lessons_on_startup: 10
 
 rag:
@@ -171,7 +171,7 @@ auth:
 
 > Override the bind address at run time with `CT2_HOST=127.0.0.1`. Useful when fronting CT-2 with a reverse proxy.
 
-All system prompts live in `ct1/prompts/` as `.txt` files and are editable at runtime from **Settings → Prompts**. Reset any prompt to its shipped default with the Reset button.
+All system prompts live in `ct2/prompts/` as `.txt` files and are editable at runtime from **Settings → Prompts**. Reset any prompt to its shipped default with the Reset button.
 
 ---
 
@@ -231,7 +231,7 @@ User Message
 ┌─────────────────────────────────────────┐
 │  ROUTE  (instant, no AI)                │
 │  Keyword/regex classifier against       │
-│  ct1/modes/*.yaml patterns.             │
+│  ct2/modes/*.yaml patterns.             │
 │  Manual mode override skips this.       │
 │                                         │
 │  → ROUTE_DIRECT   (Chat)                │
@@ -248,7 +248,7 @@ User Message
       CHAT       DESIGN      CODE
 ```
 
-Each mode is a YAML file in `ct1/modes/`. The `ModeRegistry` auto-discovers and hot-reloads them. New modes can be added by dropping a YAML file in or via the API.
+Each mode is a YAML file in `ct2/modes/`. The `ModeRegistry` auto-discovers and hot-reloads them. New modes can be added by dropping a YAML file in or via the API.
 
 ```yaml
 name: code
@@ -686,7 +686,7 @@ Send `{"type": "cancel"}` at any time to stop active generation immediately.
 
 ```
 CT-2-WebUI/
-├── ct1/
+├── ct2/
 │   ├── core/         # Pipeline: orchestrator, engine, atlas, formatter, validator
 │   ├── rag/          # Indexing, chunking, embedding, retrieval
 │   ├── server/       # FastAPI app, llama-server launcher, backend detector, downloader

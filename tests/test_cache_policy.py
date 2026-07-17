@@ -1,4 +1,4 @@
-from ct1.server.cache_policy import should_clear_kv_cache
+from ct2.server.cache_policy import should_clear_kv_cache
 
 
 def test_should_not_clear_when_slot_is_empty():

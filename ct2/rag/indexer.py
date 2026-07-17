@@ -6,11 +6,11 @@ from typing import Optional
 
 import numpy as np
 
-from ct1.rag.config import RAGConfig, SUPPORTED_EXTENSIONS
-from ct1.rag.parser import parse_file
-from ct1.rag.chunker import chunk_text
-from ct1.rag.store import RAGStore
-from ct1.rag.embedder import RAGEmbedder
+from ct2.rag.config import RAGConfig, SUPPORTED_EXTENSIONS
+from ct2.rag.parser import parse_file
+from ct2.rag.chunker import chunk_text
+from ct2.rag.store import RAGStore
+from ct2.rag.embedder import RAGEmbedder
 
 
 class RAGIndexer:

@@ -3,7 +3,7 @@ import os
 import tempfile
 from pathlib import Path
 
-_PROMPTS_DIR = Path(__file__).parent  # ct1/prompts/
+_PROMPTS_DIR = Path(__file__).parent  # ct2/prompts/
 
 
 class PromptManager:

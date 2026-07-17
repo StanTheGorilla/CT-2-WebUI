@@ -30,19 +30,19 @@ task_overrides:
     presence_penalty: 0.6
     frequency_penalty: 0.15
 journal:
-  path: ct1/data/journals
+  path: ct2/data/journals
   lessons_on_startup: 10
 plan_cache:
-  path: ct1/data/plan_cache.db
+  path: ct2/data/plan_cache.db
   enable_fast_path: false
 sessions:
-  path: ct1/data/sessions
+  path: ct2/data/sessions
 lm_studio_model: google/gemma-4-e4b
 flash_attn: true
 cont_batching: true
 rag:
   enabled: true
-  data_dir: ct1/data/rag_uploads
+  data_dir: ct2/data/rag_uploads
   chunks_per_query: 15
   chunk_size: 800
   chunk_overlap: 200

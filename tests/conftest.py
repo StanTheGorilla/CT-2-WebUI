@@ -43,8 +43,8 @@ tempfile.mkdtemp = _sandbox_safe_mkdtemp
 def _force_auth_off():
     """Tests must not depend on the auth mode in the user's live
     model_config.yaml — force mode=none and restore afterwards."""
-    from ct1.server import api as api_mod
-    from ct1.server.auth import AuthConfig
+    from ct2.server import api as api_mod
+    from ct2.server.auth import AuthConfig
 
     prev = api_mod._auth_state.cfg
     api_mod._auth_state.replace(AuthConfig(mode="none"))

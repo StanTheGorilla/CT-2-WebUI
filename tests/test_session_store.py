@@ -1,6 +1,6 @@
 import tempfile, os
 from pathlib import Path
-from ct1.memory.session_store import SessionStore
+from ct2.memory.session_store import SessionStore
 
 def test_write_and_read_latest():
     with tempfile.TemporaryDirectory() as d:

@@ -1,5 +1,5 @@
 import pytest
-from ct1.core.formatter import detect_output_type
+from ct2.core.formatter import detect_output_type
 
 
 # ── Existing types must still pass ──────────────────────────────────

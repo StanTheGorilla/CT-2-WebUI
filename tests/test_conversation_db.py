@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from ct1.memory.conversation_db import ConversationDB
+from ct2.memory.conversation_db import ConversationDB
 
 
 @pytest.fixture

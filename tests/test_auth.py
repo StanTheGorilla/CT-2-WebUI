@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from ct1.server.auth import (
+from ct2.server.auth import (
     AuthConfig,
     SESSION_TTL_SECONDS,
     SHARED_USER_ID,

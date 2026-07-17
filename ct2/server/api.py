@@ -24,24 +24,24 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from ct1.core.orchestrator import Orchestrator, _get_mode_registry
-from ct1.prompts.manager import _get_prompt_manager as _get_pm
-from ct1.rag.config import RAGConfig, SUPPORTED_EXTENSIONS as _RAG_SUPPORTED_EXT
-from ct1.rag.store import RAGStore
-from ct1.rag.embedder import RAGEmbedder
-from ct1.rag.indexer import RAGIndexer
-from ct1.rag.retriever import RAGRetriever
-from ct1.server.health import check_server_health
-from ct1.server.launcher import (
+from ct2.core.orchestrator import Orchestrator, _get_mode_registry
+from ct2.prompts.manager import _get_prompt_manager as _get_pm
+from ct2.rag.config import RAGConfig, SUPPORTED_EXTENSIONS as _RAG_SUPPORTED_EXT
+from ct2.rag.store import RAGStore
+from ct2.rag.embedder import RAGEmbedder
+from ct2.rag.indexer import RAGIndexer
+from ct2.rag.retriever import RAGRetriever
+from ct2.server.health import check_server_health
+from ct2.server.launcher import (
     load_raw_config, resolve_config,
     kill_existing_llama_servers, start_server, stop_server,
     get_layer_status, probe_used_vram_mb,
     _detect_vision_support, _find_mmproj_path,
 )
-from ct1.memory.session_store import SessionStore
-from ct1.memory.conversation_db import ConversationDB
-from ct1.memory.component_cache import ComponentCache
-from ct1.server.auth import (
+from ct2.memory.session_store import SessionStore
+from ct2.memory.conversation_db import ConversationDB
+from ct2.memory.component_cache import ComponentCache
+from ct2.server.auth import (
     AuthConfig,
     AuthState,
     COOKIE_NAME,
@@ -57,9 +57,9 @@ from ct1.server.auth import (
     verify_password,
     ws_origin_allowed,
 )
-from ct1.server.workspace import WorkspaceManager, is_command_safe
-from ct1.server.cache_policy import should_clear_kv_cache
-from ct1.server.backend_detector import detect as _detect_backend, probe_ollama, probe_lm_studio, stop_managed_proc as _stop_ollama
+from ct2.server.workspace import WorkspaceManager, is_command_safe
+from ct2.server.cache_policy import should_clear_kv_cache
+from ct2.server.backend_detector import detect as _detect_backend, probe_ollama, probe_lm_studio, stop_managed_proc as _stop_ollama
 
 APP_VERSION = "0.1.0"
 
@@ -123,7 +123,7 @@ async def _refine_title(conv_id: str, first_msg: str, websocket: WebSocket) -> N
     except Exception as e:
         print(f"[api] title refinement skipped: {e}")
 
-_CONFIG_PATH = Path(__file__).parent.parent.parent / "ct1" / "server" / "model_config.yaml"
+_CONFIG_PATH = Path(__file__).parent.parent.parent / "ct2" / "server" / "model_config.yaml"
 _MODES_DIR = Path(__file__).parent.parent / "modes"
 _BUILTIN_MODES: frozenset[str] = frozenset({"direct", "code", "design", "computer"})
 
@@ -274,8 +274,8 @@ def _make_tool_executor(queue: asyncio.Queue):
     """Return an async tool executor that emits websocket progress events."""
 
     async def _executor(tool_calls: list[dict]) -> list[str]:
-        from ct1.core.web_searcher import search_web, format_results_as_context
-        from ct1.core.web_fetcher import fetch_url as _fetch_url
+        from ct2.core.web_searcher import search_web, format_results_as_context
+        from ct2.core.web_fetcher import fetch_url as _fetch_url
 
         results: list[str] = []
 
@@ -563,7 +563,7 @@ def _ensure_frontend_built() -> None:
     if not shutil.which("npm"):
         print("[api] WARNING: npm not found — install Node.js to build the frontend.")
         return
-    web_dir = Path(__file__).parent.parent / "web"
+    web_dir = Path(__file__).parent.parent.parent / "web"
     # Install dependencies if node_modules is missing
     if not (web_dir / "node_modules").exists():
         print("[api] Installing frontend dependencies (npm install)...")
@@ -644,7 +644,7 @@ async def lifespan(application: FastAPI):
                 embed_port = _rag_config.embedding_port if _rag_config.embedding_model else _cfg.get("llama_server", {}).get("port", 8080)
                 embed_url = f"http://localhost:{embed_port}"
 
-            _rag_store = RAGStore("ct1/data/rag.db")
+            _rag_store = RAGStore("ct2/data/rag.db")
             await _rag_store.init()
             _rag_embedder = RAGEmbedder(base_url=embed_url)
             _rag_indexer = RAGIndexer(_rag_config, _rag_store, _rag_embedder)
@@ -1105,8 +1105,8 @@ _update_state: dict[str, dict] = {}  # backend → {status, message, log}
 
 def _run_update(backend: str, project_root):
     from pathlib import Path
-    from ct1.server.downloader import download_llama_server
-    from ct1.server.launcher import stop_server
+    from ct2.server.downloader import download_llama_server
+    from ct2.server.launcher import stop_server
     _update_state[backend] = {"status": "downloading", "message": "Starting download...", "log": []}
     log = _update_state[backend]["log"]
     def _cb(msg: str):
@@ -1177,7 +1177,7 @@ async def get_journal(limit: int = 50):
 
 @app.get("/api/sessions")
 async def get_sessions():
-    store = SessionStore(_cfg.get("sessions", {}).get("path", "ct1/data/sessions"))
+    store = SessionStore(_cfg.get("sessions", {}).get("path", "ct2/data/sessions"))
     sessions_dir = Path(store.dir)
     results = []
     if sessions_dir.exists():
@@ -1466,7 +1466,7 @@ async def rag_data_files():
     """List all files in the RAG uploads folder (not just indexed ones)."""
     global _rag_config
     from pathlib import Path
-    from ct1.rag.config import SUPPORTED_EXTENSIONS as _REXT
+    from ct2.rag.config import SUPPORTED_EXTENSIONS as _REXT
     data_path = _rag_config.data_path
     if not data_path.exists():
         return {"files": [], "data_dir": str(data_path.resolve())}
@@ -1671,8 +1671,8 @@ async def get_model_info():
             "gguf_context_length": None,
         }
 
-    from ct1.core.gguf_reader import read_context_length
-    from ct1.server.launcher import _detect_thinking_support
+    from ct2.core.gguf_reader import read_context_length
+    from ct2.server.launcher import _detect_thinking_support
 
     models_dir_rel = _raw_cfg.get("models_dir", "models")
     project_root = _CONFIG_PATH.resolve().parent.parent.parent
@@ -1700,8 +1700,8 @@ async def get_model_info():
 @app.get("/api/presets")
 async def get_presets():
     """Return model info in a format compatible with legacy frontend."""
-    from ct1.core.gguf_reader import read_context_length
-    from ct1.server.launcher import _detect_thinking_support
+    from ct2.core.gguf_reader import read_context_length
+    from ct2.server.launcher import _detect_thinking_support
 
     models_dir_rel = _raw_cfg.get("models_dir", "models")
     project_root = _CONFIG_PATH.resolve().parent.parent.parent
@@ -1753,8 +1753,8 @@ async def list_models():
     if pref in ("lm_studio", "ollama"):
         return {"models": [], "models_dir": None}
 
-    from ct1.server.launcher import _detect_thinking_support
-    from ct1.core.gguf_reader import read_context_length
+    from ct2.server.launcher import _detect_thinking_support
+    from ct2.core.gguf_reader import read_context_length
 
     models_dir_rel = _raw_cfg.get("models_dir", "models")
     models_dir = _CONFIG_PATH.resolve().parent.parent.parent / models_dir_rel
@@ -2580,7 +2580,7 @@ async def search_conversations(q: str = "", limit: int = 20):
 @app.get("/api/web-search")
 async def web_search_endpoint(q: str = "", max_results: int = 5):
     """Run a DuckDuckGo web search and return structured results."""
-    from ct1.core.web_searcher import search_web
+    from ct2.core.web_searcher import search_web
     if not q.strip():
         return {"query": q, "results": [], "error": "Empty query"}
     resp = await search_web(q.strip(), max_results=max(1, min(max_results, 20)))
@@ -2828,7 +2828,7 @@ async def ws_think(websocket: WebSocket):
                     # Scan the *original* goal (before search-context injection) so that
                     # URLs that appear only inside the injected search snippets are not
                     # double-fetched and bloat the context.
-                    from ct1.core.web_fetcher import extract_urls, fetch_url as _fetch_url, URL_PATTERN, MAX_URLS_PER_MESSAGE
+                    from ct2.core.web_fetcher import extract_urls, fetch_url as _fetch_url, URL_PATTERN, MAX_URLS_PER_MESSAGE
 
                     _original_goal_text = goal if isinstance(goal, str) else " ".join(
                         p.get("text", "") for p in goal if isinstance(p, dict) and p.get("type") == "text"
@@ -2991,7 +2991,7 @@ async def ws_think(websocket: WebSocket):
                             for iteration in range(max_fix_iterations + 1):
                                 # Save files from current response
                                 try:
-                                    from ct1.core.orchestrator import Orchestrator
+                                    from ct2.core.orchestrator import Orchestrator
                                     files = Orchestrator._parse_multi_file(current_response)
                                     for f in files:
                                         _workspace.write_file(ws_id, f["path"], f["content"])
@@ -3011,7 +3011,7 @@ async def ws_think(websocket: WebSocket):
                                 all_cmd_output = []
                                 has_errors = False
                                 try:
-                                    from ct1.core.orchestrator import Orchestrator
+                                    from ct2.core.orchestrator import Orchestrator
                                     commands = Orchestrator._parse_run_commands(current_response)
                                     # Auto-infer run command when model omits [RUN:]
                                     if not commands and files:
@@ -3489,7 +3489,7 @@ async def ws_terminal(websocket: WebSocket):
 
 
 # Serve SvelteKit build with SPA fallback
-_WEB_BUILD = Path(__file__).parent.parent / "web" / "build"
+_WEB_BUILD = Path(__file__).parent.parent.parent / "web" / "build"
 
 
 def _mount_frontend_if_built() -> None:

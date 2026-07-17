@@ -2,7 +2,7 @@ from pathlib import Path
 from datetime import datetime
 
 class SessionStore:
-    def __init__(self, sessions_dir: str = "ct1/data/sessions"):
+    def __init__(self, sessions_dir: str = "ct2/data/sessions"):
         self.dir = Path(sessions_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
 

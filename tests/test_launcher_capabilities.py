@@ -14,7 +14,7 @@ from uuid import uuid4
     ],
 )
 def test_detect_vision_support_from_filename(model_name, expected):
-    from ct1.server.launcher import _detect_vision_support
+    from ct2.server.launcher import _detect_vision_support
 
     assert _detect_vision_support(model_name) is expected
 
@@ -28,21 +28,21 @@ def test_detect_vision_support_from_filename(model_name, expected):
     ],
 )
 def test_detect_thinking_support_from_filename(model_name, expected):
-    from ct1.server.launcher import _detect_thinking_support
+    from ct2.server.launcher import _detect_thinking_support
 
     assert _detect_thinking_support(model_name) is expected
 
 
 def test_detect_vision_support_from_architecture(monkeypatch):
-    from ct1.server.launcher import _detect_vision_support
+    from ct2.server.launcher import _detect_vision_support
 
-    monkeypatch.setattr("ct1.core.gguf_reader.read_architecture", lambda _path: "gemma4")
+    monkeypatch.setattr("ct2.core.gguf_reader.read_architecture", lambda _path: "gemma4")
 
     assert _detect_vision_support("Gemma-4-E2B-It-Q5_K_M.gguf", "models/Gemma-4-E2B-It-Q5_K_M.gguf") is True
 
 
 def test_find_mmproj_path_returns_only_candidate():
-    from ct1.server.launcher import _find_mmproj_path
+    from ct2.server.launcher import _find_mmproj_path
 
     base = Path("_local") / "test-mmproj-path" / uuid4().hex
     base.mkdir(parents=True, exist_ok=True)
@@ -56,7 +56,7 @@ def test_find_mmproj_path_returns_only_candidate():
 
 
 def test_find_mmproj_path_rejects_wrong_model_size():
-    from ct1.server.launcher import _find_mmproj_path
+    from ct2.server.launcher import _find_mmproj_path
 
     base = Path("_local") / "test-mmproj-path" / uuid4().hex
     base.mkdir(parents=True, exist_ok=True)
@@ -70,11 +70,11 @@ def test_find_mmproj_path_rejects_wrong_model_size():
 
 
 def test_ensure_mmproj_path_uses_auto_download_when_missing(monkeypatch):
-    from ct1.server.launcher import _ensure_mmproj_path
+    from ct2.server.launcher import _ensure_mmproj_path
 
-    monkeypatch.setattr("ct1.server.launcher._find_mmproj_path", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("ct2.server.launcher._find_mmproj_path", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        "ct1.server.downloader.ensure_mmproj_downloaded",
+        "ct2.server.downloader.ensure_mmproj_downloaded",
         lambda _model_path: "models/mmproj-gemma-4-e2b-it-f16.gguf",
     )
 
@@ -84,7 +84,7 @@ def test_ensure_mmproj_path_uses_auto_download_when_missing(monkeypatch):
 
 
 def test_build_server_command_includes_mmproj_when_present():
-    from ct1.server.launcher import build_server_command
+    from ct2.server.launcher import build_server_command
 
     cmd = build_server_command({
         "executable": "llama-server",
@@ -101,7 +101,7 @@ def test_build_server_command_includes_mmproj_when_present():
 
 
 def test_resolve_config_marks_vision_ready_after_auto_download(monkeypatch):
-    from ct1.server.launcher import resolve_config
+    from ct2.server.launcher import resolve_config
 
     base = Path("_local") / "test-resolve-mmproj" / uuid4().hex
     models_dir = base / "models"
@@ -109,15 +109,15 @@ def test_resolve_config_marks_vision_ready_after_auto_download(monkeypatch):
     model_path = models_dir / "gemma-4-E2B-it-Q5_K_M.gguf"
     model_path.write_text("", encoding="utf-8")
 
-    monkeypatch.setattr("ct1.server.launcher._find_llama_executable", lambda *_args, **_kwargs: "llama-server")
-    monkeypatch.setattr("ct1.server.launcher._detect_vision_support", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr("ct1.server.launcher._ensure_mmproj_path", lambda *_args, **_kwargs: str(models_dir / "mmproj-gemma-4-e2b-it-f16.gguf"))
-    monkeypatch.setattr("ct1.core.gguf_reader.read_context_length", lambda _path: 32768)
+    monkeypatch.setattr("ct2.server.launcher._find_llama_executable", lambda *_args, **_kwargs: "llama-server")
+    monkeypatch.setattr("ct2.server.launcher._detect_vision_support", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("ct2.server.launcher._ensure_mmproj_path", lambda *_args, **_kwargs: str(models_dir / "mmproj-gemma-4-e2b-it-f16.gguf"))
+    monkeypatch.setattr("ct2.core.gguf_reader.read_context_length", lambda _path: 32768)
 
     cfg = resolve_config({
         "models_dir": str(models_dir),
         "active_model": model_path.name,
-    }, config_path=str(base / "ct1" / "server" / "model_config.yaml"))
+    }, config_path=str(base / "ct2" / "server" / "model_config.yaml"))
 
     assert cfg["models"]["director"]["vision_supported"] is True
     assert cfg["llama_server"]["mmproj"].endswith("mmproj-gemma-4-e2b-it-f16.gguf")

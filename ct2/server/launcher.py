@@ -7,7 +7,7 @@ import os
 import signal
 import time
 from pathlib import Path
-from ct1.server.health import wait_for_server
+from ct2.server.health import wait_for_server
 
 
 # ─── GPU / load diagnostics ───────────────────────────────────────────────
@@ -103,7 +103,7 @@ def _find_llama_executable(project_root: Path, configured: str = "auto",
 
     # Auto-download as last resort
     print("[launcher] llama-server not found — downloading automatically...")
-    from ct1.server.downloader import download_llama_server
+    from ct2.server.downloader import download_llama_server
     download_llama_server(project_root)
 
     if bin_path.exists():
@@ -120,7 +120,7 @@ def _find_llama_executable(project_root: Path, configured: str = "auto",
         "llama-server executable not found and auto-download failed.\n"
         f"  • Add llama-server{ext} to your PATH, or\n"
         "  • Place a llama-*-bin-* directory next to this project, or\n"
-        "  • Set 'executable' in ct1/server/model_config.yaml to its full path."
+        "  • Set 'executable' in ct2/server/model_config.yaml to its full path."
     )
 
 
@@ -310,7 +310,7 @@ def kill_existing_llama_servers(port: int = 8080, *, hard: bool = False):
             print(f"[launcher] VRAM in use after force-kill cooldown: {used_after} MB")
 
 
-def load_raw_config(config_path: str = "ct1/server/model_config.yaml") -> dict:
+def load_raw_config(config_path: str = "ct2/server/model_config.yaml") -> dict:
     with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
@@ -375,7 +375,7 @@ def _detect_vision_support(model_filename: str, model_path: str | Path | None = 
 
     if model_path:
         try:
-            from ct1.core.gguf_reader import read_architecture
+            from ct2.core.gguf_reader import read_architecture
 
             arch = (read_architecture(model_path) or "").lower()
             if arch in {
@@ -442,7 +442,7 @@ def _ensure_mmproj_path(model_path: str | Path, configured: str | None = "auto")
         return None
 
     try:
-        from ct1.server.downloader import ensure_mmproj_downloaded
+        from ct2.server.downloader import ensure_mmproj_downloaded
 
         resolved = ensure_mmproj_downloaded(model_path)
         if resolved:
@@ -495,7 +495,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
         mmproj_path = _ensure_mmproj_path(model_path, raw_cfg.get("mmproj", "auto")) if vision_capable else None
         vision_supported = bool(vision_capable and (mmproj_path or explicit_vision is True))
 
-        from ct1.core.gguf_reader import read_context_length
+        from ct2.core.gguf_reader import read_context_length
         gguf_context = read_context_length(model_path)
         yaml_context = raw_cfg.get("context_size")
 
@@ -583,7 +583,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
     mmproj_path = _ensure_mmproj_path(model_path, mmproj_cfg) if vision_capable else None
     vision_supported = bool(vision_capable and (mmproj_path or explicit_vision is True))
 
-    from ct1.core.gguf_reader import read_context_length
+    from ct2.core.gguf_reader import read_context_length
     gguf_context = read_context_length(model_path)
     yaml_context = director.get("context_size")
 
@@ -663,7 +663,7 @@ def resolve_config(raw_cfg: dict, config_path: str = None,
 
 
 # Backward-compatible: resolves preset automatically
-def load_config(config_path: str = "ct1/server/model_config.yaml",
+def load_config(config_path: str = "ct2/server/model_config.yaml",
                 context_size_override: int = None) -> dict:
     raw = load_raw_config(config_path)
     return resolve_config(raw, config_path,
@@ -766,7 +766,7 @@ async def _launch_one(s: dict) -> subprocess.Popen:
     print(f"[launcher] Server ready at {base_url}")
     return proc
 
-async def start_server(config_path: str = "ct1/server/model_config.yaml",
+async def start_server(config_path: str = "ct2/server/model_config.yaml",
                        context_size_override: int = None,
                        *, hard: bool = False) -> list:
     """Launch llama-server (and optional specialist) for the active model.

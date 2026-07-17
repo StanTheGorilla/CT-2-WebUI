@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 class ConversationDB:
     """SQLite-backed storage for conversations and messages."""
 
-    def __init__(self, db_path: str = "ct1/data/ct2.db"):
+    def __init__(self, db_path: str = "ct2/data/ct2.db"):
         self.db_path = db_path
         self._conn: aiosqlite.Connection | None = None
 

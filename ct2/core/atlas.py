@@ -881,7 +881,7 @@ except Exception as e:
             return 0.0
 
         try:
-            from ct1.memory.component_cache import ComponentCache
+            from ct2.memory.component_cache import ComponentCache
             keywords = ComponentCache.extract_tags(goal, None)
             if not keywords:
                 return 0.0

@@ -13,11 +13,11 @@ venv/
 .pytest_cache/
 
 # ── CT-2 runtime data (user-specific, grows large) ─────────────────
-ct1/data/
+ct2/data/
 
 # ── Corrupted temp dirs pending elevated cleanup ───────────────────
 .pytest-tmp-codex/
-ct1/tests/
+ct2/tests/
 
 # ── Model files (large GGUF binaries — download separately) ────────
 models/*.gguf
@@ -32,10 +32,10 @@ bin/
 *.log
 
 # ── SvelteKit / Node ───────────────────────────────────────────────
-ct1/web/.svelte-kit/
-ct1/web/build/
-ct1/web/node_modules/
-ct1/web/.pnpm-store/
+web/.svelte-kit/
+web/build/
+web/node_modules/
+web/.pnpm-store/
 .pnpm-store/
 node_modules/
 
@@ -56,8 +56,8 @@ desktop.ini
 # ── Dev scratch files ──────────────────────────────────────────────
 *.txt
 !README.txt
-!ct1/requirements.txt
-!ct1/prompts/*.txt
+!ct2/requirements.txt
+!ct2/prompts/*.txt
 .worktrees/
 _local/
 CONTEXT.md

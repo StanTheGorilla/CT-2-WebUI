@@ -9,11 +9,11 @@
 """
 import yaml
 from pathlib import Path
-from ct1.core.engine import Engine
-from ct1.prompts.manager import _get_prompt_manager as _pm
-from ct1.server.launcher import load_raw_config, resolve_config
+from ct2.core.engine import Engine
+from ct2.prompts.manager import _get_prompt_manager as _pm
+from ct2.server.launcher import load_raw_config, resolve_config
 import re
-from ct1.core.formatter import (
+from ct2.core.formatter import (
     clean_response, validate_output, validate_file,
     split_html_sections, reassemble_html_section,
     strip_think_tags, extract_code,
@@ -21,12 +21,12 @@ from ct1.core.formatter import (
     polish_html_css, check_completeness,
     enforce_file_markers, fix_html_structure,
 )
-from ct1.memory.plan_cache import PlanCache
-from ct1.memory.session_store import SessionStore
-from ct1.core.atlas import AtlasController
+from ct2.memory.plan_cache import PlanCache
+from ct2.memory.session_store import SessionStore
+from ct2.core.atlas import AtlasController
 
 _CONFIG_PATH = (Path(__file__).parent.parent.parent
-                / "ct1" / "server" / "model_config.yaml")
+                / "ct2" / "server" / "model_config.yaml")
 
 
 _EXT_TO_LANG = {
@@ -64,7 +64,7 @@ def _detect_lang_from_response(text: str) -> str:
 
 
 # ── Mode registry singleton (loaded once at startup) ─────────────
-from ct1.modes.registry import ModeRegistry as _ModeRegistry
+from ct2.modes.registry import ModeRegistry as _ModeRegistry
 
 _mode_registry: _ModeRegistry | None = None
 
@@ -155,8 +155,8 @@ _EXTERNAL_CFG_DEFAULTS = {
     }},
     "_task_overrides": {},
     "_preset_info": {},
-    "plan_cache": {"path": "ct1/data/plan_cache.db"},
-    "sessions": {"path": "ct1/data/sessions"},
+    "plan_cache": {"path": "ct2/data/plan_cache.db"},
+    "sessions": {"path": "ct2/data/sessions"},
 }
 
 
@@ -207,7 +207,7 @@ class Orchestrator:
         self.task_overrides = cfg.get("_task_overrides", {})
 
         # Detect model tier for adaptive pipeline depth
-        from ct1.core.tier import detect_tier
+        from ct2.core.tier import detect_tier
         preset_info = cfg.get("_preset_info", {})
         model_file = preset_info.get("model_file", "")
         explicit_tier = preset_info.get("tier")
@@ -217,7 +217,7 @@ class Orchestrator:
         print(f"[orch] Model tier: {self.tier} (model: {model_file})")
 
         self.plan_cache = PlanCache(
-            cfg.get("plan_cache", {}).get("path", "ct1/data/plan_cache.db")
+            cfg.get("plan_cache", {}).get("path", "ct2/data/plan_cache.db")
         )
         self.plan_cache_fast = cfg.get("plan_cache", {}).get("enable_fast_path", False)
         self.verbose = False
@@ -228,7 +228,7 @@ class Orchestrator:
 
         # Load last session for continuity
         self.session_store = SessionStore(
-            cfg.get("sessions", {}).get("path", "ct1/data/sessions")
+            cfg.get("sessions", {}).get("path", "ct2/data/sessions")
         )
         last_session = self.session_store.read_latest()
         self.engine.last_session = last_session or ""
@@ -240,7 +240,7 @@ class Orchestrator:
     def _deterministic_route(cls, msg: str) -> str:
         """Deterministic routing via keyword/regex. Delegates to ModeRegistry.
 
-        Priority order is defined in ct1/modes/*.yaml (sorted by priority field).
+        Priority order is defined in ct2/modes/*.yaml (sorted by priority field).
         """
         return _get_mode_registry().resolve(msg).route_id
 
@@ -968,7 +968,7 @@ class Orchestrator:
         )
 
         # ── Phase 2: Cleanup ──────────────────────────────────────
-        from ct1.core.formatter import strip_think_tags, extract_code
+        from ct2.core.formatter import strip_think_tags, extract_code
         draft = strip_think_tags(draft)
         draft = extract_code(draft)
 
@@ -1263,7 +1263,7 @@ class Orchestrator:
         if (self.component_cache and is_code and not is_edit
                 and route != "ROUTE_COMPUTER"):
             try:
-                from ct1.memory.component_cache import ComponentCache
+                from ct2.memory.component_cache import ComponentCache
                 kw = ComponentCache.extract_tags(user_message, specialist_data)
                 refs = await self.component_cache.search_similar(kw, limit=2)
                 if refs:

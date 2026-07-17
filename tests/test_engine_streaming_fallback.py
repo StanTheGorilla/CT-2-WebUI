@@ -2,7 +2,7 @@
 import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock
-from ct1.core.engine import Engine
+from ct2.core.engine import Engine
 
 
 def _make_engine():

@@ -1624,7 +1624,7 @@
                         <!-- Files in rag uploads folder -->
                         {#if ragDataFiles.length > 0}
                             <div class="c2-subsection-label">
-                                Files in <code class="c2-rag-path-label">ct1/data/rag_uploads/</code>
+                                Files in <code class="c2-rag-path-label">ct2/data/rag_uploads/</code>
                                 <span class="c2-rag-count-badge">{ragDataFiles.length}</span>
                             </div>
                             <div class="c2-rag-datafile-list">
@@ -1649,7 +1649,7 @@
                                 {/each}
                             </div>
                         {:else}
-                            <p class="c2-rag-empty">No files in <code>ct1/data/rag_uploads/</code> yet. Drop a file above to get started.</p>
+                            <p class="c2-rag-empty">No files in <code>ct2/data/rag_uploads/</code> yet. Drop a file above to get started.</p>
                         {/if}
 
                         <!-- Indexed files summary -->
@@ -1668,9 +1668,9 @@
                                 </div>
                             {/each}
                         {:else if ragDataFiles.length > 0}
-                            <p class="c2-rag-empty">Files exist in <code>ct1/data/rag_uploads/</code> but nothing is indexed yet. Click Re-index below.</p>
+                            <p class="c2-rag-empty">Files exist in <code>ct2/data/rag_uploads/</code> but nothing is indexed yet. Click Re-index below.</p>
                         {:else}
-                            <p class="c2-rag-empty">No documents indexed yet. Drop a file above to get started, or place files in the <code>ct1/data/rag_uploads/</code> folder and click Re-index.</p>
+                            <p class="c2-rag-empty">No documents indexed yet. Drop a file above to get started, or place files in the <code>ct2/data/rag_uploads/</code> folder and click Re-index.</p>
                         {/if}
 
                         <!-- Actions + stats -->

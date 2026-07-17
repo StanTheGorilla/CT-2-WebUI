@@ -1,6 +1,6 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
-from ct1.server.api import app
+from ct2.server.api import app
 
 
 @pytest.fixture

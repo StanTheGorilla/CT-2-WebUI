@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-import ct1.server.api as api_mod
+import ct2.server.api as api_mod
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +26,7 @@ def mock_orchestrator(monkeypatch):
 def test_websocket_think():
     """Test that WebSocket /ws/think streams events and returns done."""
     from starlette.testclient import TestClient
-    from ct1.server.api import app
+    from ct2.server.api import app
 
     client = TestClient(app)
     with client.websocket_connect("/ws/think") as ws:

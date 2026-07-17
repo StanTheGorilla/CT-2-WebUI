@@ -19,7 +19,7 @@ class ModeRegistry:
     """Registry of ModeDefinition objects loaded from YAML files.
 
     Implements the same routing algorithm as the original
-    ``_deterministic_route()`` in ``ct1/core/orchestrator.py``, but sources
+    ``_deterministic_route()`` in ``ct2/core/orchestrator.py``, but sources
     all patterns from YAML files instead of hard-coded regex literals.
     """
 

@@ -9,7 +9,7 @@ Strategy:
 import re as _re
 from typing import Optional
 
-from ct1.rag.parser import estimate_tokens
+from ct2.rag.parser import estimate_tokens
 
 # Sentence-ending boundary: period/exclamation/question + space + capital letter or newline
 _SENTENCE_BOUNDARY = _re.compile(r"(?<=[.!?])\s+(?=[A-ZÀ-Ö])")

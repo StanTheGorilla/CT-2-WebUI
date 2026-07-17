@@ -8,7 +8,7 @@ import asyncio
 import httpx
 import json
 import re as _re
-from ct1.prompts.manager import _get_prompt_manager as _pm
+from ct2.prompts.manager import _get_prompt_manager as _pm
 
 
 def _date_aware_system(base: str) -> str:

@@ -1,4 +1,4 @@
-from ct1.core.response_parser import parse_thinking_response
+from ct2.core.response_parser import parse_thinking_response
 
 def test_parse_with_think_tags():
     raw = "<think>\nStep 1: Consider X.\nStep 2: Therefore Y.\n</think>\n\nThe answer is Y."

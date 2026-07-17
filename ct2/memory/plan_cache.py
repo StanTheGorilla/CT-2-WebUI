@@ -21,7 +21,7 @@ class PlanCache:
     cycle and goes straight to generation.
     """
 
-    def __init__(self, db_path: str = "ct1/data/plan_cache.db"):
+    def __init__(self, db_path: str = "ct2/data/plan_cache.db"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None

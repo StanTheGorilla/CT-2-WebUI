@@ -13,8 +13,8 @@ from typing import Optional
 
 import numpy as np
 
-from ct1.rag.store import RAGStore
-from ct1.rag.embedder import RAGEmbedder
+from ct2.rag.store import RAGStore
+from ct2.rag.embedder import RAGEmbedder
 
 
 # Characters that split keywords for exact-match boosting

@@ -6,7 +6,7 @@ from typing import Any
 
 _DEFAULTS = {
     "enabled": False,
-    "data_dir": "ct1/data/rag_uploads",
+    "data_dir": "ct2/data/rag_uploads",
     "embedding_model": "",          # empty = use chat model
     "embedding_port": 8081,
     "chunks_per_query": 15,
@@ -32,7 +32,7 @@ SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({
 @dataclass
 class RAGConfig:
     enabled: bool = False
-    data_dir: str = "ct1/data/rag_uploads"
+    data_dir: str = "ct2/data/rag_uploads"
     embedding_model: str = ""
     embedding_port: int = 8081
     chunks_per_query: int = 15
