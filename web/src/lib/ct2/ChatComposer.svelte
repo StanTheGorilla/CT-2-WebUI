@@ -149,8 +149,10 @@
                 if (file) images.push(file);
             }
         }
-        if (images.length > 0 && visionSupported) {
+        if (images.length > 0) {
             e.preventDefault();
+            // readFiles shows the "switch to a vision model" toast when the
+            // active model can't see images — never swallow a paste silently.
             readFiles(images);
         }
     }
