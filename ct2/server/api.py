@@ -2,6 +2,16 @@ import asyncio
 import json
 import os
 import re as _re
+import sys
+
+# Windows consoles often default to a legacy codepage (cp1250 etc.), so a
+# print() containing "→" raises UnicodeEncodeError and kills the pipeline
+# mid-generation. Force UTF-8 with replacement so logging can never crash us.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
 import secrets
 import yaml
 import httpx
